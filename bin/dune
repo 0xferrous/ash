@@ -1,0 +1,4 @@
+(executable
+ (public_name ash)
+ (name main)
+ (libraries cmdliner unix otoml))
