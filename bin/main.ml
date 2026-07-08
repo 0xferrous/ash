@@ -2,9 +2,9 @@ open Cmdliner
 
 let version = "0.1.0"
 
-let spawn debug virtie ssh systemd_ssh_proxy config flake host name user profiles print_serial mount_cwd verbose =
+let spawn debug virtie ssh systemd_ssh_proxy config flake name user profiles print_serial mount_cwd verbose =
   Log.set_debug debug;
-  Virtie.spawn ?virtie ?ssh ?systemd_ssh_proxy ?name ?user ~config_path:config ~flake ~host ~profiles ~print_serial ~mount_cwd ~verbose ()
+  Virtie.spawn ?virtie ?ssh ?systemd_ssh_proxy ?name ?user ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd ~verbose ()
 
 let virtie_arg =
   Arg.(value & opt (some string) None & info [ "virtie" ] ~doc:"Path to virtie. Defaults to ASH_VIRTIE, then PATH." ~docv:"PATH")
@@ -19,10 +19,7 @@ let config_arg =
   Arg.(value & opt string "~/.agent-box.toml" & info [ "config"; "c" ] ~doc:"Agent-box style config file." ~docv:"CONFIG")
 
 let flake_arg =
-  Arg.(required & opt (some string) None & info [ "flake"; "f" ] ~doc:"Flake directory or flake.nix path containing the NixOS host config." ~docv:"FLAKE")
-
-let host_arg =
-  Arg.(required & opt (some string) None & info [ "host" ] ~doc:"Host name under nixosConfigurations." ~docv:"HOST")
+  Arg.(required & opt (some string) None & info [ "flake"; "f" ] ~doc:"Flake reference in the form FLAKE#HOST, e.g. ../my-nix#agent." ~docv:"FLAKE#HOST")
 
 let name_arg =
   Arg.(value & opt (some string) None & info [ "name" ] ~doc:"VM/state name. Defaults to <cwd>-<timestamp>." ~docv:"NAME")
@@ -47,7 +44,7 @@ let debug_arg =
 
 let spawn_cmd =
   Cmd.v (Cmd.info "spawn" ~doc:"spawn an agent VM")
-    Term.(const spawn $ debug_arg $ virtie_arg $ ssh_arg $ systemd_ssh_proxy_arg $ config_arg $ flake_arg $ host_arg $ name_arg $ user_arg $ profiles_arg $ print_serial_arg $ mount_cwd_arg $ verbose_arg)
+    Term.(const spawn $ debug_arg $ virtie_arg $ ssh_arg $ systemd_ssh_proxy_arg $ config_arg $ flake_arg $ name_arg $ user_arg $ profiles_arg $ print_serial_arg $ mount_cwd_arg $ verbose_arg)
 
 let main_cmd =
   let doc = "spawn agent VMs with virtie" in
@@ -56,7 +53,7 @@ let main_cmd =
       `S Manpage.s_description;
       `P "ash generates a virtie manifest from an agent-box style config, a NixOS flake host, and selected profiles, then launches virtie.";
       `S Manpage.s_examples;
-      `Pre "ash spawn -p rust -p go -f ../my-nix/flake.nix --host agent";
+      `Pre "ash spawn -p rust -p go -f ../my-nix#agent";
     ]
   in
   Cmd.group (Cmd.info "ash" ~version ~doc ~man) [ spawn_cmd ]

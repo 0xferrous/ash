@@ -5,32 +5,31 @@ A small OCaml CLI that spawns an agent VM by generating a `virtie` manifest and 
 ## Interface
 
 ```sh
-ash spawn -p rust -p go --flake path/to/flake.nix --host agent
+ash spawn -p rust -p go --flake path/to/flake#agent
 ```
 
 Short form:
 
 ```sh
-ash spawn -p rust -p go -f path/to/flake.nix --host agent
+ash spawn -p rust -p go -f ../my-nix#agent
 ```
 
 Mount the current repository into the guest workspace:
 
 ```sh
-ash spawn -p rust -f path/to/flake.nix --host agent --mount-cwd
+ash spawn -p rust -f ../my-nix#agent --mount-cwd
 ```
 
 Reuse the same VM state and persistent image across runs:
 
 ```sh
-ash spawn --name rustbox -p rust -f path/to/flake.nix --host agent
+ash spawn --name rustbox -p rust -f ../my-nix#agent
 ```
 
 Options:
 
 - `-p`, `--profile PROFILE` — repeatable agent-box profile; profiles supply mount points.
-- `-f`, `--flake FLAKE` — required flake directory or `flake.nix` path containing the host config.
-- `--host HOST` — required host under `nixosConfigurations`.
+- `-f`, `--flake FLAKE#HOST` — required flake directory plus host reference, e.g. `../my-nix#agent`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
 - `-u`, `--user USER` — guest SSH user. Defaults to `runtime.qemu.ssh_user` from config, then `agent`.
 - `-c`, `--config CONFIG` — agent-box style config. Default: `~/.agent-box.toml`.
@@ -46,13 +45,13 @@ Options:
 For:
 
 ```sh
-ash spawn -p rust -p go -f ../my-nix/flake.nix --host agent
+ash spawn -p rust -p go -f ../my-nix#agent
 ```
 
 `ash` evaluates/builds the NixOS configuration at:
 
 ```text
-<flake>#nixosConfigurations.<host>
+../my-nix#nixosConfigurations.agent
 ```
 
 and uses it for:
@@ -66,16 +65,16 @@ and uses it for:
 
 Host-side `ssh` and `systemd-ssh-proxy` are resolved from the selected NixOS configuration unless overridden with `--ssh` and `--systemd-ssh-proxy`.
 
-The selected flake/host must expose a normal NixOS configuration with these attributes:
+The selected `FLAKE#HOST` must expose a normal NixOS configuration with these attributes:
 
 ```text
-nixosConfigurations.<host>.config.system.build.kernel
-nixosConfigurations.<host>.config.system.boot.loader.kernelFile
-nixosConfigurations.<host>.config.system.build.initialRamdisk
-nixosConfigurations.<host>.config.system.build.toplevel
-nixosConfigurations.<host>.config.boot.kernelParams
-nixosConfigurations.<host>.pkgs.openssh
-nixosConfigurations.<host>.config.systemd.package
+nixosConfigurations.<HOST>.config.system.build.kernel
+nixosConfigurations.<HOST>.config.system.boot.loader.kernelFile
+nixosConfigurations.<HOST>.config.system.build.initialRamdisk
+nixosConfigurations.<HOST>.config.system.build.toplevel
+nixosConfigurations.<HOST>.config.boot.kernelParams
+nixosConfigurations.<HOST>.pkgs.openssh
+nixosConfigurations.<HOST>.config.systemd.package
 ```
 
 Then it reads the selected profiles from `~/.agent-box.toml` and turns their mounts into `virtie` `virtiofs` mounts.

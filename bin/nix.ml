@@ -1,3 +1,5 @@
+type target = { attr : string; host_name : string }
+
 type boot = {
   kernel : string;
   initrd : string;
@@ -30,11 +32,37 @@ let eval_raw ~label attr = run_nix ~label ~attr ("eval --raw " ^ Util.shell_quot
 let eval_json ~label attr = run_nix ~label ~attr ("eval --json " ^ Util.shell_quote attr)
 let build_path ~label attr = run_nix ~label ~attr ("build --no-link --print-out-paths " ^ Util.shell_quote attr)
 
-let flake_ref path =
-  let path = Util.expand_home path in
-  if Filename.basename path = "flake.nix" then Filename.dirname path else path
+let split_flake_ref value =
+  match String.index_opt value '#' with
+  | None -> (value, None)
+  | Some idx ->
+      let base = String.sub value 0 idx in
+      let fragment = String.sub value (idx + 1) (String.length value - idx - 1) in
+      (base, Some fragment)
 
-let nixos_attr ~flake ~host = flake_ref flake ^ "#nixosConfigurations." ^ host
+let normalize_flake_path path = Util.expand_home path
+
+let flake_ref path =
+  let base, fragment = split_flake_ref path in
+  let base = normalize_flake_path base in
+  match fragment with
+  | None -> base
+  | Some fragment -> base ^ "#" ^ fragment
+
+let resolve_target ~flake =
+  let base, fragment = split_flake_ref flake in
+  if Filename.basename base = "flake.nix" then (
+    Printf.eprintf "ash: --flake must point to a flake directory, not flake.nix\n\nHint: use --flake %s#HOST instead.\n" (Filename.dirname base);
+    exit 1);
+  let base = normalize_flake_path base in
+  match fragment with
+  | Some host when host <> "" && not (String.contains host '.') -> { attr = base ^ "#nixosConfigurations." ^ host; host_name = host }
+  | Some fragment ->
+      Printf.eprintf "ash: unsupported flake attr fragment: %s\n\nHint: use --flake FLAKE#HOST, for example ../my-nix#agent.\n" fragment;
+      exit 1
+  | None ->
+      Printf.eprintf "ash: --flake must include a host fragment\n\nHint: use --flake FLAKE#HOST, for example ../my-nix#agent.\n";
+      exit 1
 
 let attr_segment segment =
   let b = Buffer.create (String.length segment + 8) in
@@ -48,15 +76,15 @@ let attr_segment segment =
   Buffer.add_char b '"';
   Buffer.contents b
 
-let validate_user ~flake ~host ~user =
-  let attr = nixos_attr ~flake ~host ^ ".config.users.users." ^ attr_segment user ^ ".name" in
+let validate_user ~target ~user =
+  let attr = target.attr ^ ".config.users.users." ^ attr_segment user ^ ".name" in
   let resolved = eval_raw ~label:("guest user " ^ user) attr in
   if resolved <> user then (
     Printf.eprintf "ash: guest user validation failed\n\nRequested user: %s\nNixOS user attr resolved to: %s\n" user resolved;
     exit 1)
 
-let resolve_boot ~flake ~host =
-  let attr = nixos_attr ~flake ~host in
+let resolve_boot ~target =
+  let attr = target.attr in
   let kernel_dir = build_path ~label:"kernel build output" (attr ^ ".config.system.build.kernel") in
   let kernel_file = eval_raw ~label:"kernel file name" (attr ^ ".config.system.boot.loader.kernelFile") in
   let initrd_output = build_path ~label:"initial ramdisk build output" (attr ^ ".config.system.build.initialRamdisk") in
