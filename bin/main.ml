@@ -29,6 +29,10 @@ let attach opts name =
   Log.set_debug opts.global.debug;
   Virtle.attach ?virtle:opts.virtle ?name ~verbose:opts.verbose ()
 
+let regenerate opts name =
+  Log.set_debug opts.global.debug;
+  Virtle.regenerate ?virtle:opts.virtle ~name ()
+
 let virtle_arg =
   Arg.(
     value
@@ -152,6 +156,17 @@ let ls_cmd =
     (Cmd.info "ls" ~doc:"list ash VM state directories")
     Term.(const list_vms $ global_opts_arg)
 
+let regenerate_name_arg =
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let regenerate_cmd =
+  Cmd.v
+    (Cmd.info "regenerate" ~doc:"regenerate a VM manifest from saved ash.toml")
+    Term.(const regenerate $ virtle_opts_arg $ regenerate_name_arg)
+
 let main_cmd =
   let doc = "spawn agent VMs with virtle" in
   let man =
@@ -172,6 +187,6 @@ let main_cmd =
   in
   Cmd.group
     (Cmd.info "ash" ~version ~doc ~man)
-    [ spawn_cmd; attach_cmd; ls_cmd ]
+    [ spawn_cmd; attach_cmd; regenerate_cmd; ls_cmd ]
 
 let () = exit (Cmd.eval main_cmd)
