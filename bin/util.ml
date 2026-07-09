@@ -74,6 +74,16 @@ let process_status_code = function
   | Unix.WSIGNALED signal -> 128 + signal
   | Unix.WSTOPPED signal -> 128 + signal
 
+let run_foreground program args =
+  Log.debug "run foreground: %s"
+    (String.concat " " (List.map shell_quote (program :: args)));
+  let argv = Array.of_list (program :: args) in
+  let pid =
+    Unix.create_process program argv Unix.stdin Unix.stdout Unix.stderr
+  in
+  let _, status = Unix.waitpid [] pid in
+  process_status_code status
+
 let command_output command =
   let stdout_file = Filename.temp_file "ash" ".out" in
   let stderr_file = Filename.temp_file "ash" ".err" in

@@ -883,7 +883,7 @@ let render_manifest (inputs : manifest_inputs) =
     }
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
-    ~profiles ~print_serial ~mount_cwd ~verbose () =
+    ~profiles ~print_serial ~mount_cwd ~ephemeral ~verbose () =
   let virtle = find_virtle virtle in
   let ssh = Option.map (fun path -> find_ssh (Some path)) ssh in
   let systemd_ssh_proxy =
@@ -931,8 +931,18 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
   Util.write_file path manifest;
   Log.debug "wrote virtle manifest (%d bytes)" (String.length manifest);
   let verbose_args = List.map (fun _ -> "-v") verbose in
-  Util.exec virtle
-    ([ "--manifest"; path ] @ verbose_args @ [ "launch"; "--ssh" ])
+  let args = [ "--manifest"; path ] @ verbose_args @ [ "launch"; "--ssh" ] in
+  if ephemeral then
+    let dir = state_dir name in
+    let code =
+      Fun.protect
+        ~finally:(fun () ->
+          Log.info "removing ephemeral VM state %s" dir;
+          Util.remove_tree dir)
+        (fun () -> Util.run_foreground virtle args)
+    in
+    exit code
+  else Util.exec virtle args
 
 let regenerate ?virtle ~name () =
   let name = Util.name_slug name in

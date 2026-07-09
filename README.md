@@ -75,6 +75,7 @@ Spawn options:
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
 - `--print-serial` — print guest kernel/init serial output while booting.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
+- `--ephemeral` — remove the VM state directory after the launched SSH/VM session exits.
 
 ## What `spawn` does
 

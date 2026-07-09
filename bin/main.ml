@@ -15,10 +15,10 @@ let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy config flake name user profiles
-    print_serial mount_cwd =
+    print_serial mount_cwd ephemeral =
   Log.set_debug opts.global.debug;
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?name ?user
-    ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd
+    ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd ~ephemeral
     ~verbose:opts.verbose ()
 
 let list_vms global =
@@ -122,6 +122,14 @@ let mount_cwd_arg =
         ~doc:
           "Mount the current host working directory under the guest workspace.")
 
+let ephemeral_arg =
+  Arg.(
+    value & flag
+    & info [ "ephemeral" ]
+        ~doc:
+          "Remove the VM state directory after the launched SSH/VM session \
+           exits.")
+
 let debug_arg =
   Arg.(
     value & flag
@@ -139,7 +147,7 @@ let spawn_cmd =
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ config_arg $ flake_arg $ name_arg $ user_arg $ profiles_arg
-      $ print_serial_arg $ mount_cwd_arg)
+      $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg)
 
 let attach_name_arg =
   Arg.(
