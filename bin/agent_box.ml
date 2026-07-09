@@ -96,17 +96,14 @@ let parse_string_array s =
 
 let load path : config =
   let path = Util.expand_home path in
-  if not (Sys.file_exists path) then (
-    Printf.eprintf
-      "ash: config not found: %s\n\n\
-       Hint: pass --config PATH or create ~/.agent-box.toml.\n"
+  if not (Sys.file_exists path) then
+    Log.fatal
+      "config not found: %s\n\n\
+       Hint: pass --config PATH or create ~/.agent-box.toml."
       path;
-    exit 1);
   match Otoml.Parser.from_file_result path with
   | Ok table -> table
-  | Error message ->
-      Printf.eprintf "ash: failed to parse config: %s\n\n%s\n" path message;
-      exit 1
+  | Error message -> Log.fatal "failed to parse config: %s\n\n%s" path message
 
 let key_path key = String.split_on_char '.' key
 let string key config = Otoml.find_opt config Otoml.get_string (key_path key)
@@ -231,9 +228,8 @@ let collect_profile_mounts ~guest_user config =
       Log.warn "skipping cyclic profile extends: %s"
         (String.concat " -> " (List.rev (profile :: seen)));
       { mounts = []; write_files = [] })
-    else if not (profile_exists config profile) then (
-      Printf.eprintf "ash: profile not found in config: %s\n" profile;
-      exit 1)
+    else if not (profile_exists config profile) then
+      Log.fatal "profile not found in config: %s" profile
     else
       let inherited =
         profile_extends config profile

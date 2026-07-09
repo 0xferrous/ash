@@ -17,19 +17,17 @@ let nix_exe =
         Log.debug "resolved executable nix -> %s" path;
         path
     | None ->
-        Printf.eprintf
-          "ash: could not find executable \"nix\"\n\n\
-           Hint: install Nix or run ash in an environment with nix in PATH.\n";
-        exit 127)
+        Log.fatal ~code:127
+          "could not find executable \"nix\"\n\n\
+           Hint: install Nix or run ash in an environment with nix in PATH.")
 
 let nix_command args = Util.shell_quote (Lazy.force nix_exe) ^ " " ^ args
 
 let run_nix ~label ~attr args =
   try Util.command_output (nix_command args)
   with Failure message ->
-    Printf.eprintf "ash: failed to resolve %s\n\nNix attr: %s\nError: %s\n"
-      label attr message;
-    exit 1
+    Log.fatal "failed to resolve %s\n\nNix attr: %s\nError: %s" label attr
+      message
 
 let eval_raw ~label attr =
   run_nix ~label ~attr ("eval --raw " ^ Util.shell_quote attr)
@@ -60,27 +58,24 @@ let flake_ref path =
 
 let resolve_target ~flake =
   let base, fragment = split_flake_ref flake in
-  if Filename.basename base = "flake.nix" then (
-    Printf.eprintf
-      "ash: --flake must point to a flake directory, not flake.nix\n\n\
-       Hint: use --flake %s#HOST instead.\n"
+  if Filename.basename base = "flake.nix" then
+    Log.fatal
+      "--flake must point to a flake directory, not flake.nix\n\n\
+       Hint: use --flake %s#HOST instead."
       (Filename.dirname base);
-    exit 1);
   let base = normalize_flake_path base in
   match fragment with
   | Some host when host <> "" && not (String.contains host '.') ->
       { attr = base ^ "#nixosConfigurations." ^ host; host_name = host }
   | Some fragment ->
-      Printf.eprintf
-        "ash: unsupported flake attr fragment: %s\n\n\
-         Hint: use --flake FLAKE#HOST, for example ../my-nix#agent.\n"
-        fragment;
-      exit 1
+      Log.fatal
+        "unsupported flake attr fragment: %s\n\n\
+         Hint: use --flake FLAKE#HOST, for example ../my-nix#agent."
+        fragment
   | None ->
-      Printf.eprintf
-        "ash: --flake must include a host fragment\n\n\
-         Hint: use --flake FLAKE#HOST, for example ../my-nix#agent.\n";
-      exit 1
+      Log.fatal
+        "--flake must include a host fragment\n\n\
+         Hint: use --flake FLAKE#HOST, for example ../my-nix#agent."
 
 let attr_segment segment =
   let b = Buffer.create (String.length segment + 8) in
@@ -99,13 +94,12 @@ let validate_user ~target ~user =
     target.attr ^ ".config.users.users." ^ attr_segment user ^ ".name"
   in
   let resolved = eval_raw ~label:("guest user " ^ user) attr in
-  if resolved <> user then (
-    Printf.eprintf
-      "ash: guest user validation failed\n\n\
+  if resolved <> user then
+    Log.fatal
+      "guest user validation failed\n\n\
        Requested user: %s\n\
-       NixOS user attr resolved to: %s\n"
-      user resolved;
-    exit 1)
+       NixOS user attr resolved to: %s"
+      user resolved
 
 let resolve_boot ~target =
   let attr = target.attr in
@@ -126,13 +120,12 @@ let resolve_boot ~target =
       Filename.concat initrd_output "initrd"
     else initrd_output
   in
-  if not (Sys.file_exists initrd) then (
-    Printf.eprintf
-      "ash: failed to resolve initrd file\n\n\
+  if not (Sys.file_exists initrd) then
+    Log.fatal
+      "failed to resolve initrd file\n\n\
        Initial ramdisk output: %s\n\
-       Expected initrd file: %s\n"
+       Expected initrd file: %s"
       initrd_output initrd;
-    exit 1);
   let toplevel =
     build_path ~label:"NixOS toplevel build output"
       (attr ^ ".config.system.build.toplevel")
