@@ -11,6 +11,21 @@ type manifest_inputs = {
   virtiofsd : string;
 }
 
+type resolved_manifest_inputs = {
+  config : Agent_box.config;
+  flake : string;
+  target : Nix.target;
+  boot : Nix.boot;
+  name : string;
+  profiles : string list;
+  user : string option;
+  print_serial : bool;
+  mount_cwd : bool;
+  ssh : string;
+  systemd_ssh_proxy : string;
+  virtiofsd : string;
+}
+
 let find_exe ?hint ?env explicit_path default_name =
   let candidate =
     match explicit_path with
@@ -75,8 +90,56 @@ let state_dir name =
 
 let manifest_path ~name = Filename.concat (state_dir name) "virtie.toml"
 
-let render_manifest inputs =
-  let config = Agent_box.load inputs.config_path in
+let string_array xs = Otoml.array (List.map Otoml.string xs)
+
+let virtiofs_section ~socket ~bin =
+  Otoml.table
+    [
+      ("socket", Otoml.string socket);
+      ("bin", Otoml.string bin);
+      ("args", string_array [ "--socket-path={{.Socket}}"; "--shared-dir={{.MountSource}}"; "--tag={{.MountTag}}" ]);
+    ]
+
+let virtiofs_mount ?target ~tag ~source ~read_only ~socket ~bin () =
+  let fields =
+    [
+      ("type", Otoml.string "virtiofs");
+      ("tag", Otoml.string tag);
+      ("source", Otoml.string source);
+      ("read_only", Otoml.boolean read_only);
+      ("virtiofs", virtiofs_section ~socket ~bin);
+    ]
+  in
+  let fields = match target with None -> fields | Some target -> ("target", Otoml.string target) :: fields in
+  Otoml.table (List.rev fields)
+
+let image_mount ~source =
+  Otoml.table
+    [
+      ("type", Otoml.string "image");
+      ("source", Otoml.string source);
+      ("read_only", Otoml.boolean false);
+      ("image", Otoml.table [ ("size", Otoml.integer 16384); ("fs", Otoml.string "ext4"); ("create", Otoml.boolean true); ("label", Otoml.string "persist") ]);
+    ]
+
+let profile_mount ~bin (mount : Agent_box.mount) =
+  virtiofs_mount ~target:mount.target ~tag:mount.tag ~source:mount.source ~read_only:mount.read_only ~socket:(mount.tag ^ ".sock") ~bin ()
+
+let write_file_section user (file : Agent_box.write_file) =
+  let fields =
+    [
+      ("guest_path", Otoml.string file.guest_path);
+      ("source", Otoml.string file.source);
+      ("chown", Otoml.string (user ^ ":users"));
+      ("overwrite", Otoml.boolean true);
+      ("follow_links", Otoml.boolean true);
+    ]
+  in
+  let fields = if file.write_back then fields @ [ ("write_back", Otoml.boolean true) ] else fields in
+  Otoml.table fields
+
+let render_resolved_manifest inputs =
+  let config = inputs.config in
   let profiles =
     match inputs.profiles with
     | [] -> [ Agent_box.default_profile config ]
@@ -86,126 +149,91 @@ let render_manifest inputs =
   let memory = Agent_box.qemu_memory config |> Option.map parse_memory_mib |> Option.value ~default:4096 in
   let vcpu = Agent_box.qemu_cpus config |> Option.value ~default:2 in
   let user = Option.value inputs.user ~default:(Agent_box.ssh_user config) in
-  let target = Nix.resolve_target ~flake:inputs.flake in
+  let target = inputs.target in
+  let boot = inputs.boot in
   let resources = Agent_box.resources_for_profiles ~guest_user:user config profiles in
+  let ssh = inputs.ssh in
+  let systemd_ssh_proxy = inputs.systemd_ssh_proxy in
+  let ssh_exec =
+    [
+      ssh;
+      "-o";
+      "ProxyCommand=" ^ systemd_ssh_proxy ^ " %h %p";
+      "-o";
+      "ProxyUseFdpass=yes";
+      "-o";
+      "CheckHostIP=no";
+      "-o";
+      "StrictHostKeyChecking=no";
+      "-o";
+      "UserKnownHostsFile=/dev/null";
+      "-o";
+      "GlobalKnownHostsFile=/dev/null";
+    ]
+  in
+  let workspace_guest_dir = "/home/" ^ user ^ "/workspace" in
+  let workspace_host_dir = Filename.concat state_dir "workspace" in
+  Util.ensure_dir workspace_host_dir;
+  let mounts =
+    [
+      virtiofs_mount ~target:workspace_guest_dir ~tag:"workspace" ~source:workspace_host_dir ~read_only:false ~socket:"workspace.sock" ~bin:inputs.virtiofsd ();
+      virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true ~socket:"ro-store.sock" ~bin:inputs.virtiofsd ();
+      image_mount ~source:(Filename.concat state_dir "persist.img");
+    ]
+    @ (if inputs.mount_cwd then [ virtiofs_mount ~tag:"workspace_cwd" ~source:"." ~read_only:false ~socket:"workspace-cwd.sock" ~bin:inputs.virtiofsd () ] else [])
+    @ List.map (profile_mount ~bin:inputs.virtiofsd) resources.mounts
+  in
+  let write_files = List.map (write_file_section user) resources.write_files in
+  let document =
+    Otoml.table
+      [
+        ("host_name", Otoml.string target.host_name);
+        ("working_dir", Otoml.string ".");
+        ("state_dir", Otoml.string state_dir);
+        ("machine", Otoml.table [ ("memory", Otoml.integer memory); ("vcpu", Otoml.integer vcpu); ("kvm", Otoml.boolean true) ]);
+        ( "kernel",
+          Otoml.table
+            ([
+               ("path", Otoml.string boot.kernel);
+               ("initrd_path", Otoml.string boot.initrd);
+               ("serial", Otoml.string (if inputs.print_serial then "print" else "off"));
+             ]
+            @ if boot.kernel_params = [] then [] else [ ("params", string_array boot.kernel_params) ]) );
+        ("ssh", Otoml.table [ ("user", Otoml.string user); ("exec", string_array ssh_exec); ("ready_socket", Otoml.string "ready.sock"); ("autoprovision", Otoml.boolean true) ]);
+        ("workspace", Otoml.table [ ("guest_dir", Otoml.string workspace_guest_dir); ("host_dir", Otoml.string workspace_host_dir); ("mount_cwd", Otoml.boolean inputs.mount_cwd) ]);
+        ("mounts", Otoml.TomlTableArray mounts);
+      ]
+  in
+  let document = if write_files = [] then document else Otoml.update document [ "write_files" ] (Some (Otoml.TomlTableArray write_files)) in
+  let header =
+    Printf.sprintf "# Generated by ash\n# flake = %s\n# host = %s\n# name = %s\n# profiles = %s\n"
+      (Nix.flake_ref inputs.flake) target.host_name inputs.name (String.concat "," profiles)
+  in
+  (profiles, header ^ Otoml.Printer.to_string document)
+
+let render_manifest inputs =
+  let config = Agent_box.load inputs.config_path in
+  let target = Nix.resolve_target ~flake:inputs.flake in
+  let user = Option.value inputs.user ~default:(Agent_box.ssh_user config) in
   Nix.validate_user ~target ~user;
   let boot = Nix.resolve_boot ~target in
   let ssh = Option.value inputs.ssh ~default:boot.ssh in
   let systemd_ssh_proxy = Option.value inputs.systemd_ssh_proxy ~default:boot.systemd_ssh_proxy in
-  let b = Buffer.create 4096 in
-  let line fmt = Printf.ksprintf (fun s -> Buffer.add_string b s; Buffer.add_char b '\n') fmt in
-  line "# Generated by ash";
-  line "# flake = %s" (Nix.flake_ref inputs.flake);
-  line "# host = %s" target.host_name;
-  line "# name = %s" inputs.name;
-  line "# profiles = %s" (String.concat "," profiles);
-  line "host_name = %s" (Util.toml_quote target.host_name);
-  line "working_dir = %s" (Util.toml_quote ".");
-  line "state_dir = %s" (Util.toml_quote state_dir);
-  line "";
-  line "[machine]";
-  line "memory = %d" memory;
-  line "vcpu = %d" vcpu;
-  line "kvm = true";
-  line "";
-  line "[kernel]";
-  line "path = %s" (Util.toml_quote boot.kernel);
-  line "initrd_path = %s" (Util.toml_quote boot.initrd);
-  if boot.kernel_params <> [] then line "params = %s" (Util.toml_array boot.kernel_params);
-  line "serial = %s" (Util.toml_quote (if inputs.print_serial then "print" else "off"));
-  line "";
-  line "[ssh]";
-  line "user = %s" (Util.toml_quote user);
-  line "exec = %s"
-    (Util.toml_array
-       [
-         ssh;
-         "-o";
-         "ProxyCommand=" ^ systemd_ssh_proxy ^ " %h %p";
-         "-o";
-         "ProxyUseFdpass=yes";
-         "-o";
-         "CheckHostIP=no";
-         "-o";
-         "StrictHostKeyChecking=no";
-         "-o";
-         "UserKnownHostsFile=/dev/null";
-         "-o";
-         "GlobalKnownHostsFile=/dev/null";
-       ]);
-  line "ready_socket = %s" (Util.toml_quote "ready.sock");
-  line "autoprovision = true";
-  line "";
-  let workspace_guest_dir = "/home/" ^ user ^ "/workspace" in
-  let workspace_host_dir = Filename.concat state_dir "workspace" in
-  Util.ensure_dir workspace_host_dir;
-  line "[workspace]";
-  line "guest_dir = %s" (Util.toml_quote workspace_guest_dir);
-  line "host_dir = %s" (Util.toml_quote workspace_host_dir);
-  line "mount_cwd = %s" (if inputs.mount_cwd then "true" else "false");
-  line "";
-  line "[[mounts]]";
-  line "type = %s" (Util.toml_quote "virtiofs");
-  line "tag = %s" (Util.toml_quote "workspace");
-  line "source = %s" (Util.toml_quote workspace_host_dir);
-  line "target = %s" (Util.toml_quote workspace_guest_dir);
-  line "read_only = false";
-  line "virtiofs.socket = %s" (Util.toml_quote "workspace.sock");
-  line "virtiofs.bin = %s" (Util.toml_quote inputs.virtiofsd);
-  line "virtiofs.args = %s" (Util.toml_array [ "--socket-path={{.Socket}}"; "--shared-dir={{.MountSource}}"; "--tag={{.MountTag}}" ]);
-  line "";
-  line "[[mounts]]";
-  line "type = %s" (Util.toml_quote "virtiofs");
-  line "tag = %s" (Util.toml_quote "ro-store");
-  line "source = %s" (Util.toml_quote "/nix/store");
-  line "read_only = true";
-  line "virtiofs.socket = %s" (Util.toml_quote "ro-store.sock");
-  line "virtiofs.bin = %s" (Util.toml_quote inputs.virtiofsd);
-  line "virtiofs.args = %s" (Util.toml_array [ "--socket-path={{.Socket}}"; "--shared-dir={{.MountSource}}"; "--tag={{.MountTag}}" ]);
-  line "";
-  line "[[mounts]]";
-  line "type = %s" (Util.toml_quote "image");
-  line "source = %s" (Util.toml_quote (Filename.concat state_dir "persist.img"));
-  line "read_only = false";
-  line "image.size = 16384";
-  line "image.fs = %s" (Util.toml_quote "ext4");
-  line "image.create = true";
-  line "image.label = %s" (Util.toml_quote "persist");
-  if inputs.mount_cwd then (
-    line "";
-    line "[[mounts]]";
-    line "type = %s" (Util.toml_quote "virtiofs");
-    line "tag = %s" (Util.toml_quote "workspace_cwd");
-    line "source = %s" (Util.toml_quote ".");
-    line "read_only = false";
-    line "virtiofs.socket = %s" (Util.toml_quote "workspace-cwd.sock");
-    line "virtiofs.bin = %s" (Util.toml_quote inputs.virtiofsd);
-    line "virtiofs.args = %s" (Util.toml_array [ "--socket-path={{.Socket}}"; "--shared-dir={{.MountSource}}"; "--tag={{.MountTag}}" ]));
-  List.iter
-    (fun (file : Agent_box.write_file) ->
-      line "";
-      line "[[write_files]]";
-      line "guest_path = %s" (Util.toml_quote file.guest_path);
-      line "source = %s" (Util.toml_quote file.source);
-      line "chown = %s" (Util.toml_quote (user ^ ":users"));
-      line "overwrite = true";
-      line "follow_links = true";
-      if file.write_back then line "write_back = true")
-    resources.write_files;
-  List.iter
-    (fun (mount : Agent_box.mount) ->
-      line "";
-      line "[[mounts]]";
-      line "type = %s" (Util.toml_quote "virtiofs");
-      line "tag = %s" (Util.toml_quote mount.tag);
-      line "source = %s" (Util.toml_quote mount.source);
-      line "target = %s" (Util.toml_quote mount.target);
-      line "read_only = %s" (if mount.read_only then "true" else "false");
-      line "virtiofs.socket = %s" (Util.toml_quote (mount.tag ^ ".sock"));
-      line "virtiofs.bin = %s" (Util.toml_quote inputs.virtiofsd);
-      line "virtiofs.args = %s" (Util.toml_array [ "--socket-path={{.Socket}}"; "--shared-dir={{.MountSource}}"; "--tag={{.MountTag}}" ]))
-    resources.mounts;
-  (profiles, Buffer.contents b)
+  render_resolved_manifest
+    {
+      config;
+      flake = inputs.flake;
+      target;
+      boot;
+      name = inputs.name;
+      profiles = inputs.profiles;
+      user = Some user;
+      print_serial = inputs.print_serial;
+      mount_cwd = inputs.mount_cwd;
+      ssh;
+      systemd_ssh_proxy;
+      virtiofsd = inputs.virtiofsd;
+    }
 
 let spawn ?virtie ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~verbose () =
   let virtie = find_virtie virtie in
@@ -214,7 +242,7 @@ let spawn ?virtie ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake ~profi
   let virtiofsd = find_virtiofsd () in
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
-  let profiles, manifest = render_manifest { config_path; flake; name; profiles; user; print_serial; mount_cwd; ssh; systemd_ssh_proxy; virtiofsd } in
+  let _, manifest = render_manifest { config_path; flake; name; profiles; user; print_serial; mount_cwd; ssh; systemd_ssh_proxy; virtiofsd } in
   let path = manifest_path ~name in
   Log.debug "generated virtie manifest path: %s" path;
   Util.write_file path manifest;
