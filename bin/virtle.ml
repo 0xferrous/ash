@@ -259,10 +259,22 @@ let write_profile_mount_ssh_wrapper ~name ~virtle ~manifest_path ~ssh_exec
           ])
     |> String.concat "\n"
   in
+  let identity_file = Filename.concat (state_dir name) "id_ed25519" in
   let exec_ssh =
-    "exec "
-    ^ String.concat " " (List.map Util.shell_quote ssh_exec)
-    ^ " \"$@" ^ "\""
+    String.concat "\n"
+      [
+        "if [ -r " ^ Util.shell_quote identity_file ^ " ]; then";
+        "  exec "
+        ^ String.concat " " (List.map Util.shell_quote ssh_exec)
+        ^ " -i "
+        ^ Util.shell_quote identity_file
+        ^ " -o IdentitiesOnly=yes \"$@\"";
+        "else";
+        "  exec "
+        ^ String.concat " " (List.map Util.shell_quote ssh_exec)
+        ^ " \"$@\"";
+        "fi";
+      ]
   in
   let content =
     String.concat "\n"
@@ -575,6 +587,8 @@ let render_resolved_manifest inputs =
       "UserKnownHostsFile=/dev/null";
       "-o";
       "GlobalKnownHostsFile=/dev/null";
+      "-o";
+      "PubkeyAuthentication=yes";
     ]
   in
   let workspace_guest_dir = "/home/" ^ user ^ "/workspace" in
