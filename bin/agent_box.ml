@@ -1,6 +1,12 @@
 type config = Otoml.t
 
-type mount = { tag : string; source : string; target : string; read_only : bool }
+type mount = {
+  tag : string;
+  source : string;
+  target : string;
+  read_only : bool;
+}
+
 type write_file = { source : string; guest_path : string; write_back : bool }
 type profile_resources = { mounts : mount list; write_files : write_file list }
 
@@ -20,7 +26,9 @@ let strip_comment line =
         else
           match c with
           | '#' -> stopped := true
-          | '"' -> in_string := true; Buffer.add_char b c
+          | '"' ->
+              in_string := true;
+              Buffer.add_char b c
           | _ -> Buffer.add_char b c)
     line;
   Buffer.contents b |> String.trim
@@ -56,7 +64,8 @@ let parse_string_array s =
   let s = String.trim s in
   let len = String.length s in
   let inner =
-    if len >= 2 && s.[0] = '[' && s.[len - 1] = ']' then String.sub s 1 (len - 2) else s
+    if len >= 2 && s.[0] = '[' && s.[len - 1] = ']' then String.sub s 1 (len - 2)
+    else s
   in
   let values = ref [] in
   let b = Buffer.create 64 in
@@ -76,7 +85,9 @@ let parse_string_array s =
         else if c = '"' then in_string := false)
       else
         match c with
-        | '"' -> in_string := true; Buffer.add_char b c
+        | '"' ->
+            in_string := true;
+            Buffer.add_char b c
         | ',' -> push ()
         | c -> Buffer.add_char b c)
     inner;
@@ -86,7 +97,10 @@ let parse_string_array s =
 let load path : config =
   let path = Util.expand_home path in
   if not (Sys.file_exists path) then (
-    Printf.eprintf "ash: config not found: %s\n\nHint: pass --config PATH or create ~/.agent-box.toml.\n" path;
+    Printf.eprintf
+      "ash: config not found: %s\n\n\
+       Hint: pass --config PATH or create ~/.agent-box.toml.\n"
+      path;
     exit 1);
   match Otoml.Parser.from_file_result path with
   | Ok table -> table
@@ -97,30 +111,44 @@ let load path : config =
 let key_path key = String.split_on_char '.' key
 let string key config = Otoml.find_opt config Otoml.get_string (key_path key)
 let int key config = Otoml.find_opt config Otoml.get_integer (key_path key)
-let strings key config = Otoml.find_opt config (Otoml.get_array Otoml.get_string) (key_path key)
 
-let default_profile config = string "default_profile" config |> Option.value ~default:"base"
+let strings key config =
+  Otoml.find_opt config (Otoml.get_array Otoml.get_string) (key_path key)
+
+let default_profile config =
+  string "default_profile" config |> Option.value ~default:"base"
+
 let qemu_memory config = string "runtime.qemu.memory" config
 let qemu_cpus config = int "runtime.qemu.cpus" config
-let ssh_user config = string "runtime.qemu.ssh_user" config |> Option.value ~default:"agent"
 
-let profile_exists config profile = Otoml.path_exists config [ "profiles"; profile ]
+let ssh_user config =
+  string "runtime.qemu.ssh_user" config |> Option.value ~default:"agent"
+
+let profile_exists config profile =
+  Otoml.path_exists config [ "profiles"; profile ]
 
 let profile_extends config profile =
-  strings ("profiles." ^ profile ^ ".extends") config |> Option.value ~default:[]
+  strings ("profiles." ^ profile ^ ".extends") config
+  |> Option.value ~default:[]
 
 let path_tag prefix path = prefix ^ "-" ^ Util.slug path
 
 let strip_home_prefix path =
   let home = Util.home_dir () in
   let home_slash = home ^ "/" in
-  if String.starts_with ~prefix:"~/" path then Some (String.sub path 2 (String.length path - 2))
+  if String.starts_with ~prefix:"~/" path then
+    Some (String.sub path 2 (String.length path - 2))
   else if path = home then Some ""
-  else if String.starts_with ~prefix:home_slash path then Some (String.sub path (String.length home_slash) (String.length path - String.length home_slash))
+  else if String.starts_with ~prefix:home_slash path then
+    Some
+      (String.sub path (String.length home_slash)
+         (String.length path - String.length home_slash))
   else None
 
 let directory_source path =
-  if Sys.file_exists path && not (Sys.is_directory path) then Filename.dirname path else path
+  if Sys.file_exists path && not (Sys.is_directory path) then
+    Filename.dirname path
+  else path
 
 let mount_or_write_file ~read_only key ~source ~guest_path =
   if not (Sys.file_exists source) then (
@@ -129,13 +157,21 @@ let mount_or_write_file ~read_only key ~source ~guest_path =
   else if not (Sys.is_directory source) then
     Some (`WriteFile { source; guest_path; write_back = not read_only })
   else
-    Some (`Mount { tag = path_tag (String.sub key 7 (String.length key - 7)) source; source; target = guest_path; read_only })
+    Some
+      (`Mount
+         {
+           tag = path_tag (String.sub key 7 (String.length key - 7)) source;
+           source;
+           target = guest_path;
+           read_only;
+         })
 
 let home_relative_entry ~guest_user ~read_only key source =
   let rel =
     match strip_home_prefix source with
     | Some rel -> rel
-    | None -> if Filename.is_relative source then source else Filename.basename source
+    | None ->
+        if Filename.is_relative source then source else Filename.basename source
   in
   let host_source = Filename.concat (Util.home_dir ()) rel in
   let guest_path = Filename.concat ("/home/" ^ guest_user) rel in
@@ -151,9 +187,14 @@ let resources_of_entries entries =
       match entry with
       | `Mount mount -> { acc with mounts = mount :: acc.mounts }
       | `WriteFile file -> { acc with write_files = file :: acc.write_files })
-    entries { mounts = []; write_files = [] }
+    entries
+    { mounts = []; write_files = [] }
 
-let append_resources left right = { mounts = left.mounts @ right.mounts; write_files = left.write_files @ right.write_files }
+let append_resources left right =
+  {
+    mounts = left.mounts @ right.mounts;
+    write_files = left.write_files @ right.write_files;
+  }
 
 let collect_profile_mounts ~guest_user config =
   let from_home_relative read_only profile key =
@@ -168,7 +209,8 @@ let collect_profile_mounts ~guest_user config =
   in
   let rec loop seen profile =
     if List.mem profile seen then (
-      Log.warn "skipping cyclic profile extends: %s" (String.concat " -> " (List.rev (profile :: seen)));
+      Log.warn "skipping cyclic profile extends: %s"
+        (String.concat " -> " (List.rev (profile :: seen)));
       { mounts = []; write_files = [] })
     else if not (profile_exists config profile) then (
       Printf.eprintf "ash: profile not found in config: %s\n" profile;
@@ -196,7 +238,8 @@ let uniq_mounts (mounts : mount list) =
   let _, rev =
     List.fold_left
       (fun (seen, acc) (mount : mount) ->
-        if List.mem mount.source seen then (seen, acc) else (mount.source :: seen, mount :: acc))
+        if List.mem mount.source seen then (seen, acc)
+        else (mount.source :: seen, mount :: acc))
       ([], []) mounts
   in
   List.rev rev
@@ -205,7 +248,8 @@ let uniq_write_files (files : write_file list) =
   let _, rev =
     List.fold_left
       (fun (seen, acc) (file : write_file) ->
-        if List.mem file.guest_path seen then (seen, acc) else (file.guest_path :: seen, file :: acc))
+        if List.mem file.guest_path seen then (seen, acc)
+        else (file.guest_path :: seen, file :: acc))
       ([], []) files
   in
   List.rev rev
@@ -216,4 +260,7 @@ let resources_for_profiles ~guest_user config profiles =
     |> List.map (collect_profile_mounts ~guest_user config)
     |> List.fold_left append_resources { mounts = []; write_files = [] }
   in
-  { mounts = uniq_mounts resources.mounts; write_files = uniq_write_files resources.write_files }
+  {
+    mounts = uniq_mounts resources.mounts;
+    write_files = uniq_write_files resources.write_files;
+  }

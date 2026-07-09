@@ -1,7 +1,6 @@
 type level = Debug | Info | Warn | Error
 
 let debug_enabled = ref (Sys.getenv_opt "ASH_LOG" = Some "debug")
-
 let set_debug enabled = debug_enabled := enabled || !debug_enabled
 
 let color_enabled () =
@@ -30,7 +29,8 @@ let log level message =
   | Debug when not !debug_enabled -> ()
   | _ ->
       if color_enabled () then
-        Printf.eprintf "%sash%s:%s%s%s: %s\n%!" dim reset (level_color level) (level_name level) reset message
+        Printf.eprintf "%sash%s:%s%s%s: %s\n%!" dim reset (level_color level)
+          (level_name level) reset message
       else Printf.eprintf "ash:%s: %s\n%!" (level_name level) message
 
 let debug fmt = Printf.ksprintf (log Debug) fmt

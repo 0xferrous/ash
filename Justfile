@@ -2,9 +2,13 @@
 test:
 	nix develop -c dune exec test/test_manifest.exe
 
+# Format OCaml sources
+fmt:
+	nix develop -c dune fmt
+
 # Build the ash package
 build:
 	nix build
 
-# Run tests and build
-check: test build
+# Format, run tests, and build
+check: fmt test build

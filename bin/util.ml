@@ -18,7 +18,9 @@ let ensure_dir path =
 let write_file path content =
   ensure_dir (Filename.dirname path);
   let oc = open_out path in
-  Fun.protect ~finally:(fun () -> close_out oc) (fun () -> output_string oc content)
+  Fun.protect
+    ~finally:(fun () -> close_out oc)
+    (fun () -> output_string oc content)
 
 let copy_file ~src ~dst =
   ensure_dir (Filename.dirname dst);
@@ -40,26 +42,30 @@ let copy_file ~src ~dst =
           loop ()))
 
 let is_executable path =
-  try Unix.access path [ Unix.X_OK ]; true with Unix.Unix_error _ -> false
+  try
+    Unix.access path [ Unix.X_OK ];
+    true
+  with Unix.Unix_error _ -> false
 
 let some_if condition value = if condition then Some value else None
 
 let find_in_path program =
   if String.contains program '/' then some_if (is_executable program) program
   else
-    Sys.getenv_opt "PATH"
-    |> Option.value ~default:""
+    Sys.getenv_opt "PATH" |> Option.value ~default:""
     |> String.split_on_char ':'
     |> List.filter_map (fun dir ->
-           let dir = if dir = "" then "." else dir in
-           let path = Filename.concat dir program in
-           some_if (is_executable path) path)
+        let dir = if dir = "" then "." else dir in
+        let path = Filename.concat dir program in
+        some_if (is_executable path) path)
     |> List.find_opt (fun _ -> true)
 
-let shell_quote s = "'" ^ String.concat "'\\''" (String.split_on_char '\'' s) ^ "'"
+let shell_quote s =
+  "'" ^ String.concat "'\\''" (String.split_on_char '\'' s) ^ "'"
 
 let exec program args =
-  Log.debug "exec: %s" (String.concat " " (List.map shell_quote (program :: args)));
+  Log.debug "exec: %s"
+    (String.concat " " (List.map shell_quote (program :: args)));
   let argv = Array.of_list (program :: args) in
   Unix.execvp program argv
 
@@ -67,7 +73,9 @@ let command_output command =
   Log.debug "run: %s" command;
   let file = Filename.temp_file "ash" ".out" in
   let status = Sys.command (command ^ " > " ^ shell_quote file) in
-  let output = In_channel.with_open_text file In_channel.input_all |> String.trim in
+  let output =
+    In_channel.with_open_text file In_channel.input_all |> String.trim
+  in
   Sys.remove file;
   if status = 0 then (
     Log.debug "command output: %s" output;
@@ -97,7 +105,7 @@ let slug s =
   let b = Buffer.create (String.length s) in
   String.iter
     (function
-      | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' as c -> Buffer.add_char b c
+      | ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9') as c -> Buffer.add_char b c
       | _ -> Buffer.add_char b '-')
     s;
   Buffer.contents b
@@ -106,7 +114,8 @@ let name_slug s =
   let b = Buffer.create (String.length s) in
   String.iter
     (function
-      | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '.' | '_' | '-' as c -> Buffer.add_char b c
+      | ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '.' | '_' | '-') as c ->
+          Buffer.add_char b c
       | _ -> Buffer.add_char b '-')
     s;
   Buffer.contents b

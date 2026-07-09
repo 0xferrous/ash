@@ -11,7 +11,9 @@ let temp_dir prefix =
 let write_file path content =
   Util.ensure_dir (Filename.dirname path);
   let oc = open_out path in
-  Fun.protect ~finally:(fun () -> close_out oc) (fun () -> output_string oc content)
+  Fun.protect
+    ~finally:(fun () -> close_out oc)
+    (fun () -> output_string oc content)
 
 let mkdir_p = Util.ensure_dir
 
@@ -62,7 +64,11 @@ let table_array doc key =
   | None -> []
 
 let find_table_by_string tables key value =
-  match List.find_opt (fun table -> List.assoc_opt key table = Some (Otoml.TomlString value)) tables with
+  match
+    List.find_opt
+      (fun table -> List.assoc_opt key table = Some (Otoml.TomlString value))
+      tables
+  with
   | Some table -> table
   | None -> fail ("missing table with " ^ key ^ " = " ^ value)
 
@@ -83,9 +89,11 @@ let test_boot : Nix.boot =
     systemd_ssh_proxy = "/nix/store/systemd/lib/systemd/systemd-ssh-proxy";
   }
 
-let test_target : Nix.target = { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
+let test_target : Nix.target =
+  { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
-let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false) ~config ~flake ~name () =
+let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
+    ~config ~flake ~name () =
   Virtie.render_resolved_manifest
     {
       config;
@@ -112,7 +120,9 @@ let test_agent_box_to_virtie_manifest () =
   mkdir_p abs_cache;
   mkdir_p (Filename.concat home ".cargo");
   mkdir_p (Filename.concat home "dev/ro-project");
-  write_file (Filename.concat home ".config/nix/nix.conf") "experimental-features = nix-command flakes\n";
+  write_file
+    (Filename.concat home ".config/nix/nix.conf")
+    "experimental-features = nix-command flakes\n";
   Unix.putenv "HOME" home;
   Unix.putenv "XDG_STATE_HOME" state;
   let config_path = Filename.concat root "agent-box.toml" in
@@ -137,35 +147,57 @@ absolute = ["%s"]
 |}
        abs_cache);
   let config = Agent_box.load config_path in
-  let _, manifest = render ~config ~flake:"../my-nix#agent" ~name:"unit-test" ~profiles:[ "rust" ] ~print_serial:true ~mount_cwd:true () in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"unit-test"
+      ~profiles:[ "rust" ] ~print_serial:true ~mount_cwd:true ()
+  in
   let doc = parse_toml manifest in
   assert_equal "host_name" "agent" (find_string doc [ "host_name" ]);
-  assert_equal "state_dir" (Filename.concat state "ash/unit-test") (find_string doc [ "state_dir" ]);
-  if find_int doc [ "machine"; "memory" ] <> 8192 then fail "memory should be 8192";
+  assert_equal "state_dir"
+    (Filename.concat state "ash/unit-test")
+    (find_string doc [ "state_dir" ]);
+  if find_int doc [ "machine"; "memory" ] <> 8192 then
+    fail "memory should be 8192";
   if find_int doc [ "machine"; "vcpu" ] <> 4 then fail "vcpu should be 4";
   assert_equal "kernel serial" "print" (find_string doc [ "kernel"; "serial" ]);
-  assert_bool "workspace mount_cwd" true (find_bool doc [ "workspace"; "mount_cwd" ]);
-  assert_equal "workspace guest_dir" "/home/agent/workspace" (find_string doc [ "workspace"; "guest_dir" ]);
+  assert_bool "workspace mount_cwd" true
+    (find_bool doc [ "workspace"; "mount_cwd" ]);
+  assert_equal "workspace guest_dir" "/home/agent/workspace"
+    (find_string doc [ "workspace"; "guest_dir" ]);
   let mounts = table_array doc "mounts" in
   let workspace = find_table_by_string mounts "tag" "workspace" in
-  assert_equal "workspace source" (Filename.concat state "ash/unit-test/workspace") (string_field workspace "source");
-  assert_equal "workspace target" "/home/agent/workspace" (string_field workspace "target");
+  assert_equal "workspace source"
+    (Filename.concat state "ash/unit-test/workspace")
+    (string_field workspace "source");
+  assert_equal "workspace target" "/home/agent/workspace"
+    (string_field workspace "target");
   let ro_store = find_table_by_string mounts "tag" "ro-store" in
   assert_equal "ro-store source" "/nix/store" (string_field ro_store "source");
   assert_bool "ro-store read_only" true (bool_field ro_store "read_only");
   let cwd = find_table_by_string mounts "tag" "workspace_cwd" in
   assert_equal "cwd source" "." (string_field cwd "source");
   let cargo = find_table_by_string mounts "target" "/home/agent/.cargo" in
-  assert_equal "cargo source" (Filename.concat home ".cargo") (string_field cargo "source");
+  assert_equal "cargo source"
+    (Filename.concat home ".cargo")
+    (string_field cargo "source");
   assert_bool "cargo read_only" false (bool_field cargo "read_only");
-  let ro_project = find_table_by_string mounts "target" "/home/agent/dev/ro-project" in
-  assert_equal "ro project source" (Filename.concat home "dev/ro-project") (string_field ro_project "source");
+  let ro_project =
+    find_table_by_string mounts "target" "/home/agent/dev/ro-project"
+  in
+  assert_equal "ro project source"
+    (Filename.concat home "dev/ro-project")
+    (string_field ro_project "source");
   assert_bool "ro project read_only" true (bool_field ro_project "read_only");
   let abs = find_table_by_string mounts "target" abs_cache in
   assert_equal "abs source" abs_cache (string_field abs "source");
   let write_files = table_array doc "write_files" in
-  let nix_conf = find_table_by_string write_files "guest_path" "/home/agent/.config/nix/nix.conf" in
-  assert_equal "write file source" (Filename.concat home ".config/nix/nix.conf") (string_field nix_conf "source");
+  let nix_conf =
+    find_table_by_string write_files "guest_path"
+      "/home/agent/.config/nix/nix.conf"
+  in
+  assert_equal "write file source"
+    (Filename.concat home ".config/nix/nix.conf")
+    (string_field nix_conf "source");
   assert_bool "write file write_back" true (bool_field nix_conf "write_back");
   assert_equal "write file chown" "agent:users" (string_field nix_conf "chown")
 
@@ -189,17 +221,29 @@ ssh_user = "dev"
 home_relative = [".cache/example"]
 |};
   let config = Agent_box.load config_path in
-  let profiles, manifest = render ~config ~flake:"../my-nix#agent" ~name:"default-profile" () in
+  let profiles, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"default-profile" ()
+  in
   assert_equal "selected default profile" "base" (String.concat "," profiles);
   let doc = parse_toml manifest in
   assert_equal "ssh user" "dev" (find_string doc [ "ssh"; "user" ]);
-  assert_equal "workspace guest dir" "/home/dev/workspace" (find_string doc [ "workspace"; "guest_dir" ]);
-  assert_bool "mount_cwd default" false (find_bool doc [ "workspace"; "mount_cwd" ]);
+  assert_equal "workspace guest dir" "/home/dev/workspace"
+    (find_string doc [ "workspace"; "guest_dir" ]);
+  assert_bool "mount_cwd default" false
+    (find_bool doc [ "workspace"; "mount_cwd" ]);
   let mounts = table_array doc "mounts" in
-  if List.exists (fun table -> List.assoc_opt "tag" table = Some (Otoml.TomlString "workspace_cwd")) mounts then fail "workspace_cwd should not be emitted by default";
+  if
+    List.exists
+      (fun table ->
+        List.assoc_opt "tag" table = Some (Otoml.TomlString "workspace_cwd"))
+      mounts
+  then fail "workspace_cwd should not be emitted by default";
   let cache = find_table_by_string mounts "target" "/home/dev/.cache/example" in
-  assert_equal "cache source" (Filename.concat home ".cache/example") (string_field cache "source");
-  if table_array doc "write_files" <> [] then fail "write_files should be absent"
+  assert_equal "cache source"
+    (Filename.concat home ".cache/example")
+    (string_field cache "source");
+  if table_array doc "write_files" <> [] then
+    fail "write_files should be absent"
 
 let test_readonly_file_write_has_no_write_back () =
   let root = temp_dir "ash-test-ro-file" in
@@ -218,12 +262,19 @@ let test_readonly_file_write_has_no_write_back () =
 home_relative = [".gitconfig"]
 |};
   let config = Agent_box.load config_path in
-  let _, manifest = render ~config ~flake:"../my-nix#agent" ~name:"ro-file" () in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"ro-file" ()
+  in
   let doc = parse_toml manifest in
   let write_files = table_array doc "write_files" in
-  let gitconfig = find_table_by_string write_files "guest_path" "/home/agent/.gitconfig" in
-  assert_equal "gitconfig source" (Filename.concat home ".gitconfig") (string_field gitconfig "source");
-  if List.mem_assoc "write_back" gitconfig then fail "read-only file should not set write_back"
+  let gitconfig =
+    find_table_by_string write_files "guest_path" "/home/agent/.gitconfig"
+  in
+  assert_equal "gitconfig source"
+    (Filename.concat home ".gitconfig")
+    (string_field gitconfig "source");
+  if List.mem_assoc "write_back" gitconfig then
+    fail "read-only file should not set write_back"
 
 let run name test =
   Printf.printf "test %s ... %!" name;
@@ -231,6 +282,9 @@ let run name test =
   Printf.printf "ok\n%!"
 
 let () =
-  run "agent-box profiles render to virtie manifest" test_agent_box_to_virtie_manifest;
-  run "default profile renders without mount-cwd" test_default_profile_without_mount_cwd;
-  run "read-only file write does not write back" test_readonly_file_write_has_no_write_back
+  run "agent-box profiles render to virtie manifest"
+    test_agent_box_to_virtie_manifest;
+  run "default profile renders without mount-cwd"
+    test_default_profile_without_mount_cwd;
+  run "read-only file write does not write back"
+    test_readonly_file_write_has_no_write_back
