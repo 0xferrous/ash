@@ -26,19 +26,43 @@ Reuse the same VM state and persistent image across runs:
 ash spawn --name rustbox -p rust -f ../my-nix#agent
 ```
 
-Options:
+SSH into an already running VM by name:
+
+```sh
+ash attach rustbox
+```
+
+If exactly one VM is running, the name can be omitted:
+
+```sh
+ash attach
+```
+
+`attach` is intentionally named after attaching to an existing session; it does not boot or resume stopped VMs.
+
+Shared options, accepted by commands that use them:
+
+- `--debug` — enable ash debug logging. Can also be enabled with `ASH_LOG=debug`.
+- `--virtle PATH` — path to `virtle`. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`. Used by `spawn` and `attach`.
+- `-v`, `--verbose` — for `spawn`, passed to `virtle`; for `attach`, passed to `ssh`; repeatable.
+
+When invoking through `nix run`, pass app arguments after `--` if they begin with `-`, for example:
+
+```sh
+nix run . -- attach --virtle ./result/bin/virtle rustbox
+```
+
+Spawn options:
 
 - `-p`, `--profile PROFILE` — repeatable agent-box profile; profiles supply mount points.
 - `-f`, `--flake FLAKE#HOST` — required flake directory plus host reference, e.g. `../my-nix#agent`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
 - `-u`, `--user USER` — guest SSH user. Defaults to `runtime.qemu.ssh_user` from config, then `agent`.
 - `-c`, `--config CONFIG` — agent-box style config. Default: `~/.agent-box.toml`.
-- `--virtle PATH` — path to `virtle`. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`.
 - `--ssh PATH` — override path to host `ssh`. Defaults to the selected NixOS config's `pkgs.openssh`.
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
 - `--print-serial` — print guest kernel/init serial output while booting.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
-- `-v`, `--verbose` — passed to `virtle`; repeatable.
 
 ## What `spawn` does
 
@@ -189,6 +213,8 @@ Then `ash` executes:
 ```sh
 virtle --manifest GENERATED launch --ssh
 ```
+
+To attach to an already running named VM, `ash attach NAME` reads the existing generated manifest under the VM state directory, asks the running `virtle` control socket for its vsock CID, and executes the manifest's SSH command. It refuses to attach to stopped VMs. If no name is supplied, `ash attach` only succeeds when exactly one VM is running.
 
 Host-side SSH attach requires `ssh` and `systemd-ssh-proxy`. `ash` resolves them from the selected NixOS config by default, unless `--ssh` or `--systemd-ssh-proxy` are passed, and writes the resolved absolute paths into the generated manifest.
 

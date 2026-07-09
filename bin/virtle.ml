@@ -366,6 +366,112 @@ let print_vm_list () =
         (format_time vm.modified) vm.path)
     vms
 
+let manifest_string doc path =
+  match Otoml.find_opt doc Otoml.get_string path with
+  | Some value -> value
+  | None ->
+      Printf.eprintf "ash: manifest is missing string field %s\n"
+        (String.concat "." path);
+      exit 1
+
+let manifest_string_array doc path =
+  match Otoml.find_opt doc (Otoml.get_array Otoml.get_string) path with
+  | Some value -> value
+  | None ->
+      Printf.eprintf "ash: manifest is missing string array field %s\n"
+        (String.concat "." path);
+      exit 1
+
+let load_manifest_doc path =
+  try
+    In_channel.with_open_text path (fun ic ->
+        match Otoml.Parser.from_string_result (In_channel.input_all ic) with
+        | Ok doc -> doc
+        | Error err ->
+            Printf.eprintf "ash: could not parse manifest %S: %s\n" path err;
+            exit 1)
+  with Sys_error err ->
+    Printf.eprintf "ash: could not read manifest %S: %s\n" path err;
+    exit 1
+
+let parse_json_int_field ~field text =
+  let pattern = "\"" ^ field ^ "\"" in
+  let pattern_len = String.length pattern in
+  let text_len = String.length text in
+  let rec find i =
+    if i + pattern_len > text_len then None
+    else if String.sub text i pattern_len = pattern then Some (i + pattern_len)
+    else find (i + 1)
+  in
+  let is_digit = function '0' .. '9' -> true | _ -> false in
+  match find 0 with
+  | None -> None
+  | Some i ->
+      let rec skip_to_digit j =
+        if j >= text_len then None
+        else if is_digit text.[j] then Some j
+        else skip_to_digit (j + 1)
+      in
+      Option.bind (skip_to_digit i) (fun start ->
+          let rec finish j =
+            if j < text_len && is_digit text.[j] then finish (j + 1) else j
+          in
+          Some (int_of_string (String.sub text start (finish start - start))))
+
+let select_attach_vm name =
+  match name with
+  | Some name ->
+      let name = Util.name_slug name in
+      let path = manifest_path ~name in
+      if not (Sys.file_exists path) then (
+        Printf.eprintf "ash: no VM named %S (expected %s)\n" name path;
+        exit 1);
+      if not (socket_accepts_connection (control_socket_path (state_dir name)))
+      then (
+        Printf.eprintf "ash: VM %S is not running\n" name;
+        exit 1);
+      (name, path)
+  | None -> (
+      match List.filter (fun vm -> vm.status = Running) (list_vms ()) with
+      | [ vm ] -> (vm.name, Filename.concat vm.path "virtle.toml")
+      | [] ->
+          Printf.eprintf "ash: no running VMs; use `ash ls` to list states\n";
+          exit 1
+      | vms ->
+          Printf.eprintf
+            "ash: multiple running VMs; pass a name, e.g. `ash attach %s`\n"
+            (List.hd vms).name;
+          exit 1)
+
+let attach ?virtle ?name ~verbose () =
+  let name, path = select_attach_vm name in
+  let virtle = find_virtle virtle in
+  Log.debug "attaching to VM %s using manifest %s" name path;
+  let status =
+    Util.command_output
+      (String.concat " "
+         (List.map Util.shell_quote
+            [ virtle; "--manifest"; path; "rpc"; "status" ]))
+  in
+  let cid =
+    match parse_json_int_field ~field:"cid" status with
+    | Some cid when cid > 0 -> cid
+    | _ ->
+        Printf.eprintf "ash: could not read VM cid from virtle status: %s\n"
+          status;
+        exit 1
+  in
+  let doc = load_manifest_doc path in
+  let user = manifest_string doc [ "ssh"; "user" ] in
+  let ssh_exec = manifest_string_array doc [ "ssh"; "exec" ] in
+  let destination = user ^ "@vsock/" ^ string_of_int cid in
+  let verbose_args = List.map (fun _ -> "-v") verbose in
+  match ssh_exec with
+  | [] ->
+      Printf.eprintf "ash: manifest ssh.exec is empty\n";
+      exit 1
+  | program :: args -> Util.exec program (args @ verbose_args @ [ destination ])
+
 let write_file_section user (file : Agent_box.write_file) =
   let fields =
     [

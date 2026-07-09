@@ -3,15 +3,31 @@ open Ash_lib
 
 let version = "0.1.0"
 
-let spawn debug virtle ssh systemd_ssh_proxy config flake name user profiles
-    print_serial mount_cwd verbose =
-  Log.set_debug debug;
-  Virtle.spawn ?virtle ?ssh ?systemd_ssh_proxy ?name ?user ~config_path:config
-    ~flake ~profiles ~print_serial ~mount_cwd ~verbose ()
+type global_opts = { debug : bool }
 
-let list_vms debug =
-  Log.set_debug debug;
+type virtle_opts = {
+  global : global_opts;
+  virtle : string option;
+  verbose : bool list;
+}
+
+let global_opts debug = { debug }
+let virtle_opts global virtle verbose = { global; virtle; verbose }
+
+let spawn opts ssh systemd_ssh_proxy config flake name user profiles
+    print_serial mount_cwd =
+  Log.set_debug opts.global.debug;
+  Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?name ?user
+    ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd
+    ~verbose:opts.verbose ()
+
+let list_vms global =
+  Log.set_debug global.debug;
   Virtle.print_vm_list ()
+
+let attach opts name =
+  Log.set_debug opts.global.debug;
+  Virtle.attach ?virtle:opts.virtle ?name ~verbose:opts.verbose ()
 
 let virtle_arg =
   Arg.(
@@ -80,7 +96,10 @@ let profiles_arg =
 let verbose_arg =
   Arg.(
     value & flag_all
-    & info [ "verbose"; "v" ] ~doc:"Increase virtle verbosity. Repeatable.")
+    & info [ "verbose"; "v" ]
+        ~doc:
+          "Increase verbosity. For spawn, passed to virtle; for attach, passed \
+           to ssh. Repeatable.")
 
 let print_serial_arg =
   Arg.(
@@ -101,18 +120,37 @@ let debug_arg =
     & info [ "debug" ]
         ~doc:"Enable ash debug logging. Can also be enabled with ASH_LOG=debug.")
 
+let global_opts_arg = Term.(const global_opts $ debug_arg)
+
+let virtle_opts_arg =
+  Term.(const virtle_opts $ global_opts_arg $ virtle_arg $ verbose_arg)
+
 let spawn_cmd =
   Cmd.v
     (Cmd.info "spawn" ~doc:"spawn an agent VM")
     Term.(
-      const spawn $ debug_arg $ virtle_arg $ ssh_arg $ systemd_ssh_proxy_arg
+      const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ config_arg $ flake_arg $ name_arg $ user_arg $ profiles_arg
-      $ print_serial_arg $ mount_cwd_arg $ verbose_arg)
+      $ print_serial_arg $ mount_cwd_arg)
+
+let attach_name_arg =
+  Arg.(
+    value
+    & pos 0 (some string) None
+    & info []
+        ~doc:
+          "VM/state name. If omitted, attach requires exactly one running VM."
+        ~docv:"NAME")
+
+let attach_cmd =
+  Cmd.v
+    (Cmd.info "attach" ~doc:"ssh into a running VM")
+    Term.(const attach $ virtle_opts_arg $ attach_name_arg)
 
 let ls_cmd =
   Cmd.v
     (Cmd.info "ls" ~doc:"list ash VM state directories")
-    Term.(const list_vms $ debug_arg)
+    Term.(const list_vms $ global_opts_arg)
 
 let main_cmd =
   let doc = "spawn agent VMs with virtle" in
@@ -122,10 +160,18 @@ let main_cmd =
       `P
         "ash generates a virtle manifest from an agent-box style config, a \
          NixOS flake host, and selected profiles, then launches virtle.";
+      `S "GLOBAL OPTIONS";
+      `P
+        "The options --debug, --virtle=PATH, and -v/--verbose are shared by \
+         commands that use them.";
       `S Manpage.s_examples;
       `Pre "ash spawn -p rust -p go -f ../my-nix#agent";
+      `Pre "ash attach rustbox";
+      `Pre "ash attach --virtle ./result/bin/virtle rustbox";
     ]
   in
-  Cmd.group (Cmd.info "ash" ~version ~doc ~man) [ spawn_cmd; ls_cmd ]
+  Cmd.group
+    (Cmd.info "ash" ~version ~doc ~man)
+    [ spawn_cmd; attach_cmd; ls_cmd ]
 
 let () = exit (Cmd.eval main_cmd)
