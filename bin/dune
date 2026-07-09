@@ -1,7 +1,7 @@
 (library
  (name ash_lib)
  (modules agent_box log nix systemd_run util virtle)
- (libraries unix otoml))
+ (libraries unix otoml yojson))
 
 (executable
  (public_name ash)

@@ -260,6 +260,7 @@ type vm_status = Running | Stopped
 type vm_info = {
   name : string;
   status : vm_status;
+  cid : int option;
   disk_bytes : int64;
   apparent_bytes : int64;
   modified : float;
@@ -267,6 +268,22 @@ type vm_info = {
 }
 
 let control_socket_path dir = Filename.concat dir "virtle.sock"
+
+let json_int_field ~field text =
+  let int_value = function
+    | `Int value -> Some value
+    | `Intlit value -> int_of_string_opt value
+    | _ -> None
+  in
+  let rec find = function
+    | `Assoc fields -> (
+        match Option.bind (List.assoc_opt field fields) int_value with
+        | Some value -> Some value
+        | None -> fields |> List.find_map (fun (_, value) -> find value))
+    | `List values -> List.find_map find values
+    | _ -> None
+  in
+  try Yojson.Safe.from_string text |> find with Yojson.Json_error _ -> None
 
 let socket_accepts_connection path =
   if not (Sys.file_exists path) then false
@@ -279,6 +296,28 @@ let socket_accepts_connection path =
           Unix.connect fd (Unix.ADDR_UNIX path);
           true
         with Unix.Unix_error _ -> false)
+
+let control_socket_status_cid path =
+  let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Fun.protect
+    ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ())
+    (fun () ->
+      try
+        Unix.connect fd (Unix.ADDR_UNIX path);
+        let request = "{\"id\":1,\"method\":\"status\",\"params\":{}}\n" in
+        let _ = Unix.write_substring fd request 0 (String.length request) in
+        let buffer = Bytes.create 4096 in
+        let rec read_response acc =
+          let n = Unix.read fd buffer 0 (Bytes.length buffer) in
+          if n <= 0 then acc
+          else
+            let chunk = Bytes.sub_string buffer 0 n in
+            let acc = acc ^ chunk in
+            if String.contains chunk '\n' then acc else read_response acc
+        in
+        read_response "" |> json_int_field ~field:"cid"
+      with Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _ ->
+        None)
 
 let rec path_size path =
   try
@@ -336,15 +375,17 @@ let list_vms () =
         try
           if Sys.is_directory path && Sys.file_exists manifest then
             let stat = Unix.stat path in
-            let status =
-              if socket_accepts_connection (control_socket_path path) then
-                Running
-              else Stopped
+            let control_socket = control_socket_path path in
+            let status, cid =
+              if socket_accepts_connection control_socket then
+                (Running, control_socket_status_cid control_socket)
+              else (Stopped, None)
             in
             Some
               {
                 name;
                 status;
+                cid;
                 disk_bytes = disk_usage path;
                 apparent_bytes = path_size path;
                 modified = stat.st_mtime;
@@ -355,13 +396,14 @@ let list_vms () =
 
 let print_vm_list () =
   let status_string = function Running -> "running" | Stopped -> "stopped" in
+  let cid_string = function Some cid -> string_of_int cid | None -> "-" in
   let vms = list_vms () in
-  Printf.printf "%-32s %-8s %10s %10s  %-19s %s\n" "NAME" "STATUS" "DISK"
-    "VIRTUAL" "MODIFIED" "PATH";
+  Printf.printf "%-32s %-8s %5s %10s %10s  %-19s %s\n" "NAME" "STATUS" "CID"
+    "DISK" "VIRTUAL" "MODIFIED" "PATH";
   List.iter
     (fun vm ->
-      Printf.printf "%-32s %-8s %10s %10s  %-19s %s\n" vm.name
-        (status_string vm.status) (human_size vm.disk_bytes)
+      Printf.printf "%-32s %-8s %5s %10s %10s  %-19s %s\n" vm.name
+        (status_string vm.status) (cid_string vm.cid) (human_size vm.disk_bytes)
         (human_size vm.apparent_bytes)
         (format_time vm.modified) vm.path)
     vms
@@ -393,30 +435,6 @@ let load_manifest_doc path =
   with Sys_error err ->
     Printf.eprintf "ash: could not read manifest %S: %s\n" path err;
     exit 1
-
-let parse_json_int_field ~field text =
-  let pattern = "\"" ^ field ^ "\"" in
-  let pattern_len = String.length pattern in
-  let text_len = String.length text in
-  let rec find i =
-    if i + pattern_len > text_len then None
-    else if String.sub text i pattern_len = pattern then Some (i + pattern_len)
-    else find (i + 1)
-  in
-  let is_digit = function '0' .. '9' -> true | _ -> false in
-  match find 0 with
-  | None -> None
-  | Some i ->
-      let rec skip_to_digit j =
-        if j >= text_len then None
-        else if is_digit text.[j] then Some j
-        else skip_to_digit (j + 1)
-      in
-      Option.bind (skip_to_digit i) (fun start ->
-          let rec finish j =
-            if j < text_len && is_digit text.[j] then finish (j + 1) else j
-          in
-          Some (int_of_string (String.sub text start (finish start - start))))
 
 let select_attach_vm name =
   match name with
@@ -454,7 +472,7 @@ let attach ?virtle ?name ~verbose () =
             [ virtle; "--manifest"; path; "rpc"; "status" ]))
   in
   let cid =
-    match parse_json_int_field ~field:"cid" status with
+    match json_int_field ~field:"cid" status with
     | Some cid when cid > 0 -> cid
     | _ ->
         Printf.eprintf "ash: could not read VM cid from virtle status: %s\n"

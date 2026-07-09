@@ -32,6 +32,7 @@
           propagatedBuildInputs = [
             ocamlPackages.cmdliner
             ocamlPackages.otoml
+            ocamlPackages.yojson
           ];
 
           strictDeps = true;
