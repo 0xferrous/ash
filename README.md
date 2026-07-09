@@ -1,6 +1,6 @@
 # ash
 
-A small OCaml CLI that spawns an agent VM by generating a `virtle` manifest and delegating to `virtle`.
+A small OCaml CLI for spawning, attaching to, and managing optionally ephemeral NixOS agent VMs via [`virtle`](https://github.com/shazow/virtle), with profile-based mounts from an [`agent-box`](https://github.com/0xferrous/agent-box) TOML config.
 
 ## Quickstart
 
