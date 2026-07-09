@@ -648,7 +648,11 @@ let attach ?virtle ?name ~verbose () =
   let verbose_args = List.map (fun _ -> "-v") verbose in
   match ssh_exec with
   | [] -> Log.fatal "manifest ssh.exec is empty"
-  | program :: args -> Util.exec program (args @ verbose_args @ [ destination ])
+  | program :: args ->
+      let code =
+        Util.run_foreground program (args @ verbose_args @ [ destination ])
+      in
+      exit code
 
 let write_file_section user (file : Agent_box.write_file) =
   let fields =

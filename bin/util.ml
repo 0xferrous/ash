@@ -77,12 +77,28 @@ let process_status_code = function
 let run_foreground program args =
   Log.debug "run foreground: %s"
     (String.concat " " (List.map shell_quote (program :: args)));
-  let argv = Array.of_list (program :: args) in
-  let pid =
-    Unix.create_process program argv Unix.stdin Unix.stdout Unix.stderr
+  (* Interactive children such as ssh may leave the terminal in raw/no-echo
+     mode. Since callers like `spawn --ephemeral` keep ash alive after the
+     child exits, save and restore the terminal so the parent shell is usable. *)
+  let terminal_attrs =
+    if Unix.isatty Unix.stdin then
+      try Some (Unix.tcgetattr Unix.stdin) with Unix.Unix_error _ -> None
+    else None
   in
-  let _, status = Unix.waitpid [] pid in
-  process_status_code status
+  Fun.protect
+    ~finally:(fun () ->
+      Option.iter
+        (fun attrs ->
+          try Unix.tcsetattr Unix.stdin Unix.TCSANOW attrs
+          with Unix.Unix_error _ -> ())
+        terminal_attrs)
+    (fun () ->
+      let argv = Array.of_list (program :: args) in
+      let pid =
+        Unix.create_process program argv Unix.stdin Unix.stdout Unix.stderr
+      in
+      let _, status = Unix.waitpid [] pid in
+      process_status_code status)
 
 let command_output command =
   let stdout_file = Filename.temp_file "ash" ".out" in
