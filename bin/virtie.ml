@@ -89,14 +89,15 @@ let default_name () =
   let base = Filename.basename cwd in
   Util.name_slug (base ^ "-" ^ timestamp ())
 
-let state_dir name =
+let state_base_dir () =
   let base =
     match Sys.getenv_opt "XDG_STATE_HOME" with
     | Some path when path <> "" -> path
     | _ -> Filename.concat (Util.home_dir ()) ".local/state"
   in
-  Filename.concat (Filename.concat base "ash") (Util.name_slug name)
+  Filename.concat base "ash"
 
+let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
 let manifest_path ~name = Filename.concat (state_dir name) "virtie.toml"
 
 let profile_mount_ssh_wrapper_path ~name =
@@ -253,6 +254,117 @@ let write_profile_mount_ssh_wrapper ~name ~virtie ~manifest_path ~ssh_exec
   Unix.chmod path 0o755;
   Log.debug "generated SSH profile mount wrapper: %s" path;
   path
+
+type vm_status = Running | Stopped
+
+type vm_info = {
+  name : string;
+  status : vm_status;
+  disk_bytes : int64;
+  apparent_bytes : int64;
+  modified : float;
+  path : string;
+}
+
+let control_socket_path dir = Filename.concat dir "virtie.sock"
+
+let socket_accepts_connection path =
+  if not (Sys.file_exists path) then false
+  else
+    let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    Fun.protect
+      ~finally:(fun () -> Unix.close fd)
+      (fun () ->
+        try
+          Unix.connect fd (Unix.ADDR_UNIX path);
+          true
+        with Unix.Unix_error _ -> false)
+
+let rec path_size path =
+  try
+    let stat = Unix.lstat path in
+    match stat.st_kind with
+    | Unix.S_DIR ->
+        Sys.readdir path
+        |> Array.fold_left
+             (fun total entry ->
+               Int64.add total (path_size (Filename.concat path entry)))
+             (Int64.of_int stat.st_size)
+    | _ -> Int64.of_int stat.st_size
+  with Unix.Unix_error _ | Sys_error _ -> 0L
+
+let first_word value =
+  String.trim value |> String.split_on_char ' ' |> List.find_opt (( <> ) "")
+
+let disk_usage path =
+  try
+    let output =
+      Util.command_output ("du -sk -- " ^ Util.shell_quote path ^ " 2>/dev/null")
+    in
+    let output =
+      String.map (function '\t' | '\n' | '\r' -> ' ' | c -> c) output
+    in
+    match first_word output with
+    | Some kib -> Int64.mul (Int64.of_string kib) 1024L
+    | None -> path_size path
+  with Failure _ | Invalid_argument _ -> path_size path
+
+let human_size bytes =
+  let units = [| "B"; "KiB"; "MiB"; "GiB"; "TiB" |] in
+  let value = ref (Int64.to_float bytes) in
+  let unit = ref 0 in
+  while !value >= 1024. && !unit < Array.length units - 1 do
+    value := !value /. 1024.;
+    incr unit
+  done;
+  if !unit = 0 then Printf.sprintf "%.0f %s" !value units.(!unit)
+  else Printf.sprintf "%.2f %s" !value units.(!unit)
+
+let format_time seconds =
+  let tm = Unix.localtime seconds in
+  Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d" (tm.tm_year + 1900)
+    (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
+
+let list_vms () =
+  let base = state_base_dir () in
+  if not (Sys.file_exists base) then []
+  else
+    Sys.readdir base |> Array.to_list |> List.sort String.compare
+    |> List.filter_map (fun name ->
+        let path = Filename.concat base name in
+        let manifest = Filename.concat path "virtie.toml" in
+        try
+          if Sys.is_directory path && Sys.file_exists manifest then
+            let stat = Unix.stat path in
+            let status =
+              if socket_accepts_connection (control_socket_path path) then
+                Running
+              else Stopped
+            in
+            Some
+              {
+                name;
+                status;
+                disk_bytes = disk_usage path;
+                apparent_bytes = path_size path;
+                modified = stat.st_mtime;
+                path;
+              }
+          else None
+        with Unix.Unix_error _ | Sys_error _ -> None)
+
+let print_vm_list () =
+  let status_string = function Running -> "running" | Stopped -> "stopped" in
+  let vms = list_vms () in
+  Printf.printf "%-32s %-8s %10s %10s  %-19s %s\n" "NAME" "STATUS" "DISK"
+    "VIRTUAL" "MODIFIED" "PATH";
+  List.iter
+    (fun vm ->
+      Printf.printf "%-32s %-8s %10s %10s  %-19s %s\n" vm.name
+        (status_string vm.status) (human_size vm.disk_bytes)
+        (human_size vm.apparent_bytes)
+        (format_time vm.modified) vm.path)
+    vms
 
 let write_file_section user (file : Agent_box.write_file) =
   let fields =

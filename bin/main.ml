@@ -9,6 +9,10 @@ let spawn debug virtie ssh systemd_ssh_proxy config flake name user profiles
   Virtie.spawn ?virtie ?ssh ?systemd_ssh_proxy ?name ?user ~config_path:config
     ~flake ~profiles ~print_serial ~mount_cwd ~verbose ()
 
+let list_vms debug =
+  Log.set_debug debug;
+  Virtie.print_vm_list ()
+
 let virtie_arg =
   Arg.(
     value
@@ -105,6 +109,11 @@ let spawn_cmd =
       $ config_arg $ flake_arg $ name_arg $ user_arg $ profiles_arg
       $ print_serial_arg $ mount_cwd_arg $ verbose_arg)
 
+let ls_cmd =
+  Cmd.v
+    (Cmd.info "ls" ~doc:"list ash VM state directories")
+    Term.(const list_vms $ debug_arg)
+
 let main_cmd =
   let doc = "spawn agent VMs with virtie" in
   let man =
@@ -117,6 +126,6 @@ let main_cmd =
       `Pre "ash spawn -p rust -p go -f ../my-nix#agent";
     ]
   in
-  Cmd.group (Cmd.info "ash" ~version ~doc ~man) [ spawn_cmd ]
+  Cmd.group (Cmd.info "ash" ~version ~doc ~man) [ spawn_cmd; ls_cmd ]
 
 let () = exit (Cmd.eval main_cmd)
