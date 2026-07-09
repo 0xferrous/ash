@@ -3,22 +3,22 @@ open Ash_lib
 
 let version = "0.1.0"
 
-let spawn debug virtie ssh systemd_ssh_proxy config flake name user profiles
+let spawn debug virtle ssh systemd_ssh_proxy config flake name user profiles
     print_serial mount_cwd verbose =
   Log.set_debug debug;
-  Virtie.spawn ?virtie ?ssh ?systemd_ssh_proxy ?name ?user ~config_path:config
+  Virtle.spawn ?virtle ?ssh ?systemd_ssh_proxy ?name ?user ~config_path:config
     ~flake ~profiles ~print_serial ~mount_cwd ~verbose ()
 
 let list_vms debug =
   Log.set_debug debug;
-  Virtie.print_vm_list ()
+  Virtle.print_vm_list ()
 
-let virtie_arg =
+let virtle_arg =
   Arg.(
     value
     & opt (some string) None
-    & info [ "virtie" ]
-        ~doc:"Path to virtie. Defaults to ASH_VIRTIE, then PATH." ~docv:"PATH")
+    & info [ "virtle" ]
+        ~doc:"Path to virtle. Defaults to ASH_VIRTLE, then PATH." ~docv:"PATH")
 
 let ssh_arg =
   Arg.(
@@ -80,7 +80,7 @@ let profiles_arg =
 let verbose_arg =
   Arg.(
     value & flag_all
-    & info [ "verbose"; "v" ] ~doc:"Increase virtie verbosity. Repeatable.")
+    & info [ "verbose"; "v" ] ~doc:"Increase virtle verbosity. Repeatable.")
 
 let print_serial_arg =
   Arg.(
@@ -105,7 +105,7 @@ let spawn_cmd =
   Cmd.v
     (Cmd.info "spawn" ~doc:"spawn an agent VM")
     Term.(
-      const spawn $ debug_arg $ virtie_arg $ ssh_arg $ systemd_ssh_proxy_arg
+      const spawn $ debug_arg $ virtle_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ config_arg $ flake_arg $ name_arg $ user_arg $ profiles_arg
       $ print_serial_arg $ mount_cwd_arg $ verbose_arg)
 
@@ -115,13 +115,13 @@ let ls_cmd =
     Term.(const list_vms $ debug_arg)
 
 let main_cmd =
-  let doc = "spawn agent VMs with virtie" in
+  let doc = "spawn agent VMs with virtle" in
   let man =
     [
       `S Manpage.s_description;
       `P
-        "ash generates a virtie manifest from an agent-box style config, a \
-         NixOS flake host, and selected profiles, then launches virtie.";
+        "ash generates a virtle manifest from an agent-box style config, a \
+         NixOS flake host, and selected profiles, then launches virtle.";
       `S Manpage.s_examples;
       `Pre "ash spawn -p rust -p go -f ../my-nix#agent";
     ]

@@ -1,6 +1,6 @@
 # ash
 
-A small OCaml CLI that spawns an agent VM by generating a `virtie` manifest and delegating to `virtie`.
+A small OCaml CLI that spawns an agent VM by generating a `virtle` manifest and delegating to `virtle`.
 
 ## Interface
 
@@ -33,12 +33,12 @@ Options:
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
 - `-u`, `--user USER` — guest SSH user. Defaults to `runtime.qemu.ssh_user` from config, then `agent`.
 - `-c`, `--config CONFIG` — agent-box style config. Default: `~/.agent-box.toml`.
-- `--virtie PATH` — path to `virtie`. Defaults to `$ASH_VIRTIE`, then `virtie` from `PATH`.
+- `--virtle PATH` — path to `virtle`. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`.
 - `--ssh PATH` — override path to host `ssh`. Defaults to the selected NixOS config's `pkgs.openssh`.
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
 - `--print-serial` — print guest kernel/init serial output while booting.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
-- `-v`, `--verbose` — passed to `virtie`; repeatable.
+- `-v`, `--verbose` — passed to `virtle`; repeatable.
 
 ## What `spawn` does
 
@@ -77,7 +77,7 @@ nixosConfigurations.<HOST>.pkgs.openssh
 nixosConfigurations.<HOST>.config.systemd.package
 ```
 
-Then it reads the selected profiles from `~/.agent-box.toml` and turns their mounts into `virtie` `virtiofs` mounts.
+Then it reads the selected profiles from `~/.agent-box.toml` and turns their mounts into `virtle` `virtiofs` mounts.
 
 Profile selection is explicit:
 
@@ -90,11 +90,11 @@ Profile entries preserve the intended guest path in the generated manifest:
 - `mounts.*.home_relative` maps host paths under the host user's home to the same relative path under the guest SSH user's home. For example, host `~/.cargo` targets guest `/home/agent/.cargo`.
 - `mounts.*.absolute` maps paths to the same absolute path in the guest. For example, host `/var/cache/foo` targets guest `/var/cache/foo`.
 
-Existing file entries are emitted as `[[write_files]]` instead of virtiofs mounts. Read-only file entries are copied into the guest; read-write/overlay file entries also set `write_back = true` so guest changes are copied back to the host source during teardown. Profiles with file entries require the guest to run QEMU Guest Agent, because `virtie` applies `write_files` through QGA.
+Existing file entries are emitted as `[[write_files]]` instead of virtiofs mounts. Read-only file entries are copied into the guest; read-write/overlay file entries also set `write_back = true` so guest changes are copied back to the host source during teardown. Profiles with file entries require the guest to run QEMU Guest Agent, because `virtle` applies `write_files` through QGA.
 
 Existing directory entries are emitted as launch-time `[[mounts]]` with a `target`. Missing profile paths are skipped with a warning.
 
-Limitation: `virtie` only uses `target` for `[[hotplug.mounts]]`, not launch-time `[[mounts]]`. As a result, directory profile mounts are exposed to the guest as virtiofs tags/devices, but are not automatically mounted at their target paths during launch. Guest config or manual mount commands must mount those tags for now.
+Limitation: `virtle` only uses `target` for `[[hotplug.mounts]]`, not launch-time `[[mounts]]`. As a result, directory profile mounts are exposed to the guest as virtiofs tags/devices, but are not automatically mounted at their target paths during launch. Guest config or manual mount commands must mount those tags for now.
 
 It also exposes these mount devices to the guest:
 
@@ -132,7 +132,7 @@ Not every exposed mount must be mounted by the guest, but features depending on 
 
 `ash` uses `/home/<ssh-user>/workspace` as the guest workspace directory. For the default `agent` user, this is `/home/agent/workspace`. The SSH user can be overridden per run with `--user`; `ash` validates that the selected NixOS configuration defines `users.users.<user>`. If the guest mounts the `workspace` tag via static guest config, that config must use the same user/path.
 
-`ash` currently enables `ssh.autoprovision = true` in the generated manifest, so the guest should run QEMU Guest Agent and respond on the generated `qga.sock`. Passing `--mount-cwd` also requires QGA because `virtie` uses guest commands to bind-mount the workspace. For NixOS guests, enable:
+`ash` currently enables `ssh.autoprovision = true` in the generated manifest, so the guest should run QEMU Guest Agent and respond on the generated `qga.sock`. Passing `--mount-cwd` also requires QGA because `virtle` uses guest commands to bind-mount the workspace. For NixOS guests, enable:
 
 ```nix
 services.qemuGuest.enable = true;
@@ -140,7 +140,7 @@ services.qemuGuest.enable = true;
 
 ## Guest SSH contract
 
-`ash spawn` launches `virtie` with `launch --ssh` and generates an SSH command that connects through vsock using `systemd-ssh-proxy`:
+`ash spawn` launches `virtle` with `launch --ssh` and generates an SSH command that connects through vsock using `systemd-ssh-proxy`:
 
 ```text
 ssh -o 'ProxyCommand=<systemd>/lib/systemd/systemd-ssh-proxy %h %p' -o ProxyUseFdpass=yes <user>@vsock/<cid>
@@ -160,26 +160,26 @@ For readiness, the guest must write this exact token:
 SSH-READY
 ```
 
-to the virtio-serial port exposed by `virtie`:
+to the virtio-serial port exposed by `virtle`:
 
 ```text
-/dev/virtio-ports/virtie.ready
+/dev/virtio-ports/virtle.ready
 ```
 
-The current agent guest config implements this with a `virtie-ssh-signal.service` that runs after `sshd.service`.
+The current agent guest config implements this with a `virtle-ssh-signal.service` that runs after `sshd.service`.
 
-Current development guest auth uses an empty password for the `agent` user, with OpenSSH and PAM configured to permit empty-password login. This is a development-only convenience while `ash`/guest bootstrapping is being stabilized. Long term, the guest should move to key-only auth, ideally using `virtie` SSH autoprovisioning or configured authorized keys.
+Current development guest auth uses an empty password for the `agent` user, with OpenSSH and PAM configured to permit empty-password login. This is a development-only convenience while `ash`/guest bootstrapping is being stabilized. Long term, the guest should move to key-only auth, ideally using `virtle` SSH autoprovisioning or configured authorized keys.
 
 The generated manifest is written under:
 
 ```text
-$XDG_STATE_HOME/ash/<name>/virtie.toml
+$XDG_STATE_HOME/ash/<name>/virtle.toml
 ```
 
 or, if `XDG_STATE_HOME` is unset:
 
 ```text
-~/.local/state/ash/<name>/virtie.toml
+~/.local/state/ash/<name>/virtle.toml
 ```
 
 If `--name` is not passed, `ash` generates a name from the current directory basename and timestamp, such as `ash-20260708193000`. Passing the same `--name` reuses the same state directory and persistent image. For state paths, names preserve letters, digits, `.`, `_`, and `-`; other characters are replaced with `-`.
@@ -187,7 +187,7 @@ If `--name` is not passed, `ash` generates a name from the current directory bas
 Then `ash` executes:
 
 ```sh
-virtie --manifest GENERATED launch --ssh
+virtle --manifest GENERATED launch --ssh
 ```
 
 Host-side SSH attach requires `ssh` and `systemd-ssh-proxy`. `ash` resolves them from the selected NixOS config by default, unless `--ssh` or `--systemd-ssh-proxy` are passed, and writes the resolved absolute paths into the generated manifest.

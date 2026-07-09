@@ -103,7 +103,7 @@ let test_target : Nix.target =
 
 let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
     ~config ~flake ~name () =
-  Virtie.render_resolved_manifest
+  Virtle.render_resolved_manifest
     {
       config;
       flake;
@@ -117,10 +117,10 @@ let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
       virtiofsd = "/bin/virtiofsd";
-      virtie = "/bin/virtie";
+      virtle = "/bin/virtle";
     }
 
-let test_agent_box_to_virtie_manifest () =
+let test_agent_box_to_virtle_manifest () =
   let root = temp_dir "ash-test" in
   let home = Filename.concat root "home" in
   let state = Filename.concat root "state" in
@@ -302,8 +302,8 @@ let run name test =
   Printf.printf "ok\n%!"
 
 let () =
-  run "agent-box profiles render to virtie manifest"
-    test_agent_box_to_virtie_manifest;
+  run "agent-box profiles render to virtle manifest"
+    test_agent_box_to_virtle_manifest;
   run "default profile renders without mount-cwd"
     test_default_profile_without_mount_cwd;
   run "read-only file write does not write back"

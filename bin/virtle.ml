@@ -9,7 +9,7 @@ type manifest_inputs = {
   ssh : string option;
   systemd_ssh_proxy : string option;
   virtiofsd : string;
-  virtie : string;
+  virtle : string;
 }
 
 type resolved_manifest_inputs = {
@@ -25,7 +25,7 @@ type resolved_manifest_inputs = {
   ssh : string;
   systemd_ssh_proxy : string;
   virtiofsd : string;
-  virtie : string;
+  virtle : string;
 }
 
 let find_exe ?hint ?env explicit_path default_name =
@@ -47,14 +47,14 @@ let find_exe ?hint ?env explicit_path default_name =
       Option.iter (Printf.eprintf "\nHint: %s\n") hint;
       exit 127
 
-let find_virtie explicit_path =
+let find_virtle explicit_path =
   find_exe
-    ~hint:"install virtie into PATH, set ASH_VIRTIE, or pass --virtie PATH."
-    ~env:"ASH_VIRTIE" explicit_path "virtie"
+    ~hint:"install virtle into PATH, set ASH_VIRTLE, or pass --virtle PATH."
+    ~env:"ASH_VIRTLE" explicit_path "virtle"
 
 let find_virtiofsd () =
   find_exe
-    ~hint:"install virtiofsd into PATH so virtie can start virtiofs mounts."
+    ~hint:"install virtiofsd into PATH so virtle can start virtiofs mounts."
     None "virtiofsd"
 
 let find_ssh explicit_path =
@@ -98,7 +98,7 @@ let state_base_dir () =
   Filename.concat base "ash"
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
-let manifest_path ~name = Filename.concat (state_dir name) "virtie.toml"
+let manifest_path ~name = Filename.concat (state_dir name) "virtle.toml"
 
 let profile_mount_ssh_wrapper_path ~name =
   Filename.concat (state_dir name) "ssh-with-profile-mounts"
@@ -201,7 +201,7 @@ let guest_exec_params script =
   "{\"path\":\"/run/current-system/sw/bin/sh\",\"args\":[\"-c\","
   ^ json_string script ^ "],\"captureOutput\":true}"
 
-let write_profile_mount_ssh_wrapper ~name ~virtie ~manifest_path ~ssh_exec
+let write_profile_mount_ssh_wrapper ~name ~virtle ~manifest_path ~ssh_exec
     mounts =
   let path = profile_mount_ssh_wrapper_path ~name in
   let mount_commands =
@@ -214,7 +214,7 @@ let write_profile_mount_ssh_wrapper ~name ~virtie ~manifest_path ~ssh_exec
             ^ Util.shell_quote
                 ("ash: mounting " ^ mount.tag ^ " at " ^ mount.target)
             ^ " >&2";
-            "result=$(" ^ Util.shell_quote virtie ^ " --manifest "
+            "result=$(" ^ Util.shell_quote virtle ^ " --manifest "
             ^ Util.shell_quote manifest_path
             ^ " rpc guest-exec " ^ Util.shell_quote params ^ ")";
             "case \"$result\" in";
@@ -266,7 +266,7 @@ type vm_info = {
   path : string;
 }
 
-let control_socket_path dir = Filename.concat dir "virtie.sock"
+let control_socket_path dir = Filename.concat dir "virtle.sock"
 
 let socket_accepts_connection path =
   if not (Sys.file_exists path) then false
@@ -332,7 +332,7 @@ let list_vms () =
     Sys.readdir base |> Array.to_list |> List.sort String.compare
     |> List.filter_map (fun name ->
         let path = Filename.concat base name in
-        let manifest = Filename.concat path "virtie.toml" in
+        let manifest = Filename.concat path "virtle.toml" in
         try
           if Sys.is_directory path && Sys.file_exists manifest then
             let stat = Unix.stat path in
@@ -448,7 +448,7 @@ let render_resolved_manifest inputs =
     | mounts ->
         [
           write_profile_mount_ssh_wrapper ~name:inputs.name
-            ~virtie:inputs.virtie
+            ~virtle:inputs.virtle
             ~manifest_path:(manifest_path ~name:inputs.name)
             ~ssh_exec:real_ssh_exec mounts;
         ]
@@ -539,12 +539,12 @@ let render_manifest inputs =
       ssh;
       systemd_ssh_proxy;
       virtiofsd = inputs.virtiofsd;
-      virtie = inputs.virtie;
+      virtle = inputs.virtle;
     }
 
-let spawn ?virtie ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
+let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
     ~profiles ~print_serial ~mount_cwd ~verbose () =
-  let virtie = find_virtie virtie in
+  let virtle = find_virtle virtle in
   let ssh = Option.map (fun path -> find_ssh (Some path)) ssh in
   let systemd_ssh_proxy =
     Option.map
@@ -567,13 +567,13 @@ let spawn ?virtie ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
         ssh;
         systemd_ssh_proxy;
         virtiofsd;
-        virtie;
+        virtle;
       }
   in
   let path = manifest_path ~name in
-  Log.debug "generated virtie manifest path: %s" path;
+  Log.debug "generated virtle manifest path: %s" path;
   Util.write_file path manifest;
-  Log.debug "wrote virtie manifest (%d bytes)" (String.length manifest);
+  Log.debug "wrote virtle manifest (%d bytes)" (String.length manifest);
   let verbose_args = List.map (fun _ -> "-v") verbose in
-  Util.exec virtie
+  Util.exec virtle
     ([ "--manifest"; path ] @ verbose_args @ [ "launch"; "--ssh" ])
