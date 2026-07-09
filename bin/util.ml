@@ -69,20 +69,37 @@ let exec program args =
   let argv = Array.of_list (program :: args) in
   Unix.execvp program argv
 
+let process_status_code = function
+  | Unix.WEXITED code -> code
+  | Unix.WSIGNALED signal -> 128 + signal
+  | Unix.WSTOPPED signal -> 128 + signal
+
 let command_output command =
-  Log.debug "run: %s" command;
-  let file = Filename.temp_file "ash" ".out" in
-  let status = Sys.command (command ^ " > " ^ shell_quote file) in
-  let output =
-    In_channel.with_open_text file In_channel.input_all |> String.trim
+  let stdout_file = Filename.temp_file "ash" ".out" in
+  let stderr_file = Filename.temp_file "ash" ".err" in
+  let stdout_fd =
+    Unix.openfile stdout_file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600
   in
-  Sys.remove file;
-  if status = 0 then (
-    Log.debug "command output: %s" output;
-    output)
-  else (
-    Log.debug "command failed with status %d: %s" status command;
-    failwith ("command failed: " ^ command))
+  let stderr_fd =
+    Unix.openfile stderr_file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600
+  in
+  let pid =
+    Fun.protect
+      ~finally:(fun () ->
+        Unix.close stdout_fd;
+        Unix.close stderr_fd)
+      (fun () ->
+        Unix.create_process "/bin/sh"
+          [| "/bin/sh"; "-c"; command |]
+          Unix.stdin stdout_fd stderr_fd)
+  in
+  let _, process_status = Unix.waitpid [] pid in
+  let status = process_status_code process_status in
+  Log.debug "command=%S exit_code=%d stdout=%S stderr=%S" command status
+    stdout_file stderr_file;
+  let output = In_channel.with_open_text stdout_file In_channel.input_all in
+  let output = String.trim output in
+  if status = 0 then output else failwith ("command failed: " ^ command)
 
 let toml_quote s =
   let b = Buffer.create (String.length s + 8) in

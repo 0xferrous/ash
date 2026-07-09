@@ -37,10 +37,9 @@ let find_exe ?hint ?env explicit_path default_name =
         | Some path when path <> "" -> path
         | _ -> default_name)
   in
-  Log.debug "resolving executable: %s" candidate;
   match Util.find_in_path candidate with
   | Some path ->
-      Log.debug "resolved executable %s -> %s" candidate path;
+      Log.debug "executable=%S resolved=%S" candidate path;
       path
   | None ->
       let hint =

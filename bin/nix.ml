@@ -14,7 +14,7 @@ let nix_exe =
   lazy
     (match Util.find_in_path "nix" with
     | Some path ->
-        Log.debug "resolved executable nix -> %s" path;
+        Log.debug "executable=%S resolved=%S" "nix" path;
         path
     | None ->
         Log.fatal ~code:127
