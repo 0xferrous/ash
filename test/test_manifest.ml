@@ -37,6 +37,11 @@ let find_bool doc path =
   | Some value -> value
   | None -> fail ("missing bool: " ^ String.concat "." path)
 
+let find_strings doc path =
+  match Otoml.find_opt doc (Otoml.get_array Otoml.get_string) path with
+  | Some value -> value
+  | None -> fail ("missing string array: " ^ String.concat "." path)
+
 let table_field table key =
   match List.assoc_opt key table with
   | Some value -> value
@@ -80,6 +85,10 @@ let assert_bool label expected actual =
   if expected <> actual then
     fail (Printf.sprintf "%s: expected %b, got %b" label expected actual)
 
+let assert_string_prefix label prefix value =
+  if not (String.starts_with ~prefix value) then
+    fail (Printf.sprintf "%s: expected %S to start with %S" label value prefix)
+
 let test_boot : Nix.boot =
   {
     kernel = "/nix/store/kernel/bzImage";
@@ -108,6 +117,7 @@ let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
       virtiofsd = "/bin/virtiofsd";
+      virtie = "/bin/virtie";
     }
 
 let test_agent_box_to_virtie_manifest () =
@@ -164,6 +174,11 @@ absolute = ["%s"]
     (find_bool doc [ "workspace"; "mount_cwd" ]);
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
+  let wrapper = Filename.concat state "ash/unit-test/ssh-with-profile-mounts" in
+  assert_equal "profile mount ssh wrapper" wrapper
+    (List.hd (find_strings doc [ "ssh"; "exec" ]));
+  if not (Sys.file_exists wrapper) then
+    fail "profile mount ssh wrapper should exist";
   let mounts = table_array doc "mounts" in
   let workspace = find_table_by_string mounts "tag" "workspace" in
   assert_equal "workspace source"
@@ -180,6 +195,9 @@ absolute = ["%s"]
   assert_equal "cargo source"
     (Filename.concat home ".cargo")
     (string_field cargo "source");
+  assert_string_prefix "cargo tag" "cargo-" (string_field cargo "tag");
+  if String.length (string_field cargo "tag") > 36 then
+    fail "cargo tag should fit virtiofs tag length limit";
   assert_bool "cargo read_only" false (bool_field cargo "read_only");
   let ro_project =
     find_table_by_string mounts "target" "/home/agent/dev/ro-project"
@@ -266,6 +284,8 @@ home_relative = [".gitconfig"]
     render ~config ~flake:"../my-nix#agent" ~name:"ro-file" ()
   in
   let doc = parse_toml manifest in
+  assert_equal "ssh exec without profile mounts" test_boot.ssh
+    (List.hd (find_strings doc [ "ssh"; "exec" ]));
   let write_files = table_array doc "write_files" in
   let gitconfig =
     find_table_by_string write_files "guest_path" "/home/agent/.gitconfig"

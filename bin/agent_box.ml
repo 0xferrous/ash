@@ -131,7 +131,26 @@ let profile_extends config profile =
   strings ("profiles." ^ profile ^ ".extends") config
   |> Option.value ~default:[]
 
-let path_tag prefix path = prefix ^ "-" ^ Util.slug path
+let path_tag prefix path =
+  let max_name_len = 20 in
+  let hash_len = 12 in
+  let trim_dashes value =
+    let len = String.length value in
+    let first = ref 0 in
+    while !first < len && value.[!first] = '-' do
+      incr first
+    done;
+    let last = ref (len - 1) in
+    while !last >= !first && value.[!last] = '-' do
+      decr last
+    done;
+    if !first > !last then "" else String.sub value !first (!last - !first + 1)
+  in
+  let name = Filename.basename path |> Util.slug |> trim_dashes in
+  let name = if name = "" then "mnt" else name in
+  let name = String.sub name 0 (min max_name_len (String.length name)) in
+  let hash = Digest.string (prefix ^ "\000" ^ path) |> Digest.to_hex in
+  name ^ "-" ^ String.sub hash 0 hash_len
 
 let strip_home_prefix path =
   let home = Util.home_dir () in
