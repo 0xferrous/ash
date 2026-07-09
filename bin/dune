@@ -1,4 +1,10 @@
+(library
+ (name ash_lib)
+ (modules agent_box log nix systemd_run util virtie)
+ (libraries unix otoml))
+
 (executable
  (public_name ash)
  (name main)
- (libraries cmdliner unix otoml))
+ (modules main)
+ (libraries ash_lib cmdliner))
