@@ -2,6 +2,18 @@
 
 A small OCaml CLI that spawns an agent VM by generating a `virtle` manifest and delegating to `virtle`.
 
+## Quickstart
+
+```sh
+nix build
+./result/bin/ash spawn --name work -f ../my-nix#agent --mount-cwd
+./result/bin/ash attach work
+./result/bin/ash ls
+./result/bin/ash rm
+```
+
+`ash rm` opens an interactive multi-select TUI for deleting VM state directories. State lives under `~/.local/state/ash/<name>/` by default.
+
 ## Interface
 
 ```sh

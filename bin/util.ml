@@ -136,3 +136,13 @@ let name_slug s =
       | _ -> Buffer.add_char b '-')
     s;
   Buffer.contents b
+
+let rec remove_tree path =
+  if Sys.file_exists path then
+    let stat = Unix.lstat path in
+    match stat.st_kind with
+    | Unix.S_DIR ->
+        Sys.readdir path
+        |> Array.iter (fun entry -> remove_tree (Filename.concat path entry));
+        Unix.rmdir path
+    | _ -> Unix.unlink path

@@ -457,9 +457,10 @@ let list_vms () =
           else None
         with Unix.Unix_error _ | Sys_error _ -> None)
 
+let status_string = function Running -> "running" | Stopped -> "stopped"
+let cid_string = function Some cid -> string_of_int cid | None -> "-"
+
 let print_vm_list () =
-  let status_string = function Running -> "running" | Stopped -> "stopped" in
-  let cid_string = function Some cid -> string_of_int cid | None -> "-" in
   let vms = list_vms () in
   Printf.printf "%-32s %-8s %5s %10s %10s  %-19s %s\n" "NAME" "STATUS" "CID"
     "DISK" "VIRTUAL" "MODIFIED" "PATH";
@@ -470,6 +471,121 @@ let print_vm_list () =
         (human_size vm.apparent_bytes)
         (format_time vm.modified) vm.path)
     vms
+
+type rm_key = Rm_up | Rm_down | Rm_toggle | Rm_confirm | Rm_quit | Rm_other
+type rm_model = { vms : vm_info array; selected : bool array; cursor : int }
+
+let rm_read_char ?timeout () =
+  let ready =
+    match timeout with
+    | None -> true
+    | Some timeout -> (
+        match Unix.select [ Unix.stdin ] [] [] timeout with
+        | [], _, _ -> false
+        | _ -> true)
+  in
+  if not ready then None
+  else
+    let buf = Bytes.create 1 in
+    match Unix.read Unix.stdin buf 0 1 with
+    | 1 -> Some (Bytes.get buf 0)
+    | _ -> None
+
+let rm_key () =
+  match rm_read_char () with
+  | Some ('q' | 'Q') -> Rm_quit
+  | Some '\027' -> (
+      match (rm_read_char ~timeout:0.01 (), rm_read_char ~timeout:0.01 ()) with
+      | Some '[', Some 'A' -> Rm_up
+      | Some '[', Some 'B' -> Rm_down
+      | _ -> Rm_quit)
+  | Some ('k' | 'K') -> Rm_up
+  | Some ('j' | 'J') -> Rm_down
+  | Some ' ' -> Rm_toggle
+  | Some ('\n' | '\r') -> Rm_confirm
+  | Some _ | None -> Rm_other
+
+let rm_view model =
+  let b = Buffer.create 1024 in
+  Buffer.add_string b "\027[2J\027[H\027[?25l";
+  Buffer.add_string b "Select VM states to delete\n\n";
+  Buffer.add_string b "↑/k ↓/j move  space select  enter delete  q cancel\n\n";
+  Array.iteri
+    (fun idx vm ->
+      let cursor = if idx = model.cursor then ">" else " " in
+      let checked = if model.selected.(idx) then "x" else " " in
+      Buffer.add_string b
+        (Printf.sprintf "%s [%s] %-32s %-8s %10s  %s\n" cursor checked vm.name
+           (status_string vm.status) (human_size vm.disk_bytes) vm.path))
+    model.vms;
+  Buffer.contents b
+
+let rm_render model =
+  output_string stdout (rm_view model);
+  flush stdout
+
+let rm_restore_terminal original =
+  Unix.tcsetattr Unix.stdin Unix.TCSANOW original;
+  output_string stdout "\027[?25h\027[0m\n";
+  flush stdout
+
+let rm_select vms =
+  if Array.length vms = 0 then []
+  else
+    let original = Unix.tcgetattr Unix.stdin in
+    let raw = { original with Unix.c_icanon = false; c_echo = false } in
+    Unix.tcsetattr Unix.stdin Unix.TCSANOW raw;
+    Fun.protect
+      ~finally:(fun () -> rm_restore_terminal original)
+      (fun () ->
+        let model =
+          ref
+            { vms; selected = Array.make (Array.length vms) false; cursor = 0 }
+        in
+        let rec loop () =
+          rm_render !model;
+          match rm_key () with
+          | Rm_quit -> []
+          | Rm_confirm ->
+              !model.vms |> Array.to_list
+              |> List.mapi (fun idx vm -> (idx, vm))
+              |> List.filter_map (fun (idx, vm) ->
+                  if !model.selected.(idx) then Some vm else None)
+          | Rm_up ->
+              let cursor =
+                if !model.cursor = 0 then Array.length !model.vms - 1
+                else !model.cursor - 1
+              in
+              model := { !model with cursor };
+              loop ()
+          | Rm_down ->
+              let cursor =
+                if !model.cursor = Array.length !model.vms - 1 then 0
+                else !model.cursor + 1
+              in
+              model := { !model with cursor };
+              loop ()
+          | Rm_toggle ->
+              !model.selected.(!model.cursor) <-
+                not !model.selected.(!model.cursor);
+              loop ()
+          | Rm_other -> loop ()
+        in
+        loop ())
+
+let rm_vms () =
+  let vms = list_vms () |> Array.of_list in
+  if Array.length vms = 0 then Log.info "no VM states found"
+  else
+    let selected = rm_select vms in
+    match selected with
+    | [] -> Log.info "no VM states selected"
+    | selected ->
+        List.iter
+          (fun vm ->
+            Log.info "deleting VM state %s (%s)" vm.name vm.path;
+            Util.remove_tree vm.path)
+          selected
 
 let manifest_string doc path =
   match Otoml.find_opt doc Otoml.get_string path with
