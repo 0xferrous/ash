@@ -175,6 +175,14 @@ let profile_mount ~bin (mount : Agent_box.mount) =
   virtiofs_mount ~target:mount.target ~tag:mount.tag ~source:mount.source
     ~read_only:mount.read_only ~socket:(mount.tag ^ ".sock") ~bin ()
 
+let workspace_mount ~workspace_guest_dir ~workspace_host_dir =
+  {
+    Agent_box.tag = "workspace";
+    source = workspace_host_dir;
+    target = workspace_guest_dir;
+    read_only = false;
+  }
+
 let guest_mount_script (mount : Agent_box.mount) =
   let mount_args =
     if mount.read_only then
@@ -548,11 +556,12 @@ let render_resolved_manifest inputs =
   let workspace_guest_dir = "/home/" ^ user ^ "/workspace" in
   let workspace_host_dir = Filename.concat state_dir "workspace" in
   Util.ensure_dir workspace_host_dir;
+  let workspace_mount =
+    workspace_mount ~workspace_guest_dir ~workspace_host_dir
+  in
   let mounts =
     [
-      virtiofs_mount ~target:workspace_guest_dir ~tag:"workspace"
-        ~source:workspace_host_dir ~read_only:false ~socket:"workspace.sock"
-        ~bin:inputs.virtiofsd ();
+      profile_mount ~bin:inputs.virtiofsd workspace_mount;
       virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true
         ~socket:"ro-store.sock" ~bin:inputs.virtiofsd ();
       image_mount ~source:(Filename.concat state_dir "persist.img");
@@ -566,16 +575,13 @@ let render_resolved_manifest inputs =
     @ List.map (profile_mount ~bin:inputs.virtiofsd) resources.mounts
   in
   let write_files = List.map (write_file_section user) resources.write_files in
+  let ssh_mounts = workspace_mount :: resources.mounts in
   let ssh_exec =
-    match resources.mounts with
-    | [] -> real_ssh_exec
-    | mounts ->
-        [
-          write_profile_mount_ssh_wrapper ~name:inputs.name
-            ~virtle:inputs.virtle
-            ~manifest_path:(manifest_path ~name:inputs.name)
-            ~ssh_exec:real_ssh_exec mounts;
-        ]
+    [
+      write_profile_mount_ssh_wrapper ~name:inputs.name ~virtle:inputs.virtle
+        ~manifest_path:(manifest_path ~name:inputs.name)
+        ~ssh_exec:real_ssh_exec ssh_mounts;
+    ]
   in
   let document =
     Otoml.table

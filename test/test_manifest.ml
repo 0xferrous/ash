@@ -284,8 +284,11 @@ home_relative = [".gitconfig"]
     render ~config ~flake:"../my-nix#agent" ~name:"ro-file" ()
   in
   let doc = parse_toml manifest in
-  assert_equal "ssh exec without profile mounts" test_boot.ssh
+  let wrapper = Filename.concat state "ash/ro-file/ssh-with-profile-mounts" in
+  assert_equal "workspace mount ssh wrapper" wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]));
+  if not (Sys.file_exists wrapper) then
+    fail "workspace mount ssh wrapper should exist";
   let write_files = table_array doc "write_files" in
   let gitconfig =
     find_table_by_string write_files "guest_path" "/home/agent/.gitconfig"
