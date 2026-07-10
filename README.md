@@ -239,7 +239,9 @@ to the virtio-serial port exposed by `virtle`:
 
 The current agent guest config implements this with a `virtle-ssh-signal.service` that runs after `sshd.service`.
 
-Current development guest auth uses an empty password for the `agent` user, with OpenSSH and PAM configured to permit empty-password login. This is a development-only convenience while `ash`/guest bootstrapping is being stabilized. Long term, the guest should move to key-only auth, ideally using `virtle` SSH autoprovisioning or configured authorized keys.
+For attached flows, `ash` uses SSH key autoprovisioning when the manifest has `ssh.autoprovision = true`. It creates or reuses an `id_ed25519` key under the VM state directory, installs the public key through virtle's guest-agent control RPC, and attaches with that identity. This is needed for background-spawned VMs because virtle's own SSH autoprovisioning only runs from `virtle launch --ssh`.
+
+Current assumption: the guest SSH user's primary writable group is `users`. During ash-side autoprovisioning, ash creates `/home/<user>/.ssh` or `/root/.ssh`, appends its public key to `authorized_keys`, then runs `chown <user>:users` and sets OpenSSH-compatible permissions. This matches the current NixOS agent guest setup; guests with a different group convention should either provide compatible users/groups or disable ash/virtle SSH autoprovisioning and preconfigure authorized keys.
 
 The generated manifest is written under:
 

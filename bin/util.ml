@@ -100,7 +100,7 @@ let run_foreground program args =
       let _, status = Unix.waitpid [] pid in
       process_status_code status)
 
-let command_output command =
+let command_output ?(debug = true) command =
   let stdout_file = Filename.temp_file "ash" ".out" in
   let stderr_file = Filename.temp_file "ash" ".err" in
   let stdout_fd =
@@ -121,8 +121,9 @@ let command_output command =
   in
   let _, process_status = Unix.waitpid [] pid in
   let status = process_status_code process_status in
-  Log.debug "command=%S exit_code=%d stdout=%S stderr=%S" command status
-    stdout_file stderr_file;
+  if debug then
+    Log.debug "command=%S exit_code=%d stdout=%S stderr=%S" command status
+      stdout_file stderr_file;
   let output = In_channel.with_open_text stdout_file In_channel.input_all in
   let output = String.trim output in
   if status = 0 then output else failwith ("command failed: " ^ command)
