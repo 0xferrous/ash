@@ -8,6 +8,7 @@ A small OCaml CLI for spawning, attaching to, and managing optionally ephemeral 
 nix build
 ./result/bin/ash spawn --name work -f ../my-nix#agent --mount-cwd
 ./result/bin/ash attach work
+./result/bin/ash stop work
 ./result/bin/ash ls
 ./result/bin/ash rm
 ```
@@ -50,7 +51,18 @@ If exactly one VM is running, the name can be omitted:
 ash attach
 ```
 
-`attach` is intentionally named after attaching to an existing session; it does not boot or resume stopped VMs.
+Attach can also spawn a stopped VM from saved ash state:
+
+```sh
+ash attach --spawn rustbox
+ash attach --spawn --keep rustbox
+```
+
+Stop an ash background VM:
+
+```sh
+ash stop rustbox
+```
 
 Shared options, accepted by commands that use them:
 
@@ -75,7 +87,29 @@ Spawn options:
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
 - `--print-serial` — print guest kernel/init serial output while booting.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
-- `--ephemeral` — remove the VM state directory after the launched SSH/VM session exits.
+- `--attach` — attach after spawning. Without `--keep`, the VM stops when SSH exits.
+- `--keep` — with `--attach`, start as a background VM and keep it running after SSH exits. Plain `spawn` already keeps the VM, so `--keep` requires `--attach`.
+- `--ephemeral` — remove the VM state directory after the launched SSH/VM session exits. Requires `--attach` and cannot be used with `--keep`.
+
+Attach options:
+
+- `--spawn` — if the named VM is stopped, load its saved `ash.toml`, regenerate the manifest, start it, then attach.
+- `--keep` — with `--spawn`, start the stopped VM as a background systemd unit and keep it running after SSH exits. `ash attach --keep` without `--spawn` is invalid.
+
+## Lifecycle commands
+
+| Command | If stopped | Attach? | SSH exit stops VM? |
+|---|---|---:|---:|
+| `ash spawn` | start background systemd user unit | no | no |
+| `ash spawn --attach` | start foreground VM | yes | yes |
+| `ash spawn --attach --keep` | start background systemd user unit | yes | no |
+| `ash attach` | error | yes, if already running | no |
+| `ash attach --spawn` | start foreground VM from saved state | yes | yes |
+| `ash attach --spawn --keep` | start background systemd user unit from saved state | yes | no |
+
+Background VMs are owned by transient user systemd units named `ash-<name>.service`. `ash stop NAME` stops only those ash-owned background units. If a VM is running because of a foreground `ash spawn --attach` or `ash attach --spawn` session, `ash stop` refuses to stop it.
+
+For `attach`, `--keep` is valid only with `--spawn`; `ash attach --keep` is rejected.
 
 ## What `spawn` does
 
@@ -177,7 +211,7 @@ services.qemuGuest.enable = true;
 
 ## Guest SSH contract
 
-`ash spawn` launches `virtle` with `launch --ssh` and generates an SSH command that connects through vsock using `systemd-ssh-proxy`:
+`ash spawn --attach`, `ash attach`, and other attached flows use an SSH command that connects through vsock using `systemd-ssh-proxy`:
 
 ```text
 ssh -o 'ProxyCommand=<systemd>/lib/systemd/systemd-ssh-proxy %h %p' -o ProxyUseFdpass=yes <user>@vsock/<cid>
@@ -221,13 +255,19 @@ or, if `XDG_STATE_HOME` is unset:
 
 If `--name` is not passed, `ash` generates a name from the current directory basename and timestamp, such as `ash-20260708193000`. Passing the same `--name` reuses the same state directory and persistent image. For state paths, names preserve letters, digits, `.`, `_`, and `-`; other characters are replaced with `-`.
 
-Then `ash` executes:
+Plain `ash spawn` starts `virtle launch` under a transient user systemd unit:
+
+```sh
+systemd-run --user --unit ash-NAME --collect --same-dir virtle --manifest GENERATED launch
+```
+
+`ash spawn --attach` runs foreground and attaches SSH:
 
 ```sh
 virtle --manifest GENERATED launch --ssh
 ```
 
-To attach to an already running named VM, `ash attach NAME` reads the existing generated manifest under the VM state directory, asks the running `virtle` control socket for its vsock CID, and executes the manifest's SSH command. It refuses to attach to stopped VMs. If no name is supplied, `ash attach` only succeeds when exactly one VM is running.
+To attach to an already running named VM, `ash attach NAME` reads the existing generated manifest under the VM state directory, asks the running `virtle` control socket for its vsock CID, and executes the manifest's SSH command. If no name is supplied, `ash attach` only succeeds when exactly one VM is running. `ash attach --spawn NAME` can start a stopped VM from its saved `ash.toml`; add `--keep` to start it as a background systemd unit instead of a foreground VM that stops on SSH exit.
 
 Host-side SSH attach requires `ssh` and `systemd-ssh-proxy`. `ash` resolves them from the selected NixOS config by default, unless `--ssh` or `--systemd-ssh-proxy` are passed, and writes the resolved absolute paths into the generated manifest.
 

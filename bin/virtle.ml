@@ -551,16 +551,51 @@ let select_attach_vm name =
               Log.info "attach cancelled";
               exit 0))
 
-let attach ?virtle ?name ~verbose () =
-  let name, path = select_attach_vm name in
+let rpc_status ~virtle ~path =
+  Util.command_output
+    (String.concat " "
+       (List.map Util.shell_quote
+          [ virtle; "--manifest"; path; "rpc"; "status" ]))
+
+let contains_substring text needle =
+  let text_len = String.length text in
+  let needle_len = String.length needle in
+  if needle_len = 0 then true
+  else if needle_len > text_len then false
+  else
+    let rec loop i =
+      if i + needle_len > text_len then false
+      else if String.sub text i needle_len = needle then true
+      else loop (i + 1)
+    in
+    loop 0
+
+let wait_for_ssh_ready ~virtle ~path ~name =
+  let deadline = Unix.gettimeofday () +. 120. in
+  let rec loop () =
+    if Unix.gettimeofday () > deadline then
+      Log.fatal "timed out waiting for VM %S SSH readiness" name;
+    try
+      let status = rpc_status ~virtle ~path in
+      if
+        contains_substring status "\"sshReadyAt\""
+        && not
+             (contains_substring status
+                "\"sshReadyAt\":\"0001-01-01T00:00:00Z\"")
+      then ()
+      else (
+        Unix.sleepf 0.25;
+        loop ())
+    with Failure _ ->
+      Unix.sleepf 0.25;
+      loop ()
+  in
+  loop ()
+
+let attach_running ?virtle ~name ~path ~verbose () =
   let virtle = find_virtle virtle in
   Log.debug "attaching to VM %s using manifest %s" name path;
-  let status =
-    Util.command_output
-      (String.concat " "
-         (List.map Util.shell_quote
-            [ virtle; "--manifest"; path; "rpc"; "status" ]))
-  in
+  let status = rpc_status ~virtle ~path in
   let cid =
     match json_int_field ~field:"cid" status with
     | Some cid when cid > 0 -> cid
@@ -811,8 +846,17 @@ let render_manifest (inputs : manifest_inputs) =
       virtle = inputs.virtle;
     }
 
-let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
-    ~profiles ~print_serial ~mount_cwd ~ephemeral ~verbose () =
+let write_manifest_for_inputs inputs =
+  let _, manifest = render_manifest inputs in
+  write_ash_config inputs;
+  let path = manifest_path ~name:inputs.name in
+  Log.debug "generated virtle manifest path: %s" path;
+  Util.write_file path manifest;
+  Log.debug "wrote virtle manifest (%d bytes)" (String.length manifest);
+  path
+
+let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path
+    ~flake ~profiles ~print_serial ~mount_cwd () =
   let virtle = find_virtle virtle in
   let ssh = Option.map (fun path -> find_ssh (Some path)) ssh in
   let systemd_ssh_proxy =
@@ -823,22 +867,6 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
   let virtiofsd = find_virtiofsd () in
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
-  let _, manifest =
-    render_manifest
-      {
-        config_path;
-        flake;
-        name;
-        profiles;
-        user;
-        print_serial;
-        mount_cwd;
-        ssh;
-        systemd_ssh_proxy;
-        virtiofsd;
-        virtle;
-      }
-  in
   let inputs =
     {
       config_path;
@@ -854,24 +882,159 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
       virtle;
     }
   in
-  write_ash_config inputs;
-  let path = manifest_path ~name in
-  Log.debug "generated virtle manifest path: %s" path;
-  Util.write_file path manifest;
-  Log.debug "wrote virtle manifest (%d bytes)" (String.length manifest);
+  let path = write_manifest_for_inputs inputs in
+  (inputs, path)
+
+let launch_args ~path ~verbose ~ssh =
   let verbose_args = List.map (fun _ -> "-v") verbose in
-  let args = [ "--manifest"; path ] @ verbose_args @ [ "launch"; "--ssh" ] in
-  if ephemeral then
-    let dir = state_dir name in
-    let code =
-      Fun.protect
-        ~finally:(fun () ->
-          Log.info "removing ephemeral VM state %s" dir;
-          Util.remove_tree dir)
-        (fun () -> Util.run_foreground virtle args)
-    in
-    exit code
-  else Util.exec virtle args
+  [ "--manifest"; path ] @ verbose_args @ [ "launch" ]
+  @ if ssh then [ "--ssh" ] else []
+
+let print_background_started ~name =
+  Printf.printf "started VM: %s\n" name;
+  Printf.printf "unit: %s\n" (Systemd_run.service_name ~name);
+  Printf.printf "attach: ash attach %s\n" (Util.shell_quote name);
+  Printf.printf "logs: %s\n" (Systemd_run.journalctl_hint ~name);
+  Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
+
+let start_background ~name ~virtle ~path ~verbose =
+  let args = launch_args ~path ~verbose ~ssh:false in
+  let code =
+    Systemd_run.start_user_unit ~name ~description:("ash VM " ^ name)
+      ~program:virtle ~args
+  in
+  if code <> 0 then exit code;
+  print_background_started ~name
+
+let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
+    ~profiles ~print_serial ~mount_cwd ~ephemeral ~attach ~keep ~verbose () =
+  let inputs, path =
+    prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path
+      ~flake ~profiles ~print_serial ~mount_cwd ()
+  in
+  if attach && keep then (
+    start_background ~name:inputs.name ~virtle:inputs.virtle ~path ~verbose;
+    wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name;
+    attach_running ~virtle:inputs.virtle ~name:inputs.name ~path ~verbose ())
+  else if attach then
+    let args = launch_args ~path ~verbose ~ssh:true in
+    if ephemeral then
+      let dir = state_dir inputs.name in
+      let code =
+        Fun.protect
+          ~finally:(fun () ->
+            Log.info "removing ephemeral VM state %s" dir;
+            Util.remove_tree dir)
+          (fun () -> Util.run_foreground inputs.virtle args)
+      in
+      exit code
+    else Util.exec inputs.virtle args
+  else start_background ~name:inputs.name ~virtle:inputs.virtle ~path ~verbose
+
+let saved_inputs ?virtle ~name () =
+  let name = Util.name_slug name in
+  let saved = load_ash_config ~name in
+  let virtle =
+    Option.value
+      (Option.map (fun path -> find_virtle (Some path)) virtle)
+      ~default:saved.virtle
+  in
+  { saved with name; virtle }
+
+let rewrite_saved_manifest (inputs : manifest_inputs) =
+  Log.debug "regenerating VM manifest for %s" inputs.name;
+  let _, manifest = render_manifest inputs in
+  let path = manifest_path ~name:inputs.name in
+  Util.write_file path manifest;
+  Log.debug "rewrote virtle manifest %s (%d bytes)" path
+    (String.length manifest);
+  path
+
+let attach ?virtle ?name ~spawn ~keep ~verbose () =
+  let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
+  let stopped = List.filter (fun vm -> vm.status = Stopped) (list_vms ()) in
+  let selected_running =
+    match name with
+    | Some name ->
+        let name = Util.name_slug name in
+        List.find_opt (fun vm -> vm.name = name) running
+    | None -> (
+        match running with
+        | [ vm ] -> Some vm
+        | [] -> None
+        | vms -> (
+            match attach_picker (Array.of_list vms) with
+            | Some vm -> Some vm
+            | None ->
+                Log.info "attach cancelled";
+                exit 0))
+  in
+  match selected_running with
+  | Some vm ->
+      attach_running ?virtle ~name:vm.name
+        ~path:(Filename.concat vm.path "virtle.toml")
+        ~verbose ()
+  | None ->
+      if not spawn then Log.fatal "no running VMs; use `ash ls` to list states";
+      let vm =
+        match name with
+        | Some name ->
+            let name = Util.name_slug name in
+            let path = state_dir name in
+            let manifest = Filename.concat path "virtle.toml" in
+            if not (Sys.file_exists manifest) then
+              Log.fatal "no VM named %S (expected %s)" name manifest;
+            {
+              name;
+              status = Stopped;
+              cid = None;
+              disk_bytes = 0L;
+              apparent_bytes = 0L;
+              modified = 0.;
+              path;
+            }
+        | None -> (
+            match stopped with
+            | [ vm ] -> vm
+            | [] -> Log.fatal "no stopped VM state to spawn; pass a NAME"
+            | _ -> Log.fatal "multiple stopped VM states; pass a NAME")
+      in
+      let inputs = saved_inputs ?virtle ~name:vm.name () in
+      let path = rewrite_saved_manifest inputs in
+      if keep then (
+        start_background ~name:inputs.name ~virtle:inputs.virtle ~path ~verbose;
+        wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name;
+        attach_running ~virtle:inputs.virtle ~name:inputs.name ~path ~verbose ())
+      else
+        let args = launch_args ~path ~verbose ~ssh:true in
+        Util.exec inputs.virtle args
+
+let stop ?name () =
+  let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
+  let vm =
+    match name with
+    | Some name -> (
+        let name = Util.name_slug name in
+        match List.find_opt (fun vm -> vm.name = name) running with
+        | Some vm -> vm
+        | None -> Log.fatal "VM %S is not running" name)
+    | None -> (
+        match running with
+        | [ vm ] -> vm
+        | [] -> Log.fatal "no running VMs"
+        | vms -> (
+            match attach_picker (Array.of_list vms) with
+            | Some vm -> vm
+            | None ->
+                Log.info "stop cancelled";
+                exit 0))
+  in
+  if not (Systemd_run.is_user_unit_active ~name:vm.name) then
+    Log.fatal
+      "VM %S is running, but not as an ash background unit; refusing to stop it"
+      vm.name;
+  let code = Systemd_run.stop_user_unit ~name:vm.name in
+  exit code
 
 let regenerate ?virtle ~name () =
   let name = Util.name_slug name in

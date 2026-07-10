@@ -15,11 +15,14 @@ let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy config flake name user profiles
-    print_serial mount_cwd ephemeral =
+    print_serial mount_cwd ephemeral attach keep =
   Log.set_debug opts.global.debug;
+  if keep && not attach then Log.fatal "--keep requires --attach";
+  if ephemeral && ((not attach) || keep) then
+    Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?name ?user
     ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd ~ephemeral
-    ~verbose:opts.verbose ()
+    ~attach ~keep ~verbose:opts.verbose ()
 
 let list_vms global =
   Log.set_debug global.debug;
@@ -29,9 +32,14 @@ let rm_vms global =
   Log.set_debug global.debug;
   Virtle.rm_vms ()
 
-let attach opts name =
+let attach opts name spawn keep =
   Log.set_debug opts.global.debug;
-  Virtle.attach ?virtle:opts.virtle ?name ~verbose:opts.verbose ()
+  if keep && not spawn then Log.fatal "--keep requires --spawn";
+  Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~verbose:opts.verbose ()
+
+let stop global name =
+  Log.set_debug global.debug;
+  Virtle.stop ?name ()
 
 let regenerate opts name =
   Log.set_debug opts.global.debug;
@@ -130,6 +138,24 @@ let ephemeral_arg =
           "Remove the VM state directory after the launched SSH/VM session \
            exits.")
 
+let attach_flag =
+  Arg.(
+    value & flag
+    & info [ "attach" ]
+        ~doc:"Attach after spawning. Without --keep, the VM stops on SSH exit.")
+
+let keep_flag =
+  Arg.(
+    value & flag
+    & info [ "keep" ]
+        ~doc:"Keep a VM running after an attached spawned session exits.")
+
+let spawn_flag =
+  Arg.(
+    value & flag
+    & info [ "spawn" ]
+        ~doc:"For attach, spawn the named stopped VM if it is not running.")
+
 let debug_arg =
   Arg.(
     value & flag
@@ -147,7 +173,8 @@ let spawn_cmd =
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ config_arg $ flake_arg $ name_arg $ user_arg $ profiles_arg
-      $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg)
+      $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg $ attach_flag
+      $ keep_flag)
 
 let attach_name_arg =
   Arg.(
@@ -161,7 +188,8 @@ let attach_name_arg =
 let attach_cmd =
   Cmd.v
     (Cmd.info "attach" ~doc:"ssh into a running VM")
-    Term.(const attach $ virtle_opts_arg $ attach_name_arg)
+    Term.(
+      const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag)
 
 let ls_cmd =
   Cmd.v
@@ -178,6 +206,19 @@ let regenerate_cmd =
   Cmd.v
     (Cmd.info "regenerate" ~doc:"regenerate a VM manifest from saved ash.toml")
     Term.(const regenerate $ virtle_opts_arg $ regenerate_name_arg)
+
+let stop_name_arg =
+  Arg.(
+    value
+    & pos 0 (some string) None
+    & info []
+        ~doc:"VM/state name. If omitted, stop requires exactly one running VM."
+        ~docv:"NAME")
+
+let stop_cmd =
+  Cmd.v
+    (Cmd.info "stop" ~doc:"stop an ash background VM")
+    Term.(const stop $ global_opts_arg $ stop_name_arg)
 
 let rm_cmd =
   Cmd.v
@@ -204,6 +245,6 @@ let main_cmd =
   in
   Cmd.group
     (Cmd.info "ash" ~version ~doc ~man)
-    [ spawn_cmd; attach_cmd; regenerate_cmd; ls_cmd; rm_cmd ]
+    [ spawn_cmd; attach_cmd; stop_cmd; regenerate_cmd; ls_cmd; rm_cmd ]
 
 let () = exit (Cmd.eval main_cmd)
