@@ -152,7 +152,8 @@ Then it reads the selected profiles from `~/.agent-box.toml` and turns their mou
 
 Profile selection is explicit:
 
-- If no `-p`/`--profile` is passed, `ash` uses `default_profile` from the config, falling back to `base`.
+- If no `-p`/`--profile` is passed for a new VM, `ash` uses `default_profile` from the config, falling back to `base`.
+- If no `-p`/`--profile` is passed for an existing named VM with saved `ash.toml`, `ash` reuses the saved profile list.
 - If one or more profiles are passed, `ash` uses exactly those profiles. It does not automatically add `default_profile`.
 - Shared/base profile behavior should be expressed with profile `extends` in the config.
 

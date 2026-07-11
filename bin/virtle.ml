@@ -994,6 +994,17 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path
   let virtiofsd = find_virtiofsd () in
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
+  let profiles =
+    if profiles <> [] then profiles
+    else
+      let saved_path = ash_config_path ~name in
+      if Sys.file_exists saved_path then (
+        let saved = load_ash_config ~name in
+        Log.debug "using saved profiles for existing VM %s: %s" name
+          (String.concat "," saved.profiles);
+        saved.profiles)
+      else profiles
+  in
   let inputs =
     {
       config_path;
