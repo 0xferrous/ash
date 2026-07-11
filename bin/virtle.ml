@@ -6,6 +6,7 @@ type manifest_inputs = {
   user : string option;
   print_serial : bool;
   mount_cwd : bool;
+  ro_store_socket : string option;
   ssh : string option;
   systemd_ssh_proxy : string option;
   virtiofsd : string;
@@ -22,6 +23,7 @@ type resolved_manifest_inputs = {
   user : string option;
   print_serial : bool;
   mount_cwd : bool;
+  ro_store_socket : string option;
   ssh : string;
   systemd_ssh_proxy : string;
   virtiofsd : string;
@@ -808,7 +810,8 @@ let render_resolved_manifest inputs =
     [
       profile_mount ~bin:inputs.virtiofsd workspace_mount;
       virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true
-        ~socket:"ro-store.sock" ~bin:inputs.virtiofsd ();
+        ~socket:(Option.value inputs.ro_store_socket ~default:"ro-store.sock")
+        ~bin:inputs.virtiofsd ();
       image_mount ~source:(Filename.concat state_dir "persist.img");
     ]
     @ (if inputs.mount_cwd then
@@ -909,6 +912,11 @@ let ash_config (inputs : manifest_inputs) =
     | None -> fields
   in
   let fields =
+    match inputs.ro_store_socket with
+    | Some socket -> fields @ [ ("ro_store_socket", Otoml.string socket) ]
+    | None -> fields
+  in
+  let fields =
     match inputs.ssh with
     | Some ssh -> fields @ [ ("ssh", Otoml.string ssh) ]
     | None -> fields
@@ -939,6 +947,8 @@ let load_ash_config ~name =
     user = Otoml.find_opt doc Otoml.get_string [ "spawn"; "user" ];
     print_serial = bool_of_doc doc [ "spawn"; "print_serial" ];
     mount_cwd = bool_of_doc doc [ "spawn"; "mount_cwd" ];
+    ro_store_socket =
+      Otoml.find_opt doc Otoml.get_string [ "spawn"; "ro_store_socket" ];
     ssh = Otoml.find_opt doc Otoml.get_string [ "spawn"; "ssh" ];
     systemd_ssh_proxy =
       Otoml.find_opt doc Otoml.get_string [ "spawn"; "systemd_ssh_proxy" ];
@@ -967,6 +977,7 @@ let render_manifest (inputs : manifest_inputs) =
       user = Some user;
       print_serial = inputs.print_serial;
       mount_cwd = inputs.mount_cwd;
+      ro_store_socket = inputs.ro_store_socket;
       ssh;
       systemd_ssh_proxy;
       virtiofsd = inputs.virtiofsd;
@@ -982,8 +993,8 @@ let write_manifest_for_inputs inputs =
   Log.debug "wrote virtle manifest (%d bytes)" (String.length manifest);
   path
 
-let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path
-    ~flake ~profiles ~print_serial ~mount_cwd () =
+let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
+    ~config_path ~flake ~profiles ~print_serial ~mount_cwd () =
   let virtle = find_virtle virtle in
   let ssh = Option.map (fun path -> find_ssh (Some path)) ssh in
   let systemd_ssh_proxy =
@@ -994,6 +1005,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path
   let virtiofsd = find_virtiofsd () in
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
+  let ro_store_socket = Option.map Util.absolute_path ro_store_socket in
   let profiles =
     if profiles <> [] then profiles
     else
@@ -1014,6 +1026,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path
       user;
       print_serial;
       mount_cwd;
+      ro_store_socket;
       ssh;
       systemd_ssh_proxy;
       virtiofsd;
@@ -1072,11 +1085,12 @@ let launch_foreground_attached ?cleanup_dir (inputs : manifest_inputs) path
       exit code
   | None -> Util.exec inputs.virtle args
 
-let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path ~flake
-    ~profiles ~print_serial ~mount_cwd ~ephemeral ~attach ~keep ~verbose () =
+let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
+    ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~ephemeral ~attach
+    ~keep ~verbose () =
   let inputs, path =
-    prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ~config_path
-      ~flake ~profiles ~print_serial ~mount_cwd ()
+    prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
+      ~config_path ~flake ~profiles ~print_serial ~mount_cwd ()
   in
   if attach && keep then launch_background_and_attach inputs path ~verbose
   else if attach then

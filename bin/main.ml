@@ -14,15 +14,15 @@ type virtle_opts = {
 let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
-let spawn opts ssh systemd_ssh_proxy config flake name user profiles
-    print_serial mount_cwd ephemeral attach keep =
+let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake name user
+    profiles print_serial mount_cwd ephemeral attach keep =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
-  Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?name ?user
-    ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd ~ephemeral
-    ~attach ~keep ~verbose:opts.verbose ()
+  Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
+    ?name ?user ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd
+    ~ephemeral ~attach ~keep ~verbose:opts.verbose ()
 
 let list_vms global =
   Log.set_debug global.debug;
@@ -70,6 +70,16 @@ let systemd_ssh_proxy_arg =
         ~doc:
           "Override path to systemd-ssh-proxy. Defaults to the selected NixOS \
            config's systemd package."
+        ~docv:"PATH")
+
+let ro_store_socket_arg =
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "ro-store-socket" ]
+        ~doc:
+          "Use an existing virtiofs daemon socket for the read-only /nix/store \
+           mount instead of starting ash's own ro-store virtiofsd."
         ~docv:"PATH")
 
 let config_arg =
@@ -172,9 +182,9 @@ let spawn_cmd =
     (Cmd.info "spawn" ~doc:"spawn an agent VM")
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
-      $ config_arg $ flake_arg $ name_arg $ user_arg $ profiles_arg
-      $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg $ attach_flag
-      $ keep_flag)
+      $ ro_store_socket_arg $ config_arg $ flake_arg $ name_arg $ user_arg
+      $ profiles_arg $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg
+      $ attach_flag $ keep_flag)
 
 let attach_name_arg =
   Arg.(

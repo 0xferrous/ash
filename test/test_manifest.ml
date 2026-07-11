@@ -89,6 +89,17 @@ let assert_string_prefix label prefix value =
   if not (String.starts_with ~prefix value) then
     fail (Printf.sprintf "%s: expected %S to start with %S" label value prefix)
 
+let assert_string_contains label value needle =
+  let value_len = String.length value in
+  let needle_len = String.length needle in
+  let rec loop i =
+    if i + needle_len > value_len then false
+    else if String.sub value i needle_len = needle then true
+    else loop (i + 1)
+  in
+  if not (loop 0) then
+    fail (Printf.sprintf "%s: expected %S to contain %S" label value needle)
+
 let test_boot : Nix.boot =
   {
     kernel = "/nix/store/kernel/bzImage";
@@ -102,7 +113,7 @@ let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
 let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
-    ~config ~flake ~name () =
+    ?ro_store_socket ~config ~flake ~name () =
   Virtle.render_resolved_manifest
     {
       config;
@@ -114,6 +125,7 @@ let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       user;
       print_serial;
       mount_cwd;
+      ro_store_socket;
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
       virtiofsd = "/bin/virtiofsd";
@@ -299,6 +311,32 @@ home_relative = [".gitconfig"]
   if List.mem_assoc "write_back" gitconfig then
     fail "read-only file should not set write_back"
 
+let test_ro_store_socket_override () =
+  let root = temp_dir "ash-test" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  Util.ensure_dir home;
+  let config_path = Filename.concat root "agent-box.toml" in
+  write_file config_path
+    {|default_profile = "base"
+
+[runtime.qemu]
+ssh_user = "agent"
+
+[profiles.base]
+|};
+  let config = Agent_box.load config_path in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"ro-store-socket"
+      ~ro_store_socket:"/run/ro-store.sock" ()
+  in
+  if not (String.contains manifest '/') then
+    fail "manifest should contain paths";
+  assert_string_contains "ro-store socket override" manifest
+    "socket = \"/run/ro-store.sock\""
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -310,4 +348,5 @@ let () =
   run "default profile renders without mount-cwd"
     test_default_profile_without_mount_cwd;
   run "read-only file write does not write back"
-    test_readonly_file_write_has_no_write_back
+    test_readonly_file_write_has_no_write_back;
+  run "ro-store socket override" test_ro_store_socket_override

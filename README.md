@@ -85,6 +85,7 @@ Spawn options:
 - `-c`, `--config CONFIG` — agent-box style config. Default: `~/.agent-box.toml`.
 - `--ssh PATH` — override path to host `ssh`. Defaults to the selected NixOS config's `pkgs.openssh`.
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
+- `--ro-store-socket PATH` — use an existing virtiofs daemon socket for the read-only `/nix/store` mount instead of starting ash's own `ro-store` virtiofsd.
 - `--print-serial` — print guest kernel/init serial output while booting.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
 - `--attach` — attach after spawning. Without `--keep`, the VM stops when SSH exits.
@@ -171,7 +172,7 @@ Limitation: `virtle` only uses `target` for `[[hotplug.mounts]]`, not launch-tim
 It also exposes these mount devices to the guest:
 
 - `workspace` — writable virtiofs share for `<state_dir>/workspace`, intended for `/home/<ssh-user>/workspace`
-- `ro-store` — readonly virtiofs share for the host `/nix/store`
+- `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock`; pass `--ro-store-socket PATH` to point this mount at an existing virtiofs daemon socket instead.
 - `persist` — writable ext4 image labeled `persist`
 - `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
 
