@@ -49,8 +49,13 @@ let is_executable path =
 
 let some_if condition value = if condition then Some value else None
 
+let absolute_path path =
+  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
+  else path
+
 let find_in_path program =
-  if String.contains program '/' then some_if (is_executable program) program
+  if String.contains program '/' then
+    if is_executable program then Some (absolute_path program) else None
   else
     Sys.getenv_opt "PATH" |> Option.value ~default:""
     |> String.split_on_char ':'
