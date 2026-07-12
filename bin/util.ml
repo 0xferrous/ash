@@ -68,9 +68,11 @@ let find_in_path program =
 let shell_quote s =
   "'" ^ String.concat "'\\''" (String.split_on_char '\'' s) ^ "'"
 
+let log_quote s = Printf.sprintf "%S" s
+let log_command args = String.concat " " (List.map log_quote args)
+
 let exec program args =
-  Log.debug "exec: %s"
-    (String.concat " " (List.map shell_quote (program :: args)));
+  Log.debug "exec: %s" (log_command (program :: args));
   let argv = Array.of_list (program :: args) in
   Unix.execvp program argv
 
@@ -80,8 +82,7 @@ let process_status_code = function
   | Unix.WSTOPPED signal -> 128 + signal
 
 let run_foreground program args =
-  Log.debug "run foreground: %s"
-    (String.concat " " (List.map shell_quote (program :: args)));
+  Log.debug "run foreground: %s" (log_command (program :: args));
   (* Interactive children such as ssh may leave the terminal in raw/no-echo
      mode. Since callers like `spawn --ephemeral` keep ash alive after the
      child exits, save and restore the terminal so the parent shell is usable. *)
