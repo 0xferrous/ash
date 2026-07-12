@@ -393,6 +393,19 @@ let test_qga_unmount_removes_empty_mountpoint () =
   assert_string_contains "unmount rmdir" script
     "rmdir \"$target\" 2>/dev/null || true"
 
+let test_hotmount_default_guest_path_matches_host_path () =
+  assert_equal "default guest path" "/host/project"
+    (Virtle.resolve_hotmount_guest_path ~user:"agent" ~host_dir:"/host/project"
+       None)
+
+let test_hotmount_tilde_guest_path_uses_guest_home () =
+  assert_equal "tilde guest path" "/home/agent/project"
+    (Virtle.resolve_hotmount_guest_path ~user:"agent" ~host_dir:"/host/project"
+       (Some "~/project"));
+  assert_equal "root tilde guest path" "/root/project"
+    (Virtle.resolve_hotmount_guest_path ~user:"root" ~host_dir:"/host/project"
+       (Some "~/project"))
+
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
@@ -414,4 +427,8 @@ let () =
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
   run "qga unmount removes empty mountpoint"
     test_qga_unmount_removes_empty_mountpoint;
+  run "hotmount default guest path matches host path"
+    test_hotmount_default_guest_path_matches_host_path;
+  run "hotmount tilde guest path uses guest home"
+    test_hotmount_tilde_guest_path_uses_guest_home;
   run "nix json string array parser" test_nix_json_string_array_parser

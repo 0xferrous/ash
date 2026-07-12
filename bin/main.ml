@@ -246,7 +246,7 @@ let mount_spec_arg =
         ~doc:
           "Mount spec HOST_PATH[:GUEST_PATH]. A guest path starting with ~ is \
            resolved relative to the guest SSH user's home. If omitted, \
-           GUEST_PATH defaults to ~/$(basename HOST_PATH)."
+           GUEST_PATH defaults to the absolute host path."
         ~docv:"HOST_PATH[:GUEST_PATH]")
 
 let mount_cmd =

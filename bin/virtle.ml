@@ -706,7 +706,7 @@ let find_hotmount_metadata_by_guest_path ~name ~guest_path =
     |> List.find_opt (fun _ -> true)
 
 let resolve_hotmount_guest_path ~user ~host_dir = function
-  | None -> Filename.concat (guest_home user) (Filename.basename host_dir)
+  | None -> host_dir
   | Some "~" -> guest_home user
   | Some path when String.length path >= 2 && String.sub path 0 2 = "~/" ->
       Filename.concat (guest_home user)
