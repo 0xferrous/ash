@@ -1248,7 +1248,8 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
 let launch_args ~resume ~path ~verbose ~ssh =
   let verbose_args = List.map (fun _ -> "-v") verbose in
   let resume_mode = Option.value resume ~default:"no" in
-  [ "--manifest"; path ] @ verbose_args @ [ "launch"; "--resume"; resume_mode ]
+  [ "--manifest"; path ] @ verbose_args
+  @ [ "launch"; "--resume"; resume_mode ]
   @ if ssh then [ "--ssh" ] else []
 
 let print_background_started ~name =
@@ -1277,15 +1278,17 @@ let wait_and_mount (inputs : manifest_inputs) path =
     (profile_mounts_for_inputs inputs)
 
 let launch_background ~resume (inputs : manifest_inputs) path ~verbose =
-  start_background ~resume ~name:inputs.name ~virtle:inputs.virtle ~path ~verbose;
+  start_background ~resume ~name:inputs.name ~virtle:inputs.virtle ~path
+    ~verbose;
   wait_and_mount inputs path
 
-let launch_background_and_attach ~resume (inputs : manifest_inputs) path ~verbose =
+let launch_background_and_attach ~resume (inputs : manifest_inputs) path
+    ~verbose =
   launch_background ~resume inputs path ~verbose;
   attach_running ~virtle:inputs.virtle ~name:inputs.name ~path ~verbose ()
 
-let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs) path
-    ~verbose =
+let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
+    path ~verbose =
   let args = launch_args ~resume ~path ~verbose ~ssh:true in
   match cleanup_dir with
   | Some dir ->
@@ -1306,7 +1309,8 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       ~config_path ~flake ~profiles ~print_serial ~mount_cwd ()
   in
-  if attach && keep then launch_background_and_attach ~resume:None inputs path ~verbose
+  if attach && keep then
+    launch_background_and_attach ~resume:None inputs path ~verbose
   else if attach then
     launch_foreground_attached
       ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
@@ -1422,8 +1426,8 @@ let suspend ?virtle ?name () =
   in
   if not (Systemd_run.is_user_unit_active ~name:vm.name) then
     Log.fatal
-      "VM %S is running, but not as an ash background unit; refusing to suspend \
-       it"
+      "VM %S is running, but not as an ash background unit; refusing to \
+       suspend it"
       vm.name;
   let manifest_path = Filename.concat vm.path "virtle.toml" in
   let code =

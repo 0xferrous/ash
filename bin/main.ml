@@ -49,7 +49,8 @@ let resume opts name attach keep =
 
 let stop opts name suspend =
   Log.set_debug opts.global.debug;
-  if suspend then Virtle.suspend ?virtle:opts.virtle ?name () else Virtle.stop ?name ()
+  if suspend then Virtle.suspend ?virtle:opts.virtle ?name ()
+  else Virtle.stop ?name ()
 
 let regenerate opts name =
   Log.set_debug opts.global.debug;
@@ -362,13 +363,15 @@ let attach_cmd =
       const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag)
 
 let resume_name_arg =
-  Arg.(required & pos 0 (some string) None & info [] ~doc:"VM/state name." ~docv:"NAME")
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
 
 let resume_man =
   [
     `S Manpage.s_description;
-    `P
-      "Resumes a suspended existing VM using virtle launch --resume force.";
+    `P "Resumes a suspended existing VM using virtle launch --resume force.";
     `S "MANIFEST";
     `P
       "resume reuses the saved virtle.toml. It does not regenerate the \
@@ -392,7 +395,8 @@ let resume_man =
 let resume_cmd =
   Cmd.v
     (Cmd.info "resume" ~doc:"resume a suspended VM" ~man:resume_man)
-    Term.(const resume $ virtle_opts_arg $ resume_name_arg $ attach_flag $ keep_flag)
+    Term.(
+      const resume $ virtle_opts_arg $ resume_name_arg $ attach_flag $ keep_flag)
 
 let ls_man =
   [
@@ -641,8 +645,7 @@ let stop_man =
       "With --suspend, ash runs virtle suspend for the VM's manifest instead \
        of stopping the unit. virtle saves QEMU state to disk and the launch \
        process exits.";
-    `P
-      "Resume later with ash resume NAME.";
+    `P "Resume later with ash resume NAME.";
     `S Manpage.s_examples;
     `Pre "ash stop work";
     `Pre "ash stop --suspend work";
