@@ -387,6 +387,12 @@ let test_qga_int_field_finds_nested_values () =
   assert_int "qga nested cid" 7
     (Option.value (Qga.int_field ~field:"cid" text) ~default:(-1))
 
+let test_qga_unmount_removes_empty_mountpoint () =
+  let action = Qga.unmount_action ~name:"test-unmount" ~guest_path:"/tmp/mnt" in
+  let script = List.nth action.args 1 in
+  assert_string_contains "unmount rmdir" script
+    "rmdir \"$target\" 2>/dev/null || true"
+
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
@@ -406,4 +412,6 @@ let () =
   run "ro-store socket override" test_ro_store_socket_override;
   run "qga params use valid json" test_qga_params_use_valid_json;
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
+  run "qga unmount removes empty mountpoint"
+    test_qga_unmount_removes_empty_mountpoint;
   run "nix json string array parser" test_nix_json_string_array_parser

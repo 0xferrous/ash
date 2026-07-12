@@ -122,6 +122,7 @@ if ! mountpoint -q "$target"; then
 fi
 
 umount "$target"
+rmdir "$target" 2>/dev/null || true
 |sh}
   in
   shell_action ~name ~args:[ guest_path ] script
