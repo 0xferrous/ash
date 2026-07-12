@@ -1198,7 +1198,8 @@ let write_manifest_for_inputs inputs =
   Log.debug "generated virtle manifest path: %s" path;
   Util.write_file path manifest;
   Log.debug "wrote virtle manifest %s (%d bytes, profiles: %s)" path
-    (String.length manifest) (profiles_log inputs.profiles);
+    (String.length manifest)
+    (profiles_log inputs.profiles);
   path
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
@@ -1323,7 +1324,8 @@ let rewrite_saved_manifest (inputs : manifest_inputs) =
   let path = manifest_path ~name:inputs.name in
   Util.write_file path manifest;
   Log.debug "rewrote virtle manifest %s (%d bytes, profiles: %s)" path
-    (String.length manifest) (profiles_log inputs.profiles);
+    (String.length manifest)
+    (profiles_log inputs.profiles);
   path
 
 let select_running_vm ?name running =
@@ -1419,6 +1421,7 @@ let regenerate ?virtle ~name () =
   let ssh_wrapper_path = profile_mount_ssh_wrapper_path ~name in
   Util.write_file manifest_path manifest;
   Log.debug "rewrote virtle manifest %s (%d bytes, profiles: %s)" manifest_path
-    (String.length manifest) (profiles_log inputs.profiles);
+    (String.length manifest)
+    (profiles_log inputs.profiles);
   Printf.printf "regenerated %s\n" manifest_path;
   Printf.printf "regenerated %s\n" ssh_wrapper_path

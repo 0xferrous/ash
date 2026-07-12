@@ -203,8 +203,8 @@ let spawn_man =
        virtle.";
     `S "LIFECYCLE";
     `P
-      "Plain spawn starts the VM as a background user systemd unit and returns. \
-       The VM keeps running until stopped with ash stop.";
+      "Plain spawn starts the VM as a background user systemd unit and \
+       returns. The VM keeps running until stopped with ash stop.";
     `P
       "--attach starts the VM in the foreground and opens SSH. Without --keep, \
        the VM stops when the attached session exits.";
@@ -238,8 +238,8 @@ let spawn_man =
        and renders virtle.toml from those same new inputs.";
     `P
       "Use ash regenerate NAME to re-render virtle.toml later from saved \
-       ash.toml without launching the VM. Regeneration updates the manifest for \
-       a future launch; it does not reconfigure an already running VM.";
+       ash.toml without launching the VM. Regeneration updates the manifest \
+       for a future launch; it does not reconfigure an already running VM.";
     `S "MOUNTS";
     `P
       "Profiles selected with --profile add their configured directory mounts \
@@ -281,8 +281,9 @@ let spawn_man =
     `P
       "The key is installed when ash attaches, not during a plain background \
        spawn. On attach, ash creates or reuses id_ed25519 in the VM state \
-       directory, installs id_ed25519.pub into the guest user's authorized_keys \
-       through virtle guest-exec, then runs ssh with that identity.";
+       directory, installs id_ed25519.pub into the guest user's \
+       authorized_keys through virtle guest-exec, then runs ssh with that \
+       identity.";
     `P
       "This requires the guest to have QEMU Guest Agent support and the guest \
        user/home path expected by the generated manifest.";
@@ -325,8 +326,8 @@ let attach_man =
        regenerate virtle.toml, then attach.";
     `P
       "--spawn starts a foreground VM that stops when SSH exits. Add --keep to \
-       start it as a background systemd user unit and keep it running after SSH \
-       exits.";
+       start it as a background systemd user unit and keep it running after \
+       SSH exits.";
     `S "SSH AUTOPROVISIONING";
     `P
       "If the manifest has ssh.autoprovision enabled, attach creates or reuses \
@@ -355,8 +356,8 @@ let ls_man =
       "Shows VM name, status, vsock CID when running, host disk usage, \
        apparent virtual size, last modification time, and state path.";
     `P
-      "DISK is host storage currently used. VIRTUAL is apparent size, including \
-       sparse files such as persist.img.";
+      "DISK is host storage currently used. VIRTUAL is apparent size, \
+       including sparse files such as persist.img.";
     `S Manpage.s_examples;
     `Pre "ash ls";
   ]
@@ -396,7 +397,8 @@ let regenerate_man =
 
 let regenerate_cmd =
   Cmd.v
-    (Cmd.info "regenerate" ~doc:"regenerate generated VM files" ~man:regenerate_man)
+    (Cmd.info "regenerate" ~doc:"regenerate generated VM files"
+       ~man:regenerate_man)
     Term.(const regenerate $ virtle_opts_arg $ regenerate_name_arg)
 
 let mount_name_arg =
@@ -451,7 +453,8 @@ let mount_man =
 
 let mount_cmd =
   Cmd.v
-    (Cmd.info "mount" ~doc:"hot-mount a host directory into a running VM" ~man:mount_man)
+    (Cmd.info "mount" ~doc:"hot-mount a host directory into a running VM"
+       ~man:mount_man)
     Term.(
       const mount $ virtle_opts_arg $ mount_mode_arg $ mount_name_arg
       $ mount_spec_arg)
@@ -470,8 +473,8 @@ let umount_man =
   [
     `S Manpage.s_description;
     `P
-      "Unmounts a hot-mounted guest path and tears down ash's host-side staging \
-       mount.";
+      "Unmounts a hot-mounted guest path and tears down ash's host-side \
+       staging mount.";
     `S "GUEST PATH";
     `P
       "GUEST_PATH must match the guest target used with ash mount. A path \
@@ -490,7 +493,8 @@ let umount_man =
 
 let umount_cmd =
   Cmd.v
-    (Cmd.info "umount" ~doc:"unmount a hot-mounted directory from a running VM" ~man:umount_man)
+    (Cmd.info "umount" ~doc:"unmount a hot-mounted directory from a running VM"
+       ~man:umount_man)
     Term.(
       const umount $ virtle_opts_arg $ mount_name_arg $ umount_guest_path_arg)
 
@@ -524,7 +528,8 @@ let mount_profile_man =
 
 let mount_profile_cmd =
   Cmd.v
-    (Cmd.info "mount-profile" ~doc:"hot-mount one or more profiles" ~man:mount_profile_man)
+    (Cmd.info "mount-profile" ~doc:"hot-mount one or more profiles"
+       ~man:mount_profile_man)
     Term.(
       const mount_profile $ virtle_opts_arg $ mount_name_arg $ profile_names_arg)
 
@@ -542,8 +547,7 @@ let umount_profile_man =
     `P
       "Each resolved profile directory mount target is then unmounted from the \
        running guest.";
-    `P
-      "Profile file entries are ignored, matching ash mount-profile.";
+    `P "Profile file entries are ignored, matching ash mount-profile.";
     `S "REQUIREMENTS";
     `P "The VM must be running and QEMU Guest Agent must be available.";
     `S Manpage.s_examples;
@@ -552,7 +556,8 @@ let umount_profile_man =
 
 let umount_profile_cmd =
   Cmd.v
-    (Cmd.info "umount-profile" ~doc:"unmount one or more hot-mounted profiles" ~man:umount_profile_man)
+    (Cmd.info "umount-profile" ~doc:"unmount one or more hot-mounted profiles"
+       ~man:umount_profile_man)
     Term.(
       const umount_profile $ virtle_opts_arg $ mount_name_arg
       $ profile_names_arg)
@@ -639,9 +644,9 @@ let main_cmd =
          virtiofsd, bindfs, ssh, systemd-ssh-proxy, systemd-run, systemctl, \
          ssh-keygen, /bin/sh, mountpoint, and du.";
       `P
-        "Some paths can be resolved or overridden: virtle comes from \
-         --virtle, ASH_VIRTLE, or PATH; ssh and systemd-ssh-proxy default to \
-         the selected NixOS config unless overridden.";
+        "Some paths can be resolved or overridden: virtle comes from --virtle, \
+         ASH_VIRTLE, or PATH; ssh and systemd-ssh-proxy default to the \
+         selected NixOS config unless overridden.";
       `P
         "Guest-side operations assume QEMU Guest Agent plus standard NixOS \
          tools under /run/current-system/sw/bin, including sh, mount, \
