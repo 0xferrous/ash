@@ -20,6 +20,11 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake name user
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
+  let flake =
+    match flake with
+    | Some flake -> flake
+    | None -> Log.fatal "spawn requires --flake"
+  in
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?name ?user ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd
     ~ephemeral ~attach ~keep ~verbose:opts.verbose ()
@@ -37,9 +42,14 @@ let attach opts name spawn keep =
   if keep && not spawn then Log.fatal "--keep requires --spawn";
   Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~verbose:opts.verbose ()
 
-let stop global name =
-  Log.set_debug global.debug;
-  Virtle.stop ?name ()
+let resume opts name attach keep =
+  Log.set_debug opts.global.debug;
+  if keep && not attach then Log.fatal "--keep requires --attach";
+  Virtle.resume ?virtle:opts.virtle ~name ~attach ~keep ~verbose:opts.verbose ()
+
+let stop opts name suspend =
+  Log.set_debug opts.global.debug;
+  if suspend then Virtle.suspend ?virtle:opts.virtle ?name () else Virtle.stop ?name ()
 
 let regenerate opts name =
   Log.set_debug opts.global.debug;
@@ -108,7 +118,7 @@ let config_arg =
 
 let flake_arg =
   Arg.(
-    required
+    value
     & opt (some string) None
     & info [ "flake"; "f" ]
         ~doc:"Flake reference in the form FLAKE#HOST, e.g. ../my-nix#agent."
@@ -183,6 +193,12 @@ let spawn_flag =
     value & flag
     & info [ "spawn" ]
         ~doc:"For attach, spawn the named stopped VM if it is not running.")
+
+let suspend_flag =
+  Arg.(
+    value & flag
+    & info [ "suspend" ]
+        ~doc:"For stop, save VM state with virtle suspend instead of stopping.")
 
 let debug_arg =
   Arg.(
@@ -344,6 +360,39 @@ let attach_cmd =
     (Cmd.info "attach" ~doc:"ssh into a running VM" ~man:attach_man)
     Term.(
       const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag)
+
+let resume_name_arg =
+  Arg.(required & pos 0 (some string) None & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let resume_man =
+  [
+    `S Manpage.s_description;
+    `P
+      "Resumes a suspended existing VM using virtle launch --resume force.";
+    `S "MANIFEST";
+    `P
+      "resume reuses the saved virtle.toml. It does not regenerate the \
+       manifest because QEMU suspend/resume needs the saved device graph.";
+    `S "LIFECYCLE";
+    `P
+      "Plain resume starts the VM as a background systemd user unit and \
+       returns.";
+    `P
+      "--attach resumes in the foreground with SSH. Without --keep, the VM \
+       stops when SSH exits.";
+    `P
+      "--attach --keep resumes as a background systemd user unit, waits for \
+       readiness, then attaches. The VM keeps running after SSH exits.";
+    `S Manpage.s_examples;
+    `Pre "ash resume work";
+    `Pre "ash resume --attach work";
+    `Pre "ash resume --attach --keep work";
+  ]
+
+let resume_cmd =
+  Cmd.v
+    (Cmd.info "resume" ~doc:"resume a suspended VM" ~man:resume_man)
+    Term.(const resume $ virtle_opts_arg $ resume_name_arg $ attach_flag $ keep_flag)
 
 let ls_man =
   [
@@ -587,14 +636,22 @@ let stop_man =
     `P
       "Foreground attached VMs are not owned by a background unit, so ash stop \
        will refuse to stop them.";
+    `S "SUSPEND";
+    `P
+      "With --suspend, ash runs virtle suspend for the VM's manifest instead \
+       of stopping the unit. virtle saves QEMU state to disk and the launch \
+       process exits.";
+    `P
+      "Resume later with ash resume NAME.";
     `S Manpage.s_examples;
     `Pre "ash stop work";
+    `Pre "ash stop --suspend work";
   ]
 
 let stop_cmd =
   Cmd.v
     (Cmd.info "stop" ~doc:"stop an ash background VM" ~man:stop_man)
-    Term.(const stop $ global_opts_arg $ stop_name_arg)
+    Term.(const stop $ virtle_opts_arg $ stop_name_arg $ suspend_flag)
 
 let rm_man =
   [
@@ -665,6 +722,7 @@ let main_cmd =
     [
       spawn_cmd;
       attach_cmd;
+      resume_cmd;
       mount_cmd;
       umount_cmd;
       mount_profile_cmd;

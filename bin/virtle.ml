@@ -1245,9 +1245,10 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
   let path = write_manifest_for_inputs inputs in
   (inputs, path)
 
-let launch_args ~path ~verbose ~ssh =
+let launch_args ~resume ~path ~verbose ~ssh =
   let verbose_args = List.map (fun _ -> "-v") verbose in
-  [ "--manifest"; path ] @ verbose_args @ [ "launch" ]
+  let resume_mode = Option.value resume ~default:"no" in
+  [ "--manifest"; path ] @ verbose_args @ [ "launch"; "--resume"; resume_mode ]
   @ if ssh then [ "--ssh" ] else []
 
 let print_background_started ~name =
@@ -1257,11 +1258,15 @@ let print_background_started ~name =
   Printf.printf "logs: %s\n" (Systemd_run.journalctl_hint ~name);
   Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
 
-let start_background ~name ~virtle ~path ~verbose =
-  let args = launch_args ~path ~verbose ~ssh:false in
+let start_background ~resume ~name ~virtle ~path ~verbose =
+  let args = launch_args ~resume ~path ~verbose ~ssh:false in
+  let description =
+    match resume with
+    | Some _ -> "ash VM " ^ name ^ " (resume)"
+    | None -> "ash VM " ^ name
+  in
   let code =
-    Systemd_run.start_user_unit ~name ~description:("ash VM " ^ name)
-      ~program:virtle ~args
+    Systemd_run.start_user_unit ~name ~description ~program:virtle ~args
   in
   if code <> 0 then exit code;
   print_background_started ~name
@@ -1271,17 +1276,17 @@ let wait_and_mount (inputs : manifest_inputs) path =
   execute_profile_mounts ~virtle:inputs.virtle ~path
     (profile_mounts_for_inputs inputs)
 
-let launch_background (inputs : manifest_inputs) path ~verbose =
-  start_background ~name:inputs.name ~virtle:inputs.virtle ~path ~verbose;
+let launch_background ~resume (inputs : manifest_inputs) path ~verbose =
+  start_background ~resume ~name:inputs.name ~virtle:inputs.virtle ~path ~verbose;
   wait_and_mount inputs path
 
-let launch_background_and_attach (inputs : manifest_inputs) path ~verbose =
-  launch_background inputs path ~verbose;
+let launch_background_and_attach ~resume (inputs : manifest_inputs) path ~verbose =
+  launch_background ~resume inputs path ~verbose;
   attach_running ~virtle:inputs.virtle ~name:inputs.name ~path ~verbose ()
 
-let launch_foreground_attached ?cleanup_dir (inputs : manifest_inputs) path
+let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs) path
     ~verbose =
-  let args = launch_args ~path ~verbose ~ssh:true in
+  let args = launch_args ~resume ~path ~verbose ~ssh:true in
   match cleanup_dir with
   | Some dir ->
       let code =
@@ -1301,12 +1306,12 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       ~config_path ~flake ~profiles ~print_serial ~mount_cwd ()
   in
-  if attach && keep then launch_background_and_attach inputs path ~verbose
+  if attach && keep then launch_background_and_attach ~resume:None inputs path ~verbose
   else if attach then
     launch_foreground_attached
       ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
-      inputs path ~verbose
-  else launch_background inputs path ~verbose
+      ~resume:None inputs path ~verbose
+  else launch_background ~resume:None inputs path ~verbose
 
 let saved_inputs ?virtle ~name () =
   let name = Util.name_slug name in
@@ -1317,6 +1322,21 @@ let saved_inputs ?virtle ~name () =
       ~default:saved.virtle
   in
   { saved with name; virtle }
+
+let resume ?virtle ~name ~attach ~keep ~verbose () =
+  let name = Util.name_slug name in
+  let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
+  if List.exists (fun vm -> vm.name = name) running then
+    Log.fatal "VM %S is already running" name;
+  let inputs = saved_inputs ?virtle ~name () in
+  let path = manifest_path ~name:inputs.name in
+  if not (Sys.file_exists path) then
+    Log.fatal "no VM manifest for %S (expected %s)" inputs.name path;
+  if attach && keep then
+    launch_background_and_attach ~resume:(Some "force") inputs path ~verbose
+  else if attach then
+    launch_foreground_attached ~resume:(Some "force") inputs path ~verbose
+  else launch_background ~resume:(Some "force") inputs path ~verbose
 
 let rewrite_saved_manifest (inputs : manifest_inputs) =
   Log.debug "regenerating VM manifest for %s" inputs.name;
@@ -1362,8 +1382,8 @@ let select_stopped_vm_for_spawn ?name stopped =
 let spawn_saved_and_attach ?virtle ~name ~keep ~verbose =
   let inputs = saved_inputs ?virtle ~name () in
   let path = rewrite_saved_manifest inputs in
-  if keep then launch_background_and_attach inputs path ~verbose
-  else launch_foreground_attached inputs path ~verbose
+  if keep then launch_background_and_attach ~resume:None inputs path ~verbose
+  else launch_foreground_attached ~resume:None inputs path ~verbose
 
 let attach ?virtle ?name ~spawn ~keep ~verbose () =
   let vms = list_vms () in
@@ -1378,6 +1398,38 @@ let attach ?virtle ?name ~spawn ~keep ~verbose () =
       if not spawn then Log.fatal "no running VMs; use `ash ls` to list states";
       let name = select_stopped_vm_for_spawn ?name stopped in
       spawn_saved_and_attach ?virtle ~name ~keep ~verbose
+
+let suspend ?virtle ?name () =
+  let virtle = find_virtle virtle in
+  let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
+  let vm =
+    match name with
+    | Some name -> (
+        let name = Util.name_slug name in
+        match List.find_opt (fun vm -> vm.name = name) running with
+        | Some vm -> vm
+        | None -> Log.fatal "VM %S is not running" name)
+    | None -> (
+        match running with
+        | [ vm ] -> vm
+        | [] -> Log.fatal "no running VMs"
+        | vms -> (
+            match attach_picker (Array.of_list vms) with
+            | Some vm -> vm
+            | None ->
+                Log.info "suspend cancelled";
+                exit 0))
+  in
+  if not (Systemd_run.is_user_unit_active ~name:vm.name) then
+    Log.fatal
+      "VM %S is running, but not as an ash background unit; refusing to suspend \
+       it"
+      vm.name;
+  let manifest_path = Filename.concat vm.path "virtle.toml" in
+  let code =
+    Util.run_foreground virtle [ "--manifest"; manifest_path; "suspend" ]
+  in
+  exit code
 
 let stop ?name () =
   let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
