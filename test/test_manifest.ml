@@ -195,6 +195,16 @@ absolute = ["%s"]
     (List.hd (find_strings doc [ "ssh"; "exec" ]));
   if not (Sys.file_exists wrapper) then
     fail "profile mount ssh wrapper should exist";
+  let wrapper_content =
+    In_channel.with_open_text wrapper In_channel.input_all
+  in
+  assert_string_contains "wrapper guest-exec" wrapper_content "rpc guest-exec";
+  assert_string_contains "wrapper handles successful mount" wrapper_content
+    "*'\"exitCode\":0'*)";
+  assert_string_contains "wrapper handles already mounted" wrapper_content
+    "*'\"exitCode\":42'*) ;;";
+  assert_string_contains "wrapper execs ssh" wrapper_content
+    "-o IdentitiesOnly=yes \"$@\"";
   let mounts = table_array doc "mounts" in
   let workspace = find_table_by_string mounts "tag" "workspace" in
   assert_equal "workspace source"
