@@ -118,6 +118,7 @@ PATH=/run/current-system/sw/bin:/bin
 target=$1
 
 if ! mountpoint -q "$target"; then
+  rmdir "$target" 2>/dev/null || true
   exit 42
 fi
 
