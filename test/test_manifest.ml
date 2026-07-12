@@ -198,6 +198,11 @@ absolute = ["%s"]
     (string_field workspace "source");
   assert_equal "workspace target" "/home/agent/workspace"
     (string_field workspace "target");
+  let hotmounts = find_table_by_string mounts "tag" "hotmounts" in
+  assert_equal "hotmounts source"
+    (Filename.concat state "ash/unit-test/hotmounts")
+    (string_field hotmounts "source");
+  assert_bool "hotmounts read_only" false (bool_field hotmounts "read_only");
   let ro_store = find_table_by_string mounts "tag" "ro-store" in
   assert_equal "ro-store source" "/nix/store" (string_field ro_store "source");
   assert_bool "ro-store read_only" true (bool_field ro_store "read_only");
@@ -268,6 +273,10 @@ home_relative = [".cache/example"]
         List.assoc_opt "tag" table = Some (Otoml.TomlString "workspace_cwd"))
       mounts
   then fail "workspace_cwd should not be emitted by default";
+  let hotmounts = find_table_by_string mounts "tag" "hotmounts" in
+  assert_equal "hotmounts source"
+    (Filename.concat state "ash/default-profile/hotmounts")
+    (string_field hotmounts "source");
   let cache = find_table_by_string mounts "target" "/home/dev/.cache/example" in
   assert_equal "cache source"
     (Filename.concat home ".cache/example")

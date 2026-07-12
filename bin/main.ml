@@ -45,6 +45,16 @@ let regenerate opts name =
   Log.set_debug opts.global.debug;
   Virtle.regenerate ?virtle:opts.virtle ~name ()
 
+let mount opts mode name spec =
+  Log.set_debug opts.global.debug;
+  Virtle.hotmount ?virtle:opts.virtle
+    ~mode:(Virtle.hotmount_mode_of_string mode)
+    ~name ~spec ()
+
+let umount opts name guest_path =
+  Log.set_debug opts.global.debug;
+  Virtle.hotunmount ?virtle:opts.virtle ~name ~guest_path ()
+
 let virtle_arg =
   Arg.(
     value
@@ -217,6 +227,51 @@ let regenerate_cmd =
     (Cmd.info "regenerate" ~doc:"regenerate a VM manifest from saved ash.toml")
     Term.(const regenerate $ virtle_opts_arg $ regenerate_name_arg)
 
+let mount_name_arg =
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let mount_mode_arg =
+  Arg.(
+    value & opt string "rw"
+    & info [ "mode"; "m" ] ~doc:"Mount mode: ro or rw." ~docv:"MODE")
+
+let mount_spec_arg =
+  Arg.(
+    required
+    & pos 1 (some string) None
+    & info []
+        ~doc:
+          "Mount spec HOST_PATH[:GUEST_PATH]. A guest path starting with ~ is \
+           resolved relative to the guest SSH user's home. If omitted, \
+           GUEST_PATH defaults to ~/$(basename HOST_PATH)."
+        ~docv:"HOST_PATH[:GUEST_PATH]")
+
+let mount_cmd =
+  Cmd.v
+    (Cmd.info "mount" ~doc:"hot-mount a host directory into a running VM")
+    Term.(
+      const mount $ virtle_opts_arg $ mount_mode_arg $ mount_name_arg
+      $ mount_spec_arg)
+
+let umount_guest_path_arg =
+  Arg.(
+    required
+    & pos 1 (some string) None
+    & info []
+        ~doc:
+          "Guest mount path to unmount. A path starting with ~ is resolved \
+           relative to the guest SSH user's home."
+        ~docv:"GUEST_PATH")
+
+let umount_cmd =
+  Cmd.v
+    (Cmd.info "umount" ~doc:"unmount a hot-mounted directory from a running VM")
+    Term.(
+      const umount $ virtle_opts_arg $ mount_name_arg $ umount_guest_path_arg)
+
 let stop_name_arg =
   Arg.(
     value
@@ -255,6 +310,15 @@ let main_cmd =
   in
   Cmd.group
     (Cmd.info "ash" ~version ~doc ~man)
-    [ spawn_cmd; attach_cmd; stop_cmd; regenerate_cmd; ls_cmd; rm_cmd ]
+    [
+      spawn_cmd;
+      attach_cmd;
+      mount_cmd;
+      umount_cmd;
+      stop_cmd;
+      regenerate_cmd;
+      ls_cmd;
+      rm_cmd;
+    ]
 
 let () = exit (Cmd.eval main_cmd)

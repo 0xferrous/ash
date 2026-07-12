@@ -59,6 +59,10 @@ let find_virtiofsd () =
     ~hint:"install virtiofsd into PATH so virtle can start virtiofs mounts."
     None "virtiofsd"
 
+let find_bindfs () =
+  find_exe ~hint:"install bindfs into PATH so ash can create hot mounts." None
+    "bindfs"
+
 let find_ssh explicit_path =
   find_exe ~hint:"pass a valid --ssh PATH." explicit_path "ssh"
 
@@ -127,25 +131,6 @@ let string_array_of_doc doc path =
       Log.fatal "ash.toml is missing string array field %s"
         (String.concat "." path)
 
-let json_string value =
-  let b = Buffer.create (String.length value + 8) in
-  Buffer.add_char b '"';
-  String.iter
-    (function
-      | '"' -> Buffer.add_string b "\\\""
-      | '\\' -> Buffer.add_string b "\\\\"
-      | '\b' -> Buffer.add_string b "\\b"
-      | '\012' -> Buffer.add_string b "\\f"
-      | '\n' -> Buffer.add_string b "\\n"
-      | '\r' -> Buffer.add_string b "\\r"
-      | '\t' -> Buffer.add_string b "\\t"
-      | c when Char.code c < 0x20 ->
-          Buffer.add_string b (Printf.sprintf "\\u%04x" (Char.code c))
-      | c -> Buffer.add_char b c)
-    value;
-  Buffer.add_char b '"';
-  Buffer.contents b
-
 let virtiofs_section ~socket ~bin =
   Otoml.table
     [
@@ -205,32 +190,26 @@ let workspace_mount ~workspace_guest_dir ~workspace_host_dir =
     read_only = false;
   }
 
-let guest_mount_script (mount : Agent_box.mount) =
-  let mount_args =
-    if mount.read_only then
-      Printf.sprintf "-t virtiofs -o ro -- %s %s"
-        (Util.shell_quote mount.tag)
-        (Util.shell_quote mount.target)
-    else
-      Printf.sprintf "-t virtiofs -- %s %s"
-        (Util.shell_quote mount.tag)
-        (Util.shell_quote mount.target)
-  in
-  String.concat "\n"
-    [
-      "set -eu";
-      "if /run/current-system/sw/bin/mountpoint -q "
-      ^ Util.shell_quote mount.target
-      ^ "; then";
-      "  exit 42";
-      "fi";
-      "/run/current-system/sw/bin/install -d " ^ Util.shell_quote mount.target;
-      "/run/current-system/sw/bin/mount " ^ mount_args;
-    ]
+let hotmounts_dir ~name = Filename.concat (state_dir name) "hotmounts"
+let hotmounts_guest_dir = "/run/ash/hotmounts"
+let hotmount_metadata_dir ~name = Filename.concat (hotmounts_dir ~name) ".ash"
 
-let guest_exec_params script =
-  "{\"path\":\"/run/current-system/sw/bin/sh\",\"args\":[\"-c\","
-  ^ json_string script ^ "],\"captureOutput\":true}"
+let hotmount_slug ~host_dir ~guest_path =
+  let digest = Digest.to_hex (Digest.string (host_dir ^ "\000" ^ guest_path)) in
+  Util.name_slug (Filename.basename host_dir ^ "-" ^ String.sub digest 0 12)
+
+type hotmount_mode = Read_only | Read_write
+
+let hotmount_mode_of_string = function
+  | "ro" -> Read_only
+  | "rw" -> Read_write
+  | mode -> Log.fatal "unsupported mount mode %S; expected ro or rw" mode
+
+let hotmount_mode_name = function Read_only -> "ro" | Read_write -> "rw"
+
+let mount_action (mount : Agent_box.mount) =
+  Qga.mount_virtiofs_action ~name:("ash-mount-" ^ mount.tag) ~tag:mount.tag
+    ~target:mount.target ~read_only:mount.read_only
 
 let write_profile_mount_ssh_wrapper ~name ~virtle ~manifest_path ~ssh_exec
     mounts =
@@ -238,7 +217,7 @@ let write_profile_mount_ssh_wrapper ~name ~virtle ~manifest_path ~ssh_exec
   let mount_commands =
     mounts
     |> List.map (fun (mount : Agent_box.mount) ->
-        let params = guest_exec_params (guest_mount_script mount) in
+        let params = Qga.params (mount_action mount) in
         String.concat "\n"
           [
             "result=$(" ^ Util.shell_quote virtle ^ " --manifest "
@@ -334,22 +313,6 @@ type vm_info = {
 
 let control_socket_path dir = Filename.concat dir "virtle.sock"
 
-let json_int_field ~field text =
-  let int_value = function
-    | `Int value -> Some value
-    | `Intlit value -> int_of_string_opt value
-    | _ -> None
-  in
-  let rec find = function
-    | `Assoc fields -> (
-        match Option.bind (List.assoc_opt field fields) int_value with
-        | Some value -> Some value
-        | None -> fields |> List.find_map (fun (_, value) -> find value))
-    | `List values -> List.find_map find values
-    | _ -> None
-  in
-  try Yojson.Safe.from_string text |> find with Yojson.Json_error _ -> None
-
 let socket_accepts_connection path =
   if not (Sys.file_exists path) then false
   else
@@ -380,7 +343,7 @@ let control_socket_status_cid path =
             let acc = acc ^ chunk in
             if String.contains chunk '\n' then acc else read_response acc
         in
-        read_response "" |> json_int_field ~field:"cid"
+        read_response "" |> Qga.int_field ~field:"cid"
       with Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _ ->
         None)
 
@@ -622,17 +585,214 @@ let profile_mounts_for_inputs inputs =
 let execute_profile_mounts ~virtle ~path mounts =
   List.iter
     (fun (mount : Agent_box.mount) ->
+      let action = mount_action mount in
       let output =
         virtle_rpc ~virtle ~path ~method_name:"guest-exec"
-          ~params:(guest_exec_params (guest_mount_script mount))
-          ()
+          ~params:(Qga.params action) ()
       in
-      match json_int_field ~field:"exitCode" output with
+      match (Qga.result action output).exit_code with
       | Some 0 -> Log.info "mounted %s at %s" mount.tag mount.target
       | Some 42 -> ()
       | _ ->
           Log.fatal "failed to mount %s at %s: %s" mount.tag mount.target output)
     mounts
+
+let ensure_bindfs_mount ~bindfs ~mode ~source ~target =
+  Util.ensure_dir target;
+  let mode_args = match mode with Read_only -> [ "-r" ] | Read_write -> [] in
+  let bindfs_args = [ "--multithreaded"; "--no-allow-other" ] @ mode_args in
+  let bindfs_command =
+    String.concat " "
+      ([ Util.shell_quote bindfs ]
+      @ List.map Util.shell_quote bindfs_args
+      @ [ Util.shell_quote source; Util.shell_quote target ])
+  in
+  let bind_mount_command =
+    String.concat " "
+      [
+        "mount";
+        "--bind";
+        "--";
+        Util.shell_quote source;
+        Util.shell_quote target;
+      ]
+  in
+  let bind_mount_command =
+    match mode with
+    | Read_write -> bind_mount_command
+    | Read_only ->
+        bind_mount_command ^ " && mount -o remount,bind,ro -- "
+        ^ Util.shell_quote target
+  in
+  let command =
+    String.concat "\n"
+      [
+        "set -u";
+        "if mountpoint -q -- " ^ Util.shell_quote target ^ "; then exit 0; fi";
+        "bindfs_err=$(mktemp)";
+        "if " ^ bindfs_command ^ " 2>\"$bindfs_err\"; then";
+        "  rm -f \"$bindfs_err\"";
+        "  exit 0";
+        "else";
+        "  bindfs_status=$?";
+        "fi";
+        "if [ \"$(id -u)\" != 0 ]; then";
+        "  printf '%s\n\
+         ' 'ash: bindfs failed; kernel mount --bind fallback requires root' >&2";
+        "  cat \"$bindfs_err\" >&2";
+        "  rm -f \"$bindfs_err\"";
+        "  exit \"$bindfs_status\"";
+        "fi";
+        "printf '%s\n\
+         ' 'ash: bindfs failed; trying kernel mount --bind fallback' >&2";
+        "cat \"$bindfs_err\" >&2";
+        "rm -f \"$bindfs_err\"";
+        "if " ^ bind_mount_command ^ "; then";
+        "  exit 0";
+        "fi";
+        "exit \"$bindfs_status\"";
+      ]
+  in
+  let code = Util.run_foreground "/bin/sh" [ "-c"; command ] in
+  if code <> 0 then
+    Log.fatal "failed to mount host directory %S at hotmount staging path %S"
+      source target
+
+let split_hotmount_spec spec =
+  match String.index_opt spec ':' with
+  | None -> (spec, None)
+  | Some idx ->
+      let host_path = String.sub spec 0 idx in
+      let guest_len = String.length spec - idx - 1 in
+      let guest_path = String.sub spec (idx + 1) guest_len in
+      (host_path, Util.some_if (guest_path <> "") guest_path)
+
+let guest_home user = if user = "root" then "/root" else "/home/" ^ user
+
+let metadata_path ~name ~source_name =
+  Filename.concat (hotmount_metadata_dir ~name) (source_name ^ ".meta")
+
+let write_hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode =
+  let content =
+    String.concat "\n"
+      [ guest_path; host_dir; hotmount_mode_name mode; source_name; "" ]
+  in
+  Util.write_file (metadata_path ~name ~source_name) content
+
+let first_line path =
+  try Some (In_channel.with_open_text path input_line) with _ -> None
+
+let find_hotmount_metadata_by_guest_path ~name ~guest_path =
+  let dir = hotmount_metadata_dir ~name in
+  if not (Sys.file_exists dir) then None
+  else
+    Sys.readdir dir |> Array.to_list
+    |> List.filter_map (fun entry ->
+        let path = Filename.concat dir entry in
+        match first_line path with
+        | Some line when line = guest_path ->
+            let source_name = Filename.remove_extension entry in
+            Some (source_name, path)
+        | _ -> None)
+    |> List.find_opt (fun _ -> true)
+
+let resolve_hotmount_guest_path ~user ~host_dir = function
+  | None -> Filename.concat (guest_home user) (Filename.basename host_dir)
+  | Some "~" -> guest_home user
+  | Some path when String.length path >= 2 && String.sub path 0 2 = "~/" ->
+      Filename.concat (guest_home user)
+        (String.sub path 2 (String.length path - 2))
+  | Some path when Filename.is_relative path ->
+      Log.fatal "guest mount path %S must be absolute or start with ~" path
+  | Some path -> path
+
+let hotmount ?virtle ~mode ~name ~spec () =
+  let bindfs = find_bindfs () in
+  let virtle = find_virtle virtle in
+  let host_path, guest_path = split_hotmount_spec spec in
+  let host_dir = Util.absolute_path (Util.expand_home host_path) in
+  if host_path = "" then Log.fatal "host path is empty";
+  if not (Sys.file_exists host_dir) then
+    Log.fatal "host directory %S does not exist" host_dir;
+  if (Unix.stat host_dir).st_kind <> Unix.S_DIR then
+    Log.fatal "host path %S is not a directory" host_dir;
+  let name, path = select_attach_vm (Some name) in
+  let user = manifest_string (load_manifest_doc path) [ "ssh"; "user" ] in
+  let guest_path = resolve_hotmount_guest_path ~user ~host_dir guest_path in
+  let hotmounts_dir = hotmounts_dir ~name in
+  let source_name = hotmount_slug ~host_dir ~guest_path in
+  let mount_dir = Filename.concat hotmounts_dir source_name in
+  ensure_bindfs_mount ~bindfs ~mode ~source:host_dir ~target:mount_dir;
+  let action =
+    Qga.hotmount_action ~name:"ash-hotmount"
+      ~read_only:(match mode with Read_only -> true | Read_write -> false)
+      ~hotmounts_guest_dir ~source_name ~guest_path
+  in
+  let output =
+    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
+      ~params:(Qga.params action) ()
+  in
+  match (Qga.result action output).exit_code with
+  | Some 0 ->
+      write_hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode;
+      Log.info "mounted %s at %s (%s)" host_dir guest_path
+        (hotmount_mode_name mode);
+      Printf.printf "%s -> %s (%s)\n" host_dir guest_path
+        (hotmount_mode_name mode)
+  | Some 42 -> Log.info "%s is already a mountpoint" guest_path
+  | _ -> Log.fatal "failed to hotmount %s at %s: %s" host_dir guest_path output
+
+let unmount_hotmount_staging mount_dir =
+  let command =
+    String.concat "\n"
+      [
+        "set -u";
+        "target=" ^ Util.shell_quote mount_dir;
+        "if ! mountpoint -q -- \"$target\"; then exit 0; fi";
+        "if command -v fusermount3 >/dev/null 2>&1; then";
+        "  fusermount3 -u \"$target\" && exit 0";
+        "  fusermount3 -uz \"$target\" && exit 0";
+        "fi";
+        "if command -v fusermount >/dev/null 2>&1; then";
+        "  fusermount -u \"$target\" && exit 0";
+        "  fusermount -uz \"$target\" && exit 0";
+        "fi";
+        "if [ \"$(id -u)\" = 0 ]; then";
+        "  umount \"$target\" && exit 0";
+        "fi";
+        "printf '%s\n' 'ash: failed to unmount host hotmount staging path' >&2";
+        "exit 1";
+      ]
+  in
+  let code = Util.run_foreground "/bin/sh" [ "-c"; command ] in
+  if code <> 0 then Log.fatal "failed to unmount host staging path %S" mount_dir
+
+let hotunmount ?virtle ~name ~guest_path () =
+  let virtle = find_virtle virtle in
+  let name, path = select_attach_vm (Some name) in
+  let user = manifest_string (load_manifest_doc path) [ "ssh"; "user" ] in
+  let guest_path =
+    resolve_hotmount_guest_path ~user ~host_dir:"" (Some guest_path)
+  in
+  let metadata = find_hotmount_metadata_by_guest_path ~name ~guest_path in
+  let action = Qga.unmount_action ~name:"ash-hotunmount" ~guest_path in
+  let output =
+    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
+      ~params:(Qga.params action) ()
+  in
+  (match (Qga.result action output).exit_code with
+  | Some 0 -> Log.info "unmounted guest path %s" guest_path
+  | Some 42 -> Log.info "%s is not a mountpoint in guest" guest_path
+  | _ -> Log.fatal "failed to unmount guest path %s: %s" guest_path output);
+  (match metadata with
+  | None -> Log.warn "no hotmount metadata found for %s" guest_path
+  | Some (source_name, metadata_path) ->
+      let mount_dir = Filename.concat (hotmounts_dir ~name) source_name in
+      unmount_hotmount_staging mount_dir;
+      (try Unix.unlink metadata_path with Unix.Unix_error _ -> ());
+      (try Unix.rmdir mount_dir with Unix.Unix_error _ -> ());
+      Log.info "unmounted host staging path %s" mount_dir);
+  Printf.printf "unmounted %s\n" guest_path
 
 let ssh_identity_path ~name = Filename.concat (state_dir name) "id_ed25519"
 
@@ -663,8 +823,6 @@ let ensure_ssh_identity ~name =
     if code <> 0 then Log.fatal "ssh-keygen failed with exit code %d" code;
     identity
 
-let json_array xs = "[" ^ String.concat "," (List.map json_string xs) ^ "]"
-
 let install_ssh_key ~virtle ~path ~name ~user =
   let identity = ensure_ssh_identity ~name in
   Log.debug "installing SSH key for VM %s user %s using identity %s" name user
@@ -681,35 +839,15 @@ let install_ssh_key ~virtle ~path ~name ~user =
     if user = "root" then "/root/.ssh/authorized_keys"
     else "/home/" ^ user ^ "/.ssh/authorized_keys"
   in
-  let script =
-    String.concat "\n"
-      [
-        "set -eu";
-        "PATH=/run/current-system/sw/bin:/bin";
-        "auth=$1";
-        "key=$2";
-        "dir=$(dirname \"$auth\")";
-        "mkdir -p \"$dir\"";
-        "chown " ^ user ^ ":users \"$dir\"";
-        "chmod 700 \"$dir\"";
-        "touch \"$auth\"";
-        "if ! grep -qxF -- \"$key\" \"$auth\"; then";
-        "  printf '%s\\n' \"$key\" >> \"$auth\"";
-        "fi";
-        "chown " ^ user ^ ":users \"$auth\"";
-        "chmod 600 \"$auth\"";
-      ]
+  let action =
+    Qga.install_ssh_key_action ~name:"ash-ssh-autoprovision" ~user ~target
+      ~authorized_key
   in
-  let params =
-    "{\"path\":"
-    ^ json_string "/run/current-system/sw/bin/sh"
-    ^ ",\"args\":"
-    ^ json_array
-        [ "-c"; script; "ash-ssh-autoprovision"; target; authorized_key ]
-    ^ ",\"captureOutput\":true}"
+  let output =
+    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
+      ~params:(Qga.params action) ()
   in
-  let output = virtle_rpc ~virtle ~path ~method_name:"guest-exec" ~params () in
-  match json_int_field ~field:"exitCode" output with
+  match (Qga.result action output).exit_code with
   | Some 0 -> identity
   | _ -> Log.fatal "SSH autoprovision failed: %s" output
 
@@ -718,7 +856,7 @@ let attach_running ?virtle ~name ~path ~verbose () =
   Log.debug "attaching to VM %s using manifest %s" name path;
   let status = rpc_status ~virtle ~path () in
   let cid =
-    match json_int_field ~field:"cid" status with
+    match Qga.int_field ~field:"cid" status with
     | Some cid when cid > 0 -> cid
     | _ -> Log.fatal "could not read VM cid from virtle status: %s" status
   in
@@ -802,13 +940,17 @@ let render_resolved_manifest inputs =
   in
   let workspace_guest_dir = "/home/" ^ user ^ "/workspace" in
   let workspace_host_dir = Filename.concat state_dir "workspace" in
+  let hotmounts_host_dir = hotmounts_dir ~name:inputs.name in
   Util.ensure_dir workspace_host_dir;
+  Util.ensure_dir hotmounts_host_dir;
   let workspace_mount =
     workspace_mount ~workspace_guest_dir ~workspace_host_dir
   in
   let mounts =
     [
       profile_mount ~bin:inputs.virtiofsd workspace_mount;
+      virtiofs_mount ~tag:"hotmounts" ~source:hotmounts_host_dir
+        ~read_only:false ~socket:"hotmounts.sock" ~bin:inputs.virtiofsd ();
       virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true
         ~socket:(Option.value inputs.ro_store_socket ~default:"ro-store.sock")
         ~bin:inputs.virtiofsd ();
