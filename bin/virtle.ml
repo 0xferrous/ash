@@ -1188,13 +1188,17 @@ let render_manifest (inputs : manifest_inputs) =
       virtle = inputs.virtle;
     }
 
+let profiles_log profiles =
+  match profiles with [] -> "(none)" | profiles -> String.concat "," profiles
+
 let write_manifest_for_inputs inputs =
   let _, manifest = render_manifest inputs in
   write_ash_config inputs;
   let path = manifest_path ~name:inputs.name in
   Log.debug "generated virtle manifest path: %s" path;
   Util.write_file path manifest;
-  Log.debug "wrote virtle manifest (%d bytes)" (String.length manifest);
+  Log.debug "wrote virtle manifest %s (%d bytes, profiles: %s)" path
+    (String.length manifest) (profiles_log inputs.profiles);
   path
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
@@ -1318,8 +1322,8 @@ let rewrite_saved_manifest (inputs : manifest_inputs) =
   let _, manifest = render_manifest inputs in
   let path = manifest_path ~name:inputs.name in
   Util.write_file path manifest;
-  Log.debug "rewrote virtle manifest %s (%d bytes)" path
-    (String.length manifest);
+  Log.debug "rewrote virtle manifest %s (%d bytes, profiles: %s)" path
+    (String.length manifest) (profiles_log inputs.profiles);
   path
 
 let select_running_vm ?name running =
@@ -1414,7 +1418,7 @@ let regenerate ?virtle ~name () =
   let manifest_path = manifest_path ~name in
   let ssh_wrapper_path = profile_mount_ssh_wrapper_path ~name in
   Util.write_file manifest_path manifest;
-  Log.debug "rewrote virtle manifest %s (%d bytes)" manifest_path
-    (String.length manifest);
+  Log.debug "rewrote virtle manifest %s (%d bytes, profiles: %s)" manifest_path
+    (String.length manifest) (profiles_log inputs.profiles);
   Printf.printf "regenerated %s\n" manifest_path;
   Printf.printf "regenerated %s\n" ssh_wrapper_path
