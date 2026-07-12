@@ -1,0 +1,73 @@
+name: Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Optional base URL for generated docs, e.g. https://0xf.rs/ash/"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build ash
+        run: nix build .#ash
+
+      - name: Generate command pages
+        env:
+          INPUT_BASE_URL: ${{ github.event.inputs.base_url }}
+          VAR_BASE_URL: ${{ vars.ASH_PAGES_BASE_URL }}
+        run: |
+          set -euo pipefail
+          base_url="${INPUT_BASE_URL:-${VAR_BASE_URL:-}}"
+          mkdir -p public
+          if [ -n "$base_url" ]; then
+            ./result/bin/ash-docs-html public "$base_url"
+          else
+            ./result/bin/ash-docs-html public
+          fi
+          touch public/.nojekyll
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    name: Deploy pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -29,6 +29,8 @@
           inherit src;
           duneVersion = "3";
 
+          nativeBuildInputs = [ pkgs.git ];
+
           propagatedBuildInputs = [
             ocamlPackages.cmdliner
             ocamlPackages.otoml
@@ -37,11 +39,25 @@
 
           strictDeps = true;
         };
+
+        ash-command-pages = pkgs.stdenvNoCC.mkDerivation {
+          pname = "ash-command-pages";
+          version = "0.1.0";
+          dontUnpack = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/share/doc/ash/html"
+            ${ash}/bin/ash-docs-html "$out/share/doc/ash/html"
+            runHook postInstall
+          '';
+        };
       in
       {
         packages = {
           default = ash;
           ash = ash;
+          command-pages = ash-command-pages;
+          ash-command-pages = ash-command-pages;
         };
 
         apps.default = flake-utils.lib.mkApp { drv = ash; };
