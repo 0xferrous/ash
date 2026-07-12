@@ -76,6 +76,25 @@ When invoking through `nix run`, pass app arguments after `--` if they begin wit
 nix run . -- attach --virtle ./result/bin/virtle rustbox
 ```
 
+## External commands
+
+`ash` is a coordinator. It calls these host-side binaries:
+
+- `nix` — evaluates the selected flake/NixOS configuration for kernel, initrd, toplevel, kernel params, `ssh`, and `systemd-ssh-proxy` paths.
+- `virtle` — validates, launches, controls, and queries VMs. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`; override with `--virtle PATH`.
+- `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest.
+- `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
+- `systemd-ssh-proxy` — host SSH proxy used for vsock SSH connections. Defaults to the selected NixOS config's `config.systemd.package`; override with `--systemd-ssh-proxy PATH`.
+- `systemd-run` — starts background VMs as transient user units for `ash spawn`, `ash spawn --attach --keep`, and `ash attach --spawn --keep`.
+- `systemctl` — checks/stops ash-owned background units for `ash stop`.
+- `ssh-keygen` — creates ash's SSH autoprovisioning key when needed.
+- `/bin/sh` — used internally to run small shell commands and capture output.
+- `du` — used by `ash ls`/state listing to estimate VM state disk usage; ash falls back to walking the directory tree if it fails.
+
+`ash` also prints a `journalctl --user -u ash-<name>.service -f` hint for background VMs, but does not run `journalctl` itself.
+
+Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace virtiofs tags and installing ash's SSH public key. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `install`, `mkdir`, `chown`, `chmod`, and `grep`; they must exist in the guest image.
+
 Spawn options:
 
 - `-p`, `--profile PROFILE` — repeatable agent-box profile; profiles supply mount points.
