@@ -55,6 +55,14 @@ let umount opts name guest_path =
   Log.set_debug opts.global.debug;
   Virtle.hotunmount ?virtle:opts.virtle ~name ~guest_path ()
 
+let mount_profile opts name profiles =
+  Log.set_debug opts.global.debug;
+  Virtle.hotmount_profiles ?virtle:opts.virtle ~name ~profiles ()
+
+let umount_profile opts name profiles =
+  Log.set_debug opts.global.debug;
+  Virtle.hotunmount_profiles ?virtle:opts.virtle ~name ~profiles ()
+
 let virtle_arg =
   Arg.(
     value
@@ -272,6 +280,24 @@ let umount_cmd =
     Term.(
       const umount $ virtle_opts_arg $ mount_name_arg $ umount_guest_path_arg)
 
+let profile_names_arg =
+  Arg.(
+    non_empty & pos_right 1 string []
+    & info [] ~doc:"Profile names to hotmount." ~docv:"PROFILE")
+
+let mount_profile_cmd =
+  Cmd.v
+    (Cmd.info "mount-profile" ~doc:"hot-mount one or more profiles")
+    Term.(
+      const mount_profile $ virtle_opts_arg $ mount_name_arg $ profile_names_arg)
+
+let umount_profile_cmd =
+  Cmd.v
+    (Cmd.info "umount-profile" ~doc:"unmount one or more hot-mounted profiles")
+    Term.(
+      const umount_profile $ virtle_opts_arg $ mount_name_arg
+      $ profile_names_arg)
+
 let stop_name_arg =
   Arg.(
     value
@@ -315,6 +341,8 @@ let main_cmd =
       attach_cmd;
       mount_cmd;
       umount_cmd;
+      mount_profile_cmd;
+      umount_profile_cmd;
       stop_cmd;
       regenerate_cmd;
       ls_cmd;

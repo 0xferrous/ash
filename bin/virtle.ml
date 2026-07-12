@@ -707,19 +707,12 @@ let resolve_hotmount_guest_path ~user ~host_dir = function
       Log.fatal "guest mount path %S must be absolute or start with ~" path
   | Some path -> path
 
-let hotmount ?virtle ~mode ~name ~spec () =
-  let bindfs = find_bindfs () in
-  let virtle = find_virtle virtle in
-  let host_path, guest_path = split_hotmount_spec spec in
-  let host_dir = Util.absolute_path (Util.expand_home host_path) in
-  if host_path = "" then Log.fatal "host path is empty";
+let hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir
+    ~guest_path () =
   if not (Sys.file_exists host_dir) then
     Log.fatal "host directory %S does not exist" host_dir;
   if (Unix.stat host_dir).st_kind <> Unix.S_DIR then
     Log.fatal "host path %S is not a directory" host_dir;
-  let name, path = select_attach_vm (Some name) in
-  let user = manifest_string (load_manifest_doc path) [ "ssh"; "user" ] in
-  let guest_path = resolve_hotmount_guest_path ~user ~host_dir guest_path in
   let hotmounts_dir = hotmounts_dir ~name in
   let source_name = hotmount_slug ~host_dir ~guest_path in
   let mount_dir = Filename.concat hotmounts_dir source_name in
@@ -730,7 +723,7 @@ let hotmount ?virtle ~mode ~name ~spec () =
       ~hotmounts_guest_dir ~source_name ~guest_path
   in
   let output =
-    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
+    virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
       ~params:(Qga.params action) ()
   in
   match (Qga.result action output).exit_code with
@@ -742,6 +735,20 @@ let hotmount ?virtle ~mode ~name ~spec () =
         (hotmount_mode_name mode)
   | Some 42 -> Log.info "%s is already a mountpoint" guest_path
   | _ -> Log.fatal "failed to hotmount %s at %s: %s" host_dir guest_path output
+
+let hotmount ?virtle ~mode ~name ~spec () =
+  let bindfs = find_bindfs () in
+  let virtle = find_virtle virtle in
+  let host_path, guest_path = split_hotmount_spec spec in
+  let host_dir = Util.absolute_path (Util.expand_home host_path) in
+  if host_path = "" then Log.fatal "host path is empty";
+  let name, manifest_path = select_attach_vm (Some name) in
+  let user =
+    manifest_string (load_manifest_doc manifest_path) [ "ssh"; "user" ]
+  in
+  let guest_path = resolve_hotmount_guest_path ~user ~host_dir guest_path in
+  hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir ~guest_path
+    ()
 
 let unmount_hotmount_staging mount_dir =
   let command =
@@ -773,17 +780,11 @@ exit 1
   let code = Util.run_foreground "/bin/sh" [ "-c"; command ] in
   if code <> 0 then Log.fatal "failed to unmount host staging path %S" mount_dir
 
-let hotunmount ?virtle ~name ~guest_path () =
-  let virtle = find_virtle virtle in
-  let name, path = select_attach_vm (Some name) in
-  let user = manifest_string (load_manifest_doc path) [ "ssh"; "user" ] in
-  let guest_path =
-    resolve_hotmount_guest_path ~user ~host_dir:"" (Some guest_path)
-  in
+let hotunmount_path ~virtle ~manifest_path ~name ~guest_path () =
   let metadata = find_hotmount_metadata_by_guest_path ~name ~guest_path in
   let action = Qga.unmount_action ~name:"ash-hotunmount" ~guest_path in
   let output =
-    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
+    virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
       ~params:(Qga.params action) ()
   in
   (match (Qga.result action output).exit_code with
@@ -799,6 +800,61 @@ let hotunmount ?virtle ~name ~guest_path () =
       (try Unix.rmdir mount_dir with Unix.Unix_error _ -> ());
       Log.info "unmounted host staging path %s" mount_dir);
   Printf.printf "unmounted %s\n" guest_path
+
+let hotunmount ?virtle ~name ~guest_path () =
+  let virtle = find_virtle virtle in
+  let name, manifest_path = select_attach_vm (Some name) in
+  let user =
+    manifest_string (load_manifest_doc manifest_path) [ "ssh"; "user" ]
+  in
+  let guest_path =
+    resolve_hotmount_guest_path ~user ~host_dir:"" (Some guest_path)
+  in
+  hotunmount_path ~virtle ~manifest_path ~name ~guest_path ()
+
+let profile_resources_for_running_vm ~name ~manifest_path profiles =
+  let saved_doc = load_manifest_doc (ash_config_path ~name) in
+  let config_path = string_of_doc saved_doc [ "spawn"; "config_path" ] in
+  let config = Agent_box.load config_path in
+  let user =
+    manifest_string (load_manifest_doc manifest_path) [ "ssh"; "user" ]
+  in
+  let resources =
+    Agent_box.resources_for_profiles ~guest_user:user config profiles
+  in
+  if resources.write_files <> [] then
+    Log.warn
+      "runtime profile mounting does not support profile file entries; \
+       skipping %d file(s)"
+      (List.length resources.write_files);
+  resources
+
+let hotmount_profiles ?virtle ~name ~profiles () =
+  if profiles = [] then Log.fatal "mount-profile requires at least one PROFILE";
+  let bindfs = find_bindfs () in
+  let virtle = find_virtle virtle in
+  let name, manifest_path = select_attach_vm (Some name) in
+  let resources =
+    profile_resources_for_running_vm ~name ~manifest_path profiles
+  in
+  List.iter
+    (fun (mount : Agent_box.mount) ->
+      let mode = if mount.read_only then Read_only else Read_write in
+      hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode
+        ~host_dir:mount.source ~guest_path:mount.target ())
+    resources.mounts
+
+let hotunmount_profiles ?virtle ~name ~profiles () =
+  if profiles = [] then Log.fatal "umount-profile requires at least one PROFILE";
+  let virtle = find_virtle virtle in
+  let name, manifest_path = select_attach_vm (Some name) in
+  let resources =
+    profile_resources_for_running_vm ~name ~manifest_path profiles
+  in
+  List.iter
+    (fun (mount : Agent_box.mount) ->
+      hotunmount_path ~virtle ~manifest_path ~name ~guest_path:mount.target ())
+    resources.mounts
 
 let ssh_identity_path ~name = Filename.concat (state_dir name) "id_ed25519"
 
