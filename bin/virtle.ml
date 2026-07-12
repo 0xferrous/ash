@@ -332,7 +332,16 @@ let control_socket_status_cid path =
     (fun () ->
       try
         Unix.connect fd (Unix.ADDR_UNIX path);
-        let request = "{\"id\":1,\"method\":\"status\",\"params\":{}}\n" in
+        let request =
+          Yojson.Safe.to_string
+            (`Assoc
+               [
+                 ("id", `Int 1);
+                 ("method", `String "status");
+                 ("params", `Assoc []);
+               ])
+          ^ "\n"
+        in
         let _ = Unix.write_substring fd request 0 (String.length request) in
         let buffer = Bytes.create 4096 in
         let rec read_response acc =

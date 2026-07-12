@@ -1,30 +1,14 @@
 type action = { name : string; path : string; args : string list }
 type result = { action : string; output : string; exit_code : int option }
 
-let json_string value =
-  let b = Buffer.create (String.length value + 8) in
-  Buffer.add_char b '"';
-  String.iter
-    (function
-      | '"' -> Buffer.add_string b "\\\""
-      | '\\' -> Buffer.add_string b "\\\\"
-      | '\b' -> Buffer.add_string b "\\b"
-      | '\012' -> Buffer.add_string b "\\f"
-      | '\n' -> Buffer.add_string b "\\n"
-      | '\r' -> Buffer.add_string b "\\r"
-      | '\t' -> Buffer.add_string b "\\t"
-      | c when Char.code c < 0x20 ->
-          Buffer.add_string b (Printf.sprintf "\\u%04x" (Char.code c))
-      | c -> Buffer.add_char b c)
-    value;
-  Buffer.add_char b '"';
-  Buffer.contents b
-
-let json_array xs = "[" ^ String.concat "," (List.map json_string xs) ^ "]"
-
 let params action =
-  "{\"path\":" ^ json_string action.path ^ ",\"args\":" ^ json_array action.args
-  ^ ",\"captureOutput\":true}"
+  `Assoc
+    [
+      ("path", `String action.path);
+      ("args", `List (List.map (fun arg -> `String arg) action.args));
+      ("captureOutput", `Bool true);
+    ]
+  |> Yojson.Safe.to_string
 
 let int_field ~field text =
   let int_value = function

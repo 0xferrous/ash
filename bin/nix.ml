@@ -8,7 +8,15 @@ type boot = {
   systemd_ssh_proxy : string;
 }
 
-let parse_string_array = Agent_box.parse_string_array
+let parse_json_string_array text =
+  match Yojson.Safe.from_string text with
+  | `List values ->
+      List.map
+        (function
+          | `String value -> value
+          | _ -> Log.fatal "expected JSON string array from nix, got: %s" text)
+        values
+  | _ -> Log.fatal "expected JSON string array from nix, got: %s" text
 
 let nix_exe =
   lazy
@@ -136,7 +144,7 @@ let resolve_boot ~target =
   in
   let kernel_params =
     eval_json ~label:"kernel parameters" (attr ^ ".config.boot.kernelParams")
-    |> parse_string_array
+    |> parse_json_string_array
   in
   let init_param = "init=" ^ Filename.concat toplevel "init" in
   let has_init_param =

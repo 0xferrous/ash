@@ -134,23 +134,6 @@ let command_output ?(debug = true) command =
   let output = String.trim output in
   if status = 0 then output else failwith ("command failed: " ^ command)
 
-let toml_quote s =
-  let b = Buffer.create (String.length s + 8) in
-  Buffer.add_char b '"';
-  String.iter
-    (function
-      | '"' -> Buffer.add_string b "\\\""
-      | '\\' -> Buffer.add_string b "\\\\"
-      | '\n' -> Buffer.add_string b "\\n"
-      | '\r' -> Buffer.add_string b "\\r"
-      | '\t' -> Buffer.add_string b "\\t"
-      | c -> Buffer.add_char b c)
-    s;
-  Buffer.add_char b '"';
-  Buffer.contents b
-
-let toml_array xs = "[" ^ String.concat ", " (List.map toml_quote xs) ^ "]"
-
 let slug s =
   let b = Buffer.create (String.length s) in
   String.iter
