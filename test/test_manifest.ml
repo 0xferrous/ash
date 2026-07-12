@@ -85,6 +85,10 @@ let assert_bool label expected actual =
   if expected <> actual then
     fail (Printf.sprintf "%s: expected %b, got %b" label expected actual)
 
+let assert_int label expected actual =
+  if expected <> actual then
+    fail (Printf.sprintf "%s: expected %d, got %d" label expected actual)
+
 let assert_string_prefix label prefix value =
   if not (String.starts_with ~prefix value) then
     fail (Printf.sprintf "%s: expected %S to start with %S" label value prefix)
@@ -346,6 +350,47 @@ ssh_user = "agent"
   assert_string_contains "ro-store socket override" manifest
     "socket = \"/run/ro-store.sock\""
 
+let test_qga_params_use_valid_json () =
+  let action =
+    Qga.shell_action ~name:"test-qga"
+      ~args:[ "arg with spaces"; "quote \" newline\n tab\t" ]
+      {sh|printf '%s\n' "$1"|sh}
+  in
+  match Yojson.Safe.from_string (Qga.params action) with
+  | `Assoc fields ->
+      assert_equal "qga path" "/run/current-system/sw/bin/sh"
+        (match List.assoc_opt "path" fields with
+        | Some (`String value) -> value
+        | _ -> fail "qga path missing");
+      let args =
+        match List.assoc_opt "args" fields with
+        | Some (`List args) ->
+            List.map
+              (function
+                | `String value -> value | _ -> fail "non-string qga arg")
+              args
+        | _ -> fail "qga args missing"
+      in
+      assert_equal "qga action name" "test-qga" (List.nth args 2);
+      assert_equal "qga escaped arg" "quote \" newline\n tab\t"
+        (List.nth args 4);
+      assert_bool "qga captureOutput" true
+        (match List.assoc_opt "captureOutput" fields with
+        | Some (`Bool value) -> value
+        | _ -> false)
+  | _ -> fail "qga params should be a JSON object"
+
+let test_qga_int_field_finds_nested_values () =
+  let text = {|{"return":{"exitCode":42,"nested":{"cid":7}}}|} in
+  assert_int "qga exitCode" 42
+    (Option.value (Qga.int_field ~field:"exitCode" text) ~default:(-1));
+  assert_int "qga nested cid" 7
+    (Option.value (Qga.int_field ~field:"cid" text) ~default:(-1))
+
+let test_nix_json_string_array_parser () =
+  assert_equal "nix json array" "a,b c,d\ne"
+    (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -358,4 +403,7 @@ let () =
     test_default_profile_without_mount_cwd;
   run "read-only file write does not write back"
     test_readonly_file_write_has_no_write_back;
-  run "ro-store socket override" test_ro_store_socket_override
+  run "ro-store socket override" test_ro_store_socket_override;
+  run "qga params use valid json" test_qga_params_use_valid_json;
+  run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
+  run "nix json string array parser" test_nix_json_string_array_parser
