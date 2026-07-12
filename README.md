@@ -83,6 +83,8 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `nix` — evaluates the selected flake/NixOS configuration for kernel, initrd, toplevel, kernel params, `ssh`, and `systemd-ssh-proxy` paths.
 - `virtle` — validates, launches, controls, and queries VMs. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`; override with `--virtle PATH`.
 - `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest.
+- `bindfs` — used by `ash mount` to mirror a host directory into the VM state's `hotmounts` directory before exposing it through the VM's `hotmounts` virtiofs share. Ash invokes it with `--multithreaded --no-allow-other` to avoid older single-threaded FUSE `-s` compatibility issues and host FUSE setups where `allow_other` is unavailable; for read-only mounts ash adds bindfs' `-r` flag. This assumes virtiofsd can access the bindfs mount as the same host user that ran ash/virtle. Some FUSE setups also reject bindfs' internal `default_permissions` option; in that case ash falls back to a kernel `mount --bind` staging mount if the host permits it.
+- `mountpoint` — used by `ash mount` to avoid remounting an already-mounted host-side hotmount directory.
 - `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
 - `systemd-ssh-proxy` — host SSH proxy used for vsock SSH connections. Defaults to the selected NixOS config's `config.systemd.package`; override with `--systemd-ssh-proxy PATH`.
 - `systemd-run` — starts background VMs as transient user units for `ash spawn`, `ash spawn --attach --keep`, and `ash attach --spawn --keep`.
@@ -93,7 +95,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 `ash` also prints a `journalctl --user -u ash-<name>.service -f` hint for background VMs, but does not run `journalctl` itself.
 
-Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace virtiofs tags and installing ash's SSH public key. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `install`, `mkdir`, `chown`, `chmod`, and `grep`; they must exist in the guest image.
+Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags and installing ash's SSH public key. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `mkdir`, `chown`, `chmod`, and `grep`; they must exist in the guest image.
 
 Spawn options:
 
@@ -191,6 +193,7 @@ Limitation: `virtle` only uses `target` for `[[hotplug.mounts]]`, not launch-tim
 It also exposes these mount devices to the guest:
 
 - `workspace` — writable virtiofs share for `<state_dir>/workspace`, intended for `/home/<ssh-user>/workspace`
+- `hotmounts` — writable virtiofs share for `<state_dir>/hotmounts`, used by `ash mount` for QGA-driven hot mounts into a running VM.
 - `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock`; pass `--ro-store-socket PATH` to point this mount at an existing virtiofs daemon socket instead.
 - `persist` — writable ext4 image labeled `persist`
 - `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
@@ -220,7 +223,7 @@ fileSystems."/mnt/cwd" = {
 };
 ```
 
-Not every exposed mount must be mounted by the guest, but features depending on a path require the matching mount. For example, `--mount-cwd` sets `workspace.mount_cwd = true` and expects `workspace_cwd` to be mounted at `/mnt/cwd` inside the guest.
+Not every exposed mount must be mounted by the guest, but features depending on a path require the matching mount. For example, `--mount-cwd` sets `workspace.mount_cwd = true` and expects `workspace_cwd` to be mounted at `/mnt/cwd` inside the guest. `ash mount [--mode ro|rw] NAME HOST_PATH[:GUEST_PATH]` mounts `HOST_PATH` into `<state_dir>/hotmounts` with `bindfs`, then uses QGA to mount the `hotmounts` virtiofs tag at `/run/ash/hotmounts` if needed and bind-mount the selected subdirectory onto `GUEST_PATH`. If `GUEST_PATH` starts with `~`, ash resolves it using the guest SSH user's home; if it is omitted, ash uses `~/$(basename HOST_PATH)`. `ash umount NAME GUEST_PATH` unmounts the guest target and tears down the host-side staging mount recorded for that guest path, falling back to lazy FUSE unmount if virtiofsd still briefly holds the staging mount busy. Overlay mode is intentionally left for later.
 
 `ash` uses `/home/<ssh-user>/workspace` as the guest workspace directory. For the default `agent` user, this is `/home/agent/workspace`. The SSH user can be overridden per run with `--user`; `ash` validates that the selected NixOS configuration defines `users.users.<user>`. If the guest mounts the `workspace` tag via static guest config, that config must use the same user/path.
 
