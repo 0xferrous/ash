@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "node node_modules/vitepress/bin/vitepress.js dev docs",
+    "docs:build": "node node_modules/vitepress/bin/vitepress.js build docs",
+    "docs:preview": "node node_modules/vitepress/bin/vitepress.js preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3"
+  }
+}

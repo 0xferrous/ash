@@ -54,6 +54,7 @@
             ocamlPackages.ocamlformat
             ocamlPackages.otoml
             ocamlPackages.utop
+            pkgs.nodejs
           ];
         };
       });
