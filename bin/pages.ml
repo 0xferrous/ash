@@ -194,6 +194,10 @@ let spawn =
            user's authorized_keys through virtle guest-exec, then runs ssh \
            with that identity.";
         `P
+          "Pass --kitty to spawn to use kitten ssh instead of ssh for attached \
+           spawn sessions and save that choice in ash.toml for later \
+           regenerated launches.";
+        `P
           "This requires the guest to have QEMU Guest Agent support and the \
            guest user/home path expected by the generated manifest.";
         `S "GUEST CONTRACT";
@@ -242,6 +246,9 @@ let attach =
           "If the manifest has ssh.autoprovision enabled, attach creates or \
            reuses id_ed25519 in the VM state directory, installs the public \
            key through virtle guest-exec, and passes that identity to ssh.";
+        `P
+          "Pass --kitty to use kitten ssh instead of ssh for this attached \
+           session.";
         `S Manpage.s_examples;
         `Pre "ash attach work";
         `Pre "ash attach --spawn work";

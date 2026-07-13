@@ -9,6 +9,7 @@ type manifest_inputs = {
   ro_store_socket : string option;
   ssh : string option;
   systemd_ssh_proxy : string option;
+  kitty : bool;
   virtiofsd : string;
   virtle : string;
 }
@@ -26,6 +27,7 @@ type resolved_manifest_inputs = {
   ro_store_socket : string option;
   ssh : string;
   systemd_ssh_proxy : string;
+  kitty : bool;
   virtiofsd : string;
   virtle : string;
 }
@@ -65,6 +67,10 @@ let find_bindfs () =
 
 let find_ssh explicit_path =
   find_exe ~hint:"pass a valid --ssh PATH." explicit_path "ssh"
+
+let find_kitten () =
+  find_exe ~hint:"install kitty into PATH so `kitten ssh` is available." None
+    "kitten"
 
 let find_systemd_ssh_proxy explicit_path =
   find_exe ~hint:"pass a valid --systemd-ssh-proxy PATH." explicit_path
@@ -109,6 +115,10 @@ let ash_config_path ~name = Filename.concat (state_dir name) "ash.toml"
 
 let profile_mount_ssh_wrapper_path ~name =
   Filename.concat (state_dir name) "ssh-with-profile-mounts"
+
+let profile_mount_ssh_wrapper_path_for ~kitty ~name =
+  if kitty then Filename.concat (state_dir name) "ssh-with-profile-mounts-kitty"
+  else profile_mount_ssh_wrapper_path ~name
 
 let string_array xs = Otoml.array (List.map Otoml.string xs)
 
@@ -211,9 +221,9 @@ let mount_action (mount : Agent_box.mount) =
   Qga.mount_virtiofs_action ~name:("ash-mount-" ^ mount.tag) ~tag:mount.tag
     ~target:mount.target ~read_only:mount.read_only
 
-let write_profile_mount_ssh_wrapper ~name ~virtle ~manifest_path ~ssh_exec
-    mounts =
-  let path = profile_mount_ssh_wrapper_path ~name in
+let write_profile_mount_ssh_wrapper ?(kitty = false) ~name ~virtle
+    ~manifest_path ~ssh_exec mounts =
+  let path = profile_mount_ssh_wrapper_path_for ~kitty ~name in
   let mount_commands =
     mounts
     |> List.map (fun (mount : Agent_box.mount) ->
@@ -913,8 +923,9 @@ let install_ssh_key ~virtle ~path ~name ~user =
   | Some 0 -> identity
   | _ -> Log.fatal "SSH autoprovision failed: %s" output
 
-let attach_running ?virtle ~name ~path ~verbose () =
+let attach_running ?virtle ~name ~path ~kitty ~verbose () =
   let virtle = find_virtle virtle in
+  if kitty then ignore (find_kitten ());
   Log.debug "attaching to VM %s using manifest %s" name path;
   let status = rpc_status ~virtle ~path () in
   let cid =
@@ -924,7 +935,19 @@ let attach_running ?virtle ~name ~path ~verbose () =
   in
   let doc = load_manifest_doc path in
   let user = manifest_string doc [ "ssh"; "user" ] in
-  let ssh_exec = manifest_string_array doc [ "ssh"; "exec" ] in
+  let ssh_exec =
+    if kitty then
+      match
+        Otoml.find_opt doc
+          (Otoml.get_array Otoml.get_string)
+          [ "ssh"; "kitty_exec" ]
+      with
+      | Some exec -> exec
+      | None ->
+          Log.fatal "manifest has no ssh.kitty_exec; run `ash regenerate %s`"
+            name
+    else manifest_string_array doc [ "ssh"; "exec" ]
+  in
   let identity_args =
     match manifest_bool_opt doc [ "ssh"; "autoprovision" ] with
     | Some true ->
@@ -981,9 +1004,8 @@ let render_resolved_manifest inputs =
   in
   let ssh = inputs.ssh in
   let systemd_ssh_proxy = inputs.systemd_ssh_proxy in
-  let real_ssh_exec =
+  let ssh_options =
     [
-      ssh;
       "-o";
       "ProxyCommand=" ^ systemd_ssh_proxy ^ " %h %p";
       "-o";
@@ -1000,6 +1022,8 @@ let render_resolved_manifest inputs =
       "PubkeyAuthentication=yes";
     ]
   in
+  let real_ssh_exec = ssh :: ssh_options in
+  let kitty_ssh_exec = "kitten" :: "ssh" :: ssh_options in
   let workspace_guest_dir = "/home/" ^ user ^ "/workspace" in
   let workspace_host_dir = Filename.concat state_dir "workspace" in
   let hotmounts_host_dir = hotmounts_dir ~name:inputs.name in
@@ -1035,6 +1059,15 @@ let render_resolved_manifest inputs =
         ~ssh_exec:real_ssh_exec ssh_mounts;
     ]
   in
+  let kitty_exec =
+    [
+      write_profile_mount_ssh_wrapper ~kitty:true ~name:inputs.name
+        ~virtle:inputs.virtle
+        ~manifest_path:(manifest_path ~name:inputs.name)
+        ~ssh_exec:kitty_ssh_exec ssh_mounts;
+    ]
+  in
+  let selected_ssh_exec = if inputs.kitty then kitty_exec else ssh_exec in
   let document =
     Otoml.table
       [
@@ -1064,7 +1097,8 @@ let render_resolved_manifest inputs =
           Otoml.table
             [
               ("user", Otoml.string user);
-              ("exec", string_array ssh_exec);
+              ("exec", string_array selected_ssh_exec);
+              ("kitty_exec", string_array kitty_exec);
               ("ready_socket", Otoml.string "ready.sock");
               ("autoprovision", Otoml.boolean true);
             ] );
@@ -1106,6 +1140,7 @@ let ash_config (inputs : manifest_inputs) =
       ("profiles", string_array inputs.profiles);
       ("print_serial", Otoml.boolean inputs.print_serial);
       ("mount_cwd", Otoml.boolean inputs.mount_cwd);
+      ("kitty", Otoml.boolean inputs.kitty);
       ("virtiofsd", Otoml.string inputs.virtiofsd);
       ("virtle", Otoml.string inputs.virtle);
     ]
@@ -1151,6 +1186,10 @@ let load_ash_config ~name =
     user = Otoml.find_opt doc Otoml.get_string [ "spawn"; "user" ];
     print_serial = bool_of_doc doc [ "spawn"; "print_serial" ];
     mount_cwd = bool_of_doc doc [ "spawn"; "mount_cwd" ];
+    kitty =
+      Option.value
+        (Otoml.find_opt doc Otoml.get_boolean [ "spawn"; "kitty" ])
+        ~default:false;
     ro_store_socket =
       Otoml.find_opt doc Otoml.get_string [ "spawn"; "ro_store_socket" ];
     ssh = Otoml.find_opt doc Otoml.get_string [ "spawn"; "ssh" ];
@@ -1183,6 +1222,7 @@ let render_manifest (inputs : manifest_inputs) =
       mount_cwd = inputs.mount_cwd;
       ro_store_socket = inputs.ro_store_socket;
       ssh;
+      kitty = inputs.kitty;
       systemd_ssh_proxy;
       virtiofsd = inputs.virtiofsd;
       virtle = inputs.virtle;
@@ -1203,8 +1243,9 @@ let write_manifest_for_inputs inputs =
   path
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ~config_path ~flake ~profiles ~print_serial ~mount_cwd () =
+    ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~kitty () =
   let virtle = find_virtle virtle in
+  if kitty then ignore (find_kitten ());
   let ssh = Option.map (fun path -> find_ssh (Some path)) ssh in
   let systemd_ssh_proxy =
     Option.map
@@ -1238,6 +1279,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       ro_store_socket;
       ssh;
       systemd_ssh_proxy;
+      kitty;
       virtiofsd;
       virtle;
     }
@@ -1285,7 +1327,8 @@ let launch_background ~resume (inputs : manifest_inputs) path ~verbose =
 let launch_background_and_attach ~resume (inputs : manifest_inputs) path
     ~verbose =
   launch_background ~resume inputs path ~verbose;
-  attach_running ~virtle:inputs.virtle ~name:inputs.name ~path ~verbose ()
+  attach_running ~virtle:inputs.virtle ~name:inputs.name ~path
+    ~kitty:inputs.kitty ~verbose ()
 
 let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
     path ~verbose =
@@ -1304,10 +1347,10 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~ephemeral ~attach
-    ~keep ~verbose () =
+    ~keep ~kitty ~verbose () =
   let inputs, path =
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-      ~config_path ~flake ~profiles ~print_serial ~mount_cwd ()
+      ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~kitty ()
   in
   if attach && keep then
     launch_background_and_attach ~resume:None inputs path ~verbose
@@ -1383,13 +1426,14 @@ let select_stopped_vm_for_spawn ?name stopped =
       | [] -> Log.fatal "no stopped VM state to spawn; pass a NAME"
       | _ -> Log.fatal "multiple stopped VM states; pass a NAME")
 
-let spawn_saved_and_attach ?virtle ~name ~keep ~verbose =
-  let inputs = saved_inputs ?virtle ~name () in
+let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~verbose =
+  if kitty then ignore (find_kitten ());
+  let inputs = { (saved_inputs ?virtle ~name ()) with kitty } in
   let path = rewrite_saved_manifest inputs in
   if keep then launch_background_and_attach ~resume:None inputs path ~verbose
   else launch_foreground_attached ~resume:None inputs path ~verbose
 
-let attach ?virtle ?name ~spawn ~keep ~verbose () =
+let attach ?virtle ?name ~spawn ~keep ~kitty ~verbose () =
   let vms = list_vms () in
   let running = List.filter (fun vm -> vm.status = Running) vms in
   let stopped = List.filter (fun vm -> vm.status = Stopped) vms in
@@ -1397,11 +1441,11 @@ let attach ?virtle ?name ~spawn ~keep ~verbose () =
   | Some vm ->
       attach_running ?virtle ~name:vm.name
         ~path:(Filename.concat vm.path "virtle.toml")
-        ~verbose ()
+        ~kitty ~verbose ()
   | None ->
       if not spawn then Log.fatal "no running VMs; use `ash ls` to list states";
       let name = select_stopped_vm_for_spawn ?name stopped in
-      spawn_saved_and_attach ?virtle ~name ~keep ~verbose
+      spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~verbose
 
 let suspend ?virtle ?name () =
   let virtle = find_virtle virtle in

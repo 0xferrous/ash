@@ -37,6 +37,12 @@ Attach to it:
 ash attach work
 ```
 
+Use Kitty's SSH kitten for an attached session:
+
+```sh
+ash attach --kitty work
+```
+
 Start and attach immediately, keeping the VM after SSH exits:
 
 ```sh

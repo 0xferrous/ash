@@ -15,7 +15,7 @@ let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake name user
-    profiles print_serial mount_cwd ephemeral attach keep =
+    profiles print_serial mount_cwd ephemeral attach keep kitty =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
@@ -27,7 +27,7 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake name user
   in
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?name ?user ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd
-    ~ephemeral ~attach ~keep ~verbose:opts.verbose ()
+    ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
 
 let list_vms global =
   Log.set_debug global.debug;
@@ -37,10 +37,11 @@ let rm_vms global =
   Log.set_debug global.debug;
   Virtle.rm_vms ()
 
-let attach opts name spawn keep =
+let attach opts name spawn keep kitty =
   Log.set_debug opts.global.debug;
   if keep && not spawn then Log.fatal "--keep requires --spawn";
-  Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~verbose:opts.verbose ()
+  Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~kitty
+    ~verbose:opts.verbose ()
 
 let resume opts name attach keep =
   Log.set_debug opts.global.debug;
@@ -195,6 +196,12 @@ let spawn_flag =
     & info [ "spawn" ]
         ~doc:"For attach, spawn the named stopped VM if it is not running.")
 
+let kitty_flag =
+  Arg.(
+    value & flag
+    & info [ "kitty" ]
+        ~doc:"Use `kitten ssh` instead of ssh for the attached session.")
+
 let suspend_flag =
   Arg.(
     value & flag
@@ -221,7 +228,7 @@ let spawn_cmd =
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ ro_store_socket_arg $ config_arg $ flake_arg $ name_arg $ user_arg
       $ profiles_arg $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg
-      $ attach_flag $ keep_flag)
+      $ attach_flag $ keep_flag $ kitty_flag)
 
 let attach_name_arg =
   Arg.(
@@ -238,7 +245,8 @@ let attach_cmd =
   Cmd.v
     (Cmd.info "attach" ~doc:"ssh into a running VM" ~man:attach_man)
     Term.(
-      const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag)
+      const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag
+      $ kitty_flag)
 
 let resume_name_arg =
   Arg.(

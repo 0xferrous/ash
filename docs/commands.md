@@ -18,14 +18,16 @@ Common options:
 - `--attach`
 - `--keep`
 - `--ephemeral`
+- `--kitty` (use `kitten ssh` for attached SSH sessions)
 
 ## `ash attach`
 
 ```sh
-ash attach [--spawn] [--keep] [NAME]
+ash attach [--spawn] [--keep] [--kitty] [NAME]
 ```
 
 Attaches over SSH to a running VM. With `--spawn`, a stopped VM is relaunched from saved `ash.toml`.
+Pass `--kitty` to use `kitten ssh` for the attached session instead of plain `ssh`.
 
 ## `ash mount`
 

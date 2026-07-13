@@ -117,7 +117,7 @@ let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
 let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
-    ?ro_store_socket ~config ~flake ~name () =
+    ?ro_store_socket ?(kitty = false) ~config ~flake ~name () =
   Virtle.render_resolved_manifest
     {
       config;
@@ -132,6 +132,7 @@ let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       ro_store_socket;
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
+      kitty;
       virtiofsd = "/bin/virtiofsd";
       virtle = "/bin/virtle";
     }
@@ -193,8 +194,15 @@ absolute = ["%s"]
   let wrapper = Filename.concat state "ash/unit-test/ssh-with-profile-mounts" in
   assert_equal "profile mount ssh wrapper" wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]));
+  let kitty_wrapper =
+    Filename.concat state "ash/unit-test/ssh-with-profile-mounts-kitty"
+  in
+  assert_equal "kitty ssh wrapper" kitty_wrapper
+    (List.hd (find_strings doc [ "ssh"; "kitty_exec" ]));
   if not (Sys.file_exists wrapper) then
     fail "profile mount ssh wrapper should exist";
+  if not (Sys.file_exists kitty_wrapper) then
+    fail "kitty ssh wrapper should exist";
   let wrapper_content =
     In_channel.with_open_text wrapper In_channel.input_all
   in
@@ -205,6 +213,11 @@ absolute = ["%s"]
     "*'\"exitCode\":42'*) ;;";
   assert_string_contains "wrapper execs ssh" wrapper_content
     "-o IdentitiesOnly=yes \"$@\"";
+  let kitty_wrapper_content =
+    In_channel.with_open_text kitty_wrapper In_channel.input_all
+  in
+  assert_string_contains "kitty wrapper execs kitten ssh" kitty_wrapper_content
+    "exec 'kitten' 'ssh'";
   let mounts = table_array doc "mounts" in
   let workspace = find_table_by_string mounts "tag" "workspace" in
   assert_equal "workspace source"
@@ -416,6 +429,30 @@ let test_hotmount_tilde_guest_path_uses_guest_home () =
     (Virtle.resolve_hotmount_guest_path ~user:"root" ~host_dir:"/host/project"
        (Some "~/project"))
 
+let test_kitty_selects_kitten_ssh_wrapper () =
+  let root = temp_dir "ash-test-kitty" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config_path = Filename.concat root "agent-box.toml" in
+  write_file config_path {|default_profile = "base"
+
+[profiles.base]
+|};
+  let config = Agent_box.load config_path in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"kitty" ~kitty:true ()
+  in
+  let doc = parse_toml manifest in
+  let kitty_wrapper =
+    Filename.concat state "ash/kitty/ssh-with-profile-mounts-kitty"
+  in
+  assert_equal "selected kitty wrapper" kitty_wrapper
+    (List.hd (find_strings doc [ "ssh"; "exec" ]))
+
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
@@ -433,6 +470,7 @@ let () =
   run "read-only file write does not write back"
     test_readonly_file_write_has_no_write_back;
   run "ro-store socket override" test_ro_store_socket_override;
+  run "kitty selects kitten ssh wrapper" test_kitty_selects_kitten_ssh_wrapper;
   run "qga params use valid json" test_qga_params_use_valid_json;
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
   run "qga unmount removes empty mountpoint"
