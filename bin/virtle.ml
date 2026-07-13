@@ -1253,6 +1253,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       systemd_ssh_proxy
   in
   let virtiofsd = find_virtiofsd () in
+  let flake = Nix.storage_flake_ref flake in
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
   let ro_store_socket = Option.map Util.absolute_path ro_store_socket in

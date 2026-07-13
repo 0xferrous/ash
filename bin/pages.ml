@@ -113,6 +113,10 @@ let spawn =
            params, system toplevel, host-side ssh, and host-side \
            systemd-ssh-proxy paths.";
         `P
+          "Path-like flake references are saved in ash.toml as resolved \
+           absolute paths so ash regenerate NAME works from any current \
+           directory.";
+        `P
           "The selected NixOS configuration must expose normal NixOS system \
            attributes such as config.system.build.kernel, \
            config.system.build.initialRamdisk, config.system.build.toplevel, \

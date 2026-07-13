@@ -14,7 +14,7 @@ The fragment resolves to:
 nixosConfigurations.agent
 ```
 
-Pass the flake directory, not `flake.nix`.
+Pass the flake directory, not `flake.nix`. Path-like flake references are stored as resolved absolute paths in `ash.toml`, so later `ash regenerate NAME` does not depend on the current directory.
 
 ## Agent-box config
 

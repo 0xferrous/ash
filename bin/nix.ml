@@ -59,6 +59,39 @@ let split_flake_ref value =
 
 let normalize_flake_path path = Util.expand_home path
 
+let local_flake_prefix base =
+  [ "path:"; "git+file:"; "file:" ]
+  |> List.find_opt (fun prefix -> String.starts_with ~prefix base)
+
+let is_path_flake_ref base =
+  base <> ""
+  && (base.[0] = '/'
+     || base.[0] = '~'
+     || base.[0] = '.'
+     || Option.is_some (local_flake_prefix base))
+
+let resolved_flake_path path =
+  let path = Util.expand_home path in
+  try Unix.realpath path
+  with Unix.Unix_error _ | Sys_error _ -> Util.absolute_path path
+
+let absolute_flake_path base =
+  match local_flake_prefix base with
+  | Some prefix ->
+      let path =
+        String.sub base (String.length prefix)
+          (String.length base - String.length prefix)
+      in
+      prefix ^ resolved_flake_path path
+  | None -> resolved_flake_path base
+
+let storage_flake_ref value =
+  let base, fragment = split_flake_ref value in
+  let base =
+    if is_path_flake_ref base then absolute_flake_path base else base
+  in
+  match fragment with None -> base | Some fragment -> base ^ "#" ^ fragment
+
 let flake_ref path =
   let base, fragment = split_flake_ref path in
   let base = normalize_flake_path base in

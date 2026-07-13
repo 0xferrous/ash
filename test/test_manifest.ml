@@ -453,6 +453,23 @@ let test_kitty_selects_kitten_ssh_wrapper () =
   assert_equal "selected kitty wrapper" kitty_wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]))
 
+let test_nix_storage_flake_ref_absolutizes_relative_paths () =
+  mkdir_p (Filename.concat (Filename.dirname (Sys.getcwd ())) "my-nix");
+  mkdir_p (Filename.concat (Sys.getcwd ()) "flake");
+  assert_equal "relative flake path"
+    (Filename.concat (Filename.dirname (Sys.getcwd ())) "my-nix#agent")
+    (Nix.storage_flake_ref "../my-nix#agent");
+  assert_equal "path flake path"
+    ("path:" ^ Filename.concat (Sys.getcwd ()) "flake#agent")
+    (Nix.storage_flake_ref "path:./flake#agent");
+  assert_equal "git file flake path"
+    ("git+file:" ^ Filename.concat (Sys.getcwd ()) "flake#agent")
+    (Nix.storage_flake_ref "git+file:./flake#agent");
+  assert_equal "registry flake unchanged" "nixpkgs#agent"
+    (Nix.storage_flake_ref "nixpkgs#agent");
+  assert_equal "github flake unchanged" "github:owner/repo#agent"
+    (Nix.storage_flake_ref "github:owner/repo#agent")
+
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
@@ -479,4 +496,6 @@ let () =
     test_hotmount_default_guest_path_matches_host_path;
   run "hotmount tilde guest path uses guest home"
     test_hotmount_tilde_guest_path_uses_guest_home;
+  run "nix storage flake refs absolutize relative paths"
+    test_nix_storage_flake_ref_absolutizes_relative_paths;
   run "nix json string array parser" test_nix_json_string_array_parser
