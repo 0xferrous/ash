@@ -937,15 +937,13 @@ let attach_running ?virtle ~name ~path ~kitty ~verbose () =
   let user = manifest_string doc [ "ssh"; "user" ] in
   let ssh_exec =
     if kitty then
-      match
-        Otoml.find_opt doc
-          (Otoml.get_array Otoml.get_string)
-          [ "ssh"; "kitty_exec" ]
-      with
-      | Some exec -> exec
-      | None ->
-          Log.fatal "manifest has no ssh.kitty_exec; run `ash regenerate %s`"
-            name
+      let kitty_wrapper =
+        profile_mount_ssh_wrapper_path_for ~kitty:true ~name
+      in
+      if Sys.file_exists kitty_wrapper then [ kitty_wrapper ]
+      else
+        Log.fatal "missing kitty SSH wrapper %s; run `ash regenerate %s`"
+          kitty_wrapper name
     else manifest_string_array doc [ "ssh"; "exec" ]
   in
   let identity_args =
@@ -1098,7 +1096,6 @@ let render_resolved_manifest inputs =
             [
               ("user", Otoml.string user);
               ("exec", string_array selected_ssh_exec);
-              ("kitty_exec", string_array kitty_exec);
               ("ready_socket", Otoml.string "ready.sock");
               ("autoprovision", Otoml.boolean true);
             ] );

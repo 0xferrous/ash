@@ -197,8 +197,12 @@ absolute = ["%s"]
   let kitty_wrapper =
     Filename.concat state "ash/unit-test/ssh-with-profile-mounts-kitty"
   in
-  assert_equal "kitty ssh wrapper" kitty_wrapper
-    (List.hd (find_strings doc [ "ssh"; "kitty_exec" ]));
+  if
+    Otoml.find_opt doc
+      (Otoml.get_array Otoml.get_string)
+      [ "ssh"; "kitty_exec" ]
+    <> None
+  then fail "virtle manifest should not include unknown ssh.kitty_exec key";
   if not (Sys.file_exists wrapper) then
     fail "profile mount ssh wrapper should exist";
   if not (Sys.file_exists kitty_wrapper) then
