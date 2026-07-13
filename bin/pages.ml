@@ -106,6 +106,42 @@ let spawn =
            ash.toml without launching the VM. Regeneration updates the \
            manifest for a future launch; it does not reconfigure an already \
            running VM.";
+        `S "FLAKE TARGET";
+        `P
+          "--flake expects FLAKE#HOST. ash evaluates nixosConfigurations.HOST \
+           from that flake and uses it for the guest kernel, initrd, kernel \
+           params, system toplevel, host-side ssh, and host-side \
+           systemd-ssh-proxy paths.";
+        `P
+          "The selected NixOS configuration must expose normal NixOS system \
+           attributes such as config.system.build.kernel, \
+           config.system.build.initialRamdisk, config.system.build.toplevel, \
+           config.boot.kernelParams, pkgs.openssh, and config.systemd.package.";
+        `P
+          "ash validates that the selected guest SSH user exists as \
+           users.users.USER in the NixOS configuration.";
+        `S "PROFILE RESOLUTION";
+        `P
+          "For a new VM with no --profile options, ash uses default_profile \
+           from the agent-box config, falling back to base.";
+        `P
+          "For an existing named VM with saved ash.toml, omitting --profile \
+           carries the saved profile list forward. Passing one or more \
+           --profile options uses exactly those profiles and does not \
+           automatically add the default profile.";
+        `P
+          "Shared/base behavior should be expressed with profile extends in \
+           the agent-box config.";
+        `S "PROFILE ENTRIES";
+        `P
+          "Profile directory entries become virtiofs mounts. home_relative \
+           entries map host paths under the host user's home to the same \
+           relative path under the guest SSH user's home; absolute entries map \
+           to the same absolute guest path.";
+        `P
+          "Profile file entries become virtle write_files entries instead of \
+           virtiofs mounts. Read-write/overlay file entries request write-back \
+           during teardown. Missing profile paths are skipped with a warning.";
         `S "MOUNTS";
         `P
           "Profiles selected with --profile add their configured directory \
@@ -127,7 +163,8 @@ let spawn =
         `P
           "Every generated virtle.toml includes ash's fixed mounts: workspace, \
            hotmounts, a read-only ro-store mount for /nix/store, and a \
-           persistent disk image at persist.img.";
+           persistent ext4 disk image at persist.img. The manifest sets KVM \
+           acceleration on, so the host is expected to provide /dev/kvm.";
         `P
           "The workspace mount exposes a directory inside ash VM state to the \
            guest through virtiofs. It acts as a host/guest directory portal \
@@ -137,6 +174,10 @@ let spawn =
           "The hotmounts mount is reserved for later ash mount operations, so \
            new host directories can be staged and mounted into a running guest \
            without regenerating the manifest.";
+        `P
+          "When --mount-cwd is used, ash adds workspace_cwd for the current \
+           host directory. The current agent guest config mounts this tag at \
+           /mnt/cwd.";
         `P
           "Note: /nix/store is exposed through virtiofs. Correct file \
            ownership and permissions currently require running the virtiofs \
@@ -155,6 +196,18 @@ let spawn =
         `P
           "This requires the guest to have QEMU Guest Agent support and the \
            guest user/home path expected by the generated manifest.";
+        `S "GUEST CONTRACT";
+        `P
+          "The guest should run QEMU Guest Agent. For NixOS guests, enable \
+           services.qemuGuest.enable.";
+        `P
+          "Attached flows wait for virtle SSH readiness. The guest must write \
+           the token SSH-READY to /dev/virtio-ports/virtle.ready after sshd is \
+           reachable.";
+        `P
+          "ash-side SSH autoprovisioning assumes the guest SSH user's writable \
+           primary group is users. It creates or updates authorized_keys and \
+           applies OpenSSH-compatible ownership and permissions.";
         `S Manpage.s_examples;
         `Pre "ash spawn --name work -f ../my-nix#agent";
         `Pre "ash spawn --name work -f ../my-nix#agent --attach --keep";
