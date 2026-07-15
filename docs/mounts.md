@@ -103,13 +103,19 @@ The file records:
 For writable mounts ash runs:
 
 ```sh
-bindfs --multithreaded --no-allow-other SOURCE TARGET
+bindfs --multithreaded --no-allow-other \
+  -o attr_timeout=0,entry_timeout=0,negative_timeout=0 SOURCE TARGET
 ```
 
 For read-only mounts ash adds `-r`:
 
 ```sh
-bindfs --multithreaded --no-allow-other -r SOURCE TARGET
+bindfs --multithreaded --no-allow-other \
+  -o attr_timeout=0,entry_timeout=0,negative_timeout=0 -r SOURCE TARGET
 ```
+
+The zero-valued FUSE timeouts force metadata and pathname lookups to be revalidated, reducing stale handles when the source is also modified through its original host path.
+
+Mutable virtiofs shares (`workspace`, profile directories, `hotmounts`, and `workspace_cwd`) run virtiofsd with `--cache=never`. The immutable `/nix/store` share keeps virtiofsd's default cache behavior.
 
 If bindfs fails and ash is running as root, ash can fall back to a kernel `mount --bind` staging mount.

@@ -23,7 +23,8 @@ If the VM is already running, restart it. Rewriting `virtle.toml` does not add d
 ash uses bindfs `-r`, not `--read-only`. If you are testing manually, use:
 
 ```sh
-bindfs --multithreaded --no-allow-other -r SOURCE TARGET
+bindfs --multithreaded --no-allow-other \
+  -o attr_timeout=0,entry_timeout=0,negative_timeout=0 -r SOURCE TARGET
 ```
 
 ## `fuse: invalid argument '-s'`

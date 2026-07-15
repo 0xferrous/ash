@@ -141,28 +141,30 @@ let string_array_of_doc doc path =
       Log.fatal "ash.toml is missing string array field %s"
         (String.concat "." path)
 
-let virtiofs_section ~socket ~bin =
+let virtiofs_section ?cache ~socket ~bin () =
+  let args =
+    [
+      "--socket-path={{.Socket}}";
+      "--shared-dir={{.MountSource}}";
+      "--tag={{.MountTag}}";
+    ]
+    @ match cache with None -> [] | Some cache -> [ "--cache=" ^ cache ]
+  in
   Otoml.table
     [
       ("socket", Otoml.string socket);
       ("bin", Otoml.string bin);
-      ( "args",
-        string_array
-          [
-            "--socket-path={{.Socket}}";
-            "--shared-dir={{.MountSource}}";
-            "--tag={{.MountTag}}";
-          ] );
+      ("args", string_array args);
     ]
 
-let virtiofs_mount ?target ~tag ~source ~read_only ~socket ~bin () =
+let virtiofs_mount ?target ?cache ~tag ~source ~read_only ~socket ~bin () =
   let fields =
     [
       ("type", Otoml.string "virtiofs");
       ("tag", Otoml.string tag);
       ("source", Otoml.string source);
       ("read_only", Otoml.boolean read_only);
-      ("virtiofs", virtiofs_section ~socket ~bin);
+      ("virtiofs", virtiofs_section ?cache ~socket ~bin ());
     ]
   in
   let fields =
@@ -189,8 +191,9 @@ let image_mount ~source =
     ]
 
 let profile_mount ~bin (mount : Agent_box.mount) =
-  virtiofs_mount ~target:mount.target ~tag:mount.tag ~source:mount.source
-    ~read_only:mount.read_only ~socket:(mount.tag ^ ".sock") ~bin ()
+  virtiofs_mount ~target:mount.target ~cache:"never" ~tag:mount.tag
+    ~source:mount.source ~read_only:mount.read_only
+    ~socket:(mount.tag ^ ".sock") ~bin ()
 
 let workspace_mount ~workspace_guest_dir ~workspace_host_dir =
   {
@@ -680,10 +683,19 @@ let execute_profile_mounts ~virtle ~path mounts =
           Log.fatal "failed to mount %s at %s: %s" mount.tag mount.target output)
     mounts
 
+let bindfs_args_for_mode mode =
+  let mode_args = match mode with Read_only -> [ "-r" ] | Read_write -> [] in
+  [
+    "--multithreaded";
+    "--no-allow-other";
+    "-o";
+    "attr_timeout=0,entry_timeout=0,negative_timeout=0";
+  ]
+  @ mode_args
+
 let ensure_bindfs_mount ~bindfs ~mode ~source ~target =
   Util.ensure_dir target;
-  let mode_args = match mode with Read_only -> [ "-r" ] | Read_write -> [] in
-  let bindfs_args = [ "--multithreaded"; "--no-allow-other" ] @ mode_args in
+  let bindfs_args = bindfs_args_for_mode mode in
   let bindfs_command =
     String.concat " "
       ([ Util.shell_quote bindfs ]
@@ -1105,7 +1117,7 @@ let render_resolved_manifest inputs =
   let mounts =
     [
       profile_mount ~bin:inputs.virtiofsd workspace_mount;
-      virtiofs_mount ~tag:"hotmounts" ~source:hotmounts_host_dir
+      virtiofs_mount ~cache:"never" ~tag:"hotmounts" ~source:hotmounts_host_dir
         ~read_only:false ~socket:"hotmounts.sock" ~bin:inputs.virtiofsd ();
       virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true
         ~socket:(Option.value inputs.ro_store_socket ~default:"ro-store.sock")
@@ -1114,8 +1126,9 @@ let render_resolved_manifest inputs =
     ]
     @ (if inputs.mount_cwd then
          [
-           virtiofs_mount ~tag:"workspace_cwd" ~source:"." ~read_only:false
-             ~socket:"workspace-cwd.sock" ~bin:inputs.virtiofsd ();
+           virtiofs_mount ~cache:"never" ~tag:"workspace_cwd" ~source:"."
+             ~read_only:false ~socket:"workspace-cwd.sock" ~bin:inputs.virtiofsd
+             ();
          ]
        else [])
     @ List.map (profile_mount ~bin:inputs.virtiofsd) resources.mounts

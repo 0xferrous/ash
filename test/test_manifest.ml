@@ -467,6 +467,37 @@ let test_qga_mountpoint_inherits_parent_owner () =
   assert_string_contains "target uses helper" script
     "install_mountpoint \"$target\""
 
+let test_virtiofs_cache_options () =
+  let mutable_mount =
+    Virtle.virtiofs_mount ~cache:"never" ~tag:"mutable" ~source:"/tmp/source"
+      ~read_only:false ~socket:"mutable.sock" ~bin:"/bin/virtiofsd" ()
+  in
+  let default_mount =
+    Virtle.virtiofs_mount ~tag:"immutable" ~source:"/nix/store" ~read_only:true
+      ~socket:"immutable.sock" ~bin:"/bin/virtiofsd" ()
+  in
+  let args mount =
+    match
+      Otoml.find_opt mount
+        (Otoml.get_array Otoml.get_string)
+        [ "virtiofs"; "args" ]
+    with
+    | Some args -> args
+    | None -> fail "virtiofs mount is missing daemon arguments"
+  in
+  assert_bool "mutable mount disables cache" true
+    (List.mem "--cache=never" (args mutable_mount));
+  assert_bool "immutable mount keeps default cache" false
+    (List.exists (String.starts_with ~prefix:"--cache=") (args default_mount))
+
+let test_bindfs_disables_kernel_metadata_caches () =
+  let expected = "attr_timeout=0,entry_timeout=0,negative_timeout=0" in
+  let rw_args = Virtle.bindfs_args_for_mode Virtle.Read_write in
+  let ro_args = Virtle.bindfs_args_for_mode Virtle.Read_only in
+  assert_bool "bindfs rw has cache timeouts" true (List.mem expected rw_args);
+  assert_bool "bindfs ro has cache timeouts" true (List.mem expected ro_args);
+  assert_bool "bindfs ro stays read-only" true (List.mem "-r" ro_args)
+
 let test_hotmount_default_guest_path_matches_host_path () =
   assert_equal "default guest path" "/host/project"
     (Virtle.resolve_hotmount_guest_path ~user:"agent" ~host_dir:"/host/project"
@@ -588,6 +619,9 @@ let () =
     test_qga_unmount_removes_empty_mountpoint;
   run "qga mountpoint inherits parent owner"
     test_qga_mountpoint_inherits_parent_owner;
+  run "virtiofs cache options" test_virtiofs_cache_options;
+  run "bindfs disables kernel metadata caches"
+    test_bindfs_disables_kernel_metadata_caches;
   run "hotmount default guest path matches host path"
     test_hotmount_default_guest_path_matches_host_path;
   run "hotmount tilde guest path uses guest home"
