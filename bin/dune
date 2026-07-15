@@ -1,7 +1,7 @@
 (library
  (name ash_lib)
  (modules agent_box log nix qga systemd_run tui util virtle)
- (libraries unix otoml yojson))
+ (libraries unix base64 otoml yojson))
 
 (library
  (name ash_pages)

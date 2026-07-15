@@ -18,4 +18,7 @@
  (depends
   (ocaml (>= 5.1))
   dune
-  cmdliner))
+  base64
+  cmdliner
+  otoml
+  yojson))

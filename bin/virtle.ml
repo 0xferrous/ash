@@ -327,7 +327,7 @@ let socket_accepts_connection path =
           true
         with Unix.Unix_error _ -> false)
 
-let control_socket_status_cid path =
+let control_socket_rpc path ~method_name ~params =
   let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Fun.protect
     ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ())
@@ -339,8 +339,8 @@ let control_socket_status_cid path =
             (`Assoc
                [
                  ("id", `Int 1);
-                 ("method", `String "status");
-                 ("params", `Assoc []);
+                 ("method", `String method_name);
+                 ("params", params);
                ])
           ^ "\n"
         in
@@ -354,9 +354,31 @@ let control_socket_status_cid path =
             let acc = acc ^ chunk in
             if String.contains chunk '\n' then acc else read_response acc
         in
-        read_response "" |> Qga.int_field ~field:"cid"
+        Some (read_response "")
       with Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _ ->
         None)
+
+let control_socket_status_cid path =
+  Option.bind
+    (control_socket_rpc path ~method_name:"status" ~params:(`Assoc []))
+    (Qga.int_field ~field:"cid")
+
+let parse_ssh_stats output =
+  match String.split_on_char ' ' (String.trim output) with
+  | [ connections; ptys ] -> (
+      match (int_of_string_opt connections, int_of_string_opt ptys) with
+      | Some connections, Some ptys when connections >= 0 && ptys >= 0 ->
+          Some (connections, ptys)
+      | _ -> None)
+  | _ -> None
+
+let control_socket_ssh_stats path =
+  let action = Qga.ssh_stats_action in
+  let params = Yojson.Safe.from_string (Qga.params action) in
+  match control_socket_rpc path ~method_name:"guest-exec" ~params with
+  | Some response when Qga.int_field ~field:"exitCode" response = Some 0 ->
+      Option.bind (Qga.output_data response) parse_ssh_stats
+  | _ -> None
 
 let rec path_size ?(exclude_entry = fun _ -> false) path =
   try
@@ -443,15 +465,26 @@ let list_vms () =
 
 let status_string = function Running -> "running" | Stopped -> "stopped"
 let cid_string = function Some cid -> string_of_int cid | None -> "-"
+let count_string = function Some count -> string_of_int count | None -> "-"
+
+let ssh_stats vm =
+  match vm.status with
+  | Stopped -> (None, None)
+  | Running -> (
+      match control_socket_ssh_stats (control_socket_path vm.path) with
+      | Some (connections, ptys) -> (Some connections, Some ptys)
+      | None -> (None, None))
 
 let print_vm_list () =
   let vms = list_vms () in
-  Printf.printf "%-32s %-8s %5s %10s %10s  %-19s %s\n" "NAME" "STATUS" "CID"
-    "DISK" "VIRTUAL" "MODIFIED" "PATH";
+  Printf.printf "%-32s %-8s %5s %4s %4s %10s %10s  %-19s %s\n" "NAME" "STATUS"
+    "CID" "SSH" "PTY" "DISK" "VIRTUAL" "MODIFIED" "PATH";
   List.iter
     (fun vm ->
-      Printf.printf "%-32s %-8s %5s %10s %10s  %-19s %s\n" vm.name
-        (status_string vm.status) (cid_string vm.cid) (human_size vm.disk_bytes)
+      let connections, ptys = ssh_stats vm in
+      Printf.printf "%-32s %-8s %5s %4s %4s %10s %10s  %-19s %s\n" vm.name
+        (status_string vm.status) (cid_string vm.cid) (count_string connections)
+        (count_string ptys) (human_size vm.disk_bytes)
         (human_size vm.apparent_bytes)
         (format_time vm.modified) vm.path)
     vms

@@ -414,6 +414,22 @@ let test_qga_int_field_finds_nested_values () =
   assert_int "qga nested cid" 7
     (Option.value (Qga.int_field ~field:"cid" text) ~default:(-1))
 
+let test_qga_output_data_decodes_base64 () =
+  let text = {|{"result":{"outData":"MiA2Cg=="}}|} in
+  assert_equal "qga decoded output" "2 6\n"
+    (Option.value (Qga.output_data text) ~default:"")
+
+let test_qga_ssh_stats_action () =
+  let script = List.nth Qga.ssh_stats_action.args 1 in
+  assert_string_contains "ssh stats vsock" script "ss --vsock";
+  assert_string_contains "ssh stats port" script "/:22$/";
+  assert_string_contains "ssh stats ptys" script "^pts\\//";
+  match Virtle.parse_ssh_stats "2 6\n" with
+  | Some (connections, ptys) ->
+      assert_int "ssh connections" 2 connections;
+      assert_int "ssh ptys" 6 ptys
+  | None -> fail "ssh stats output should parse"
+
 let test_qga_unmount_removes_empty_mountpoint () =
   let action = Qga.unmount_action ~name:"test-unmount" ~guest_path:"/tmp/mnt" in
   let script = List.nth action.args 1 in
@@ -522,6 +538,8 @@ let () =
   run "kitty selects kitten ssh wrapper" test_kitty_selects_kitten_ssh_wrapper;
   run "qga params use valid json" test_qga_params_use_valid_json;
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
+  run "qga output data decodes base64" test_qga_output_data_decodes_base64;
+  run "qga ssh stats action" test_qga_ssh_stats_action;
   run "qga unmount removes empty mountpoint"
     test_qga_unmount_removes_empty_mountpoint;
   run "qga mountpoint inherits parent owner"

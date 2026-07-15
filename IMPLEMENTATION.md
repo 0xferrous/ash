@@ -96,7 +96,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 `ash logs NAME` runs `journalctl --user --unit ash-<name>.service --invocation=0` so only the latest process invocation is shown, with 100 recent lines by default. It requests JSON records and formats each entry as `[YYYY-MM-DD HH:MM:SS] MESSAGE`, omitting hostname and process metadata. `--lines`/`-n` changes the count, and `--follow`/`-f` follows new entries. Background spawn prints `ash logs -f NAME` as a hint. Invocation filtering requires systemd 257 or newer.
 
-Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags and installing ash's SSH public key. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, and `grep`; they must exist in the guest image.
+Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags, installing ash's SSH public key, and collecting `ash ls` SSH statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket: SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, both columns show a dash.
 
 Spawn options:
 

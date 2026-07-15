@@ -56,6 +56,9 @@ Runtime features use QGA guest-exec. The guest needs commands such as:
 - `chown`
 - `chmod`
 - `grep`
+- `ss`
+- `awk`
+- `who`
 
 For NixOS guests enable:
 

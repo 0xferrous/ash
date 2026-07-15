@@ -32,6 +32,7 @@
           nativeBuildInputs = [ pkgs.git ];
 
           propagatedBuildInputs = [
+            ocamlPackages.base64
             ocamlPackages.cmdliner
             ocamlPackages.otoml
             ocamlPackages.yojson

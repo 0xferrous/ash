@@ -10,15 +10,10 @@ let params action =
     ]
   |> Yojson.Safe.to_string
 
-let int_field ~field text =
-  let int_value = function
-    | `Int value -> Some value
-    | `Intlit value -> int_of_string_opt value
-    | _ -> None
-  in
+let field_value ~field convert text =
   let rec find = function
     | `Assoc fields -> (
-        match Option.bind (List.assoc_opt field fields) int_value with
+        match Option.bind (List.assoc_opt field fields) convert with
         | Some value -> Some value
         | None -> fields |> List.find_map (fun (_, value) -> find value))
     | `List values -> List.find_map find values
@@ -26,11 +21,46 @@ let int_field ~field text =
   in
   try Yojson.Safe.from_string text |> find with Yojson.Json_error _ -> None
 
+let int_field ~field =
+  field_value ~field (function
+    | `Int value -> Some value
+    | `Intlit value -> int_of_string_opt value
+    | _ -> None)
+
+let string_field ~field =
+  field_value ~field (function `String value -> Some value | _ -> None)
+
+let decode_base64 text =
+  match Base64.decode ~pad:true text with
+  | Ok decoded -> Some decoded
+  | Error _ -> None
+
+let output_data text =
+  Option.bind (string_field ~field:"outData" text) decode_base64
+
 let result action output =
   {
     action = action.name;
     output;
     exit_code = int_field ~field:"exitCode" output;
+  }
+
+let ssh_stats_action =
+  let script =
+    {sh|
+PATH=/run/current-system/sw/bin:/bin
+
+connections=$(LC_ALL=C ss --vsock -H -n state established |
+  awk '$1 == "v_str" && $4 ~ /:22$/ { n++ } END { print n + 0 }')
+ptys=$(who |
+  awk '$2 ~ /^pts\// && $NF == "(UNKNOWN)" { n++ } END { print n + 0 }')
+printf '%s %s\n' "$connections" "$ptys"
+|sh}
+  in
+  {
+    path = "/run/current-system/sw/bin/sh";
+    args = [ "-c"; script; "ash-ssh-stats" ];
+    name = "ash-ssh-stats";
   }
 
 let shell_action ?(args = []) ~name script =

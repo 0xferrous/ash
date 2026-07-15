@@ -91,7 +91,7 @@ Shows journal entries from the latest invocation of the VM's `ash-NAME.service` 
 ash ls
 ```
 
-Lists VM state directories. Size totals exclude ash's `hotmounts` staging directory.
+Lists VM state directories. For running VMs, `SSH` shows established AF_VSOCK connections to guest port 22 and `PTY` shows active SSH pseudo-terminals. A dash means the VM is stopped or the QGA query failed. Size totals exclude ash's `hotmounts` staging directory.
 
 ## `ash rm`
 
