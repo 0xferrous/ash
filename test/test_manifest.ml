@@ -498,6 +498,114 @@ let test_bindfs_disables_kernel_metadata_caches () =
   assert_bool "bindfs ro has cache timeouts" true (List.mem expected ro_args);
   assert_bool "bindfs ro stays read-only" true (List.mem "-r" ro_args)
 
+let test_hotmount_host_path_normalization_cases () =
+  let root = temp_dir "ash-test-hotmount-normalized" in
+  let a = Filename.concat root "a" in
+  let b = Filename.concat a "b" in
+  let c = Filename.concat b "c" in
+  let d = Filename.concat a "d" in
+  let hidden = Filename.concat a ".hidden" in
+  let dots_name = Filename.concat a "..literal" in
+  let spaces = Filename.concat a "space directory" in
+  let unicode = Filename.concat a "café" in
+  List.iter mkdir_p [ c; d; hidden; dots_name; spaces; unicode ];
+  let cases =
+    [
+      ("unchanged absolute path", d, d);
+      ("trailing dot", d ^ "/.", d);
+      ("trailing slash", d ^ "/", d);
+      ("repeated separators", a ^ "//b///c", c);
+      ("single parent", b ^ "/../d", d);
+      ("multiple parents", c ^ "/../../d", d);
+      ("embedded current directory", a ^ "/./b/./c", c);
+      ("hidden directory", hidden, hidden);
+      ("dot-prefixed directory name", dots_name, dots_name);
+      ("spaces in component", spaces ^ "/.", spaces);
+      ("unicode component", unicode ^ "/.", unicode);
+      ("root", "/", "/");
+      ("parents above root", "/../../", "/");
+    ]
+  in
+  List.iter
+    (fun (label, input, expected) ->
+      assert_equal label expected (Virtle.normalize_hotmount_host_dir input))
+    cases;
+  let cwd = Sys.getcwd () in
+  Fun.protect
+    ~finally:(fun () -> Unix.chdir cwd)
+    (fun () ->
+      Unix.chdir root;
+      assert_equal "relative path becomes absolute" d
+        (Virtle.normalize_hotmount_host_dir "a/b/../d/."));
+  let normalized_one = Virtle.normalize_hotmount_host_dir d in
+  let normalized_two = Virtle.normalize_hotmount_host_dir (b ^ "/../d") in
+  assert_equal "equivalent paths produce the same hotmount slug"
+    (Virtle.hotmount_slug ~host_dir:normalized_one ~guest_path:"/mnt/project")
+    (Virtle.hotmount_slug ~host_dir:normalized_two ~guest_path:"/mnt/project")
+
+let test_hotmount_host_home_expansion_cases () =
+  let root = temp_dir "ash-test-hotmount-home" in
+  let home = Filename.concat root "home" in
+  let project = Filename.concat home "project" in
+  let sibling = Filename.concat home "sibling" in
+  List.iter mkdir_p [ project; sibling ];
+  let previous_home = Util.home_dir () in
+  Fun.protect
+    ~finally:(fun () -> Unix.putenv "HOME" previous_home)
+    (fun () ->
+      Unix.putenv "HOME" home;
+      assert_equal "bare home expansion" home
+        (Virtle.resolve_hotmount_host_path "~");
+      assert_equal "home child expansion" project
+        (Virtle.resolve_hotmount_host_path "~/project");
+      assert_equal "home expansion before normalization" sibling
+        (Virtle.resolve_hotmount_host_path "~/project/../sibling/.");
+      assert_equal "absolute path bypasses home expansion" project
+        (Virtle.resolve_hotmount_host_path project);
+      assert_equal "named user syntax remains literal" "~someone/project"
+        (Util.expand_home "~someone/project");
+      assert_equal "embedded tilde remains literal" "prefix/~/project"
+        (Util.expand_home "prefix/~/project"))
+
+let test_hotmount_host_path_symlink_cases () =
+  let root = temp_dir "ash-test-hotmount-symlink" in
+  let other = Filename.concat root "other" in
+  let target = Filename.concat other "target" in
+  let child = Filename.concat target "child" in
+  let sibling = Filename.concat other "sibling" in
+  let link = Filename.concat root "link" in
+  let link_chain = Filename.concat root "link-chain" in
+  let relative_link = Filename.concat root "relative-link" in
+  mkdir_p child;
+  mkdir_p sibling;
+  Unix.symlink target link;
+  Unix.symlink link link_chain;
+  Unix.symlink "other/target" relative_link;
+  let cases =
+    [
+      ("symlink spelling", link, link);
+      ("dot after symlink", link ^ "/.", link);
+      ("child below symlink", link ^ "/child", link ^ "/child");
+      ("normal child parent below symlink", link ^ "/child/..", link);
+      ("parent crossing symlink", link ^ "/../sibling", link ^ "/../sibling");
+      ("multiple parents reaching symlink", link ^ "/child/../..", link ^ "/..");
+      ("symlink chain spelling", link_chain, link_chain);
+      ("relative symlink spelling", relative_link, relative_link);
+      ( "parent crossing relative symlink",
+        relative_link ^ "/../sibling",
+        relative_link ^ "/../sibling" );
+      ( "parent crossing symlink chain",
+        link_chain ^ "/../sibling",
+        link_chain ^ "/../sibling" );
+    ]
+  in
+  List.iter
+    (fun (label, input, expected) ->
+      assert_equal label expected (Virtle.normalize_hotmount_host_dir input))
+    cases;
+  assert_bool "normalization does not use realpath" true
+    (Virtle.normalize_hotmount_host_dir link <> Unix.realpath link)
+
 let test_hotmount_default_guest_path_matches_host_path () =
   assert_equal "default guest path" "/host/project"
     (Virtle.resolve_hotmount_guest_path ~user:"agent" ~host_dir:"/host/project"
@@ -674,6 +782,11 @@ let () =
   run "virtiofs cache options" test_virtiofs_cache_options;
   run "bindfs disables kernel metadata caches"
     test_bindfs_disables_kernel_metadata_caches;
+  run "hotmount host path normalization cases"
+    test_hotmount_host_path_normalization_cases;
+  run "hotmount host home expansion cases"
+    test_hotmount_host_home_expansion_cases;
+  run "hotmount host path symlink cases" test_hotmount_host_path_symlink_cases;
   run "hotmount default guest path matches host path"
     test_hotmount_default_guest_path_matches_host_path;
   run "hotmount tilde guest path uses guest home"

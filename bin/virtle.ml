@@ -885,12 +885,40 @@ let resolve_hotmount_guest_path ~user ~host_dir = function
       Log.fatal "guest mount path %S must be absolute or start with ~" path
   | Some path -> path
 
-let hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir
-    ~guest_path () =
+let normalize_hotmount_host_dir host_dir =
+  let host_dir = Util.absolute_path host_dir in
   if not (Sys.file_exists host_dir) then
     Log.fatal "host directory %S does not exist" host_dir;
   if (Unix.stat host_dir).st_kind <> Unix.S_DIR then
     Log.fatal "host path %S is not a directory" host_dir;
+  let components = String.split_on_char '/' host_dir in
+  let path_of_reversed components =
+    "/" ^ String.concat "/" (List.rev components)
+  in
+  let rec normalize reversed = function
+    | [] -> path_of_reversed reversed
+    | ("" | ".") :: rest -> normalize reversed rest
+    | ".." :: rest -> (
+        match reversed with
+        | [] -> normalize [] rest
+        | ".." :: _ -> normalize (".." :: reversed) rest
+        | _ :: parent ->
+            let previous_is_symlink =
+              try (Unix.lstat (path_of_reversed reversed)).st_kind = Unix.S_LNK
+              with Unix.Unix_error _ -> true
+            in
+            if previous_is_symlink then normalize (".." :: reversed) rest
+            else normalize parent rest)
+    | component :: rest -> normalize (component :: reversed) rest
+  in
+  normalize [] components
+
+let resolve_hotmount_host_path path =
+  Util.expand_home path |> Util.absolute_path |> normalize_hotmount_host_dir
+
+let hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir
+    ~guest_path () =
+  let host_dir = normalize_hotmount_host_dir host_dir in
   with_hotmount_lock ~name (fun () ->
       let hotmounts_dir = hotmounts_dir ~name in
       let source_name = hotmount_slug ~host_dir ~guest_path in
@@ -947,8 +975,8 @@ let hotmount ?virtle ~mode ~name ~spec () =
   let bindfs = find_bindfs () in
   let virtle = find_virtle virtle in
   let host_path, guest_path = split_hotmount_spec spec in
-  let host_dir = Util.absolute_path (Util.expand_home host_path) in
   if host_path = "" then Log.fatal "host path is empty";
+  let host_dir = resolve_hotmount_host_path host_path in
   let name, manifest_path = select_attach_vm (Some name) in
   let user =
     manifest_string (load_manifest_doc manifest_path) [ "ssh"; "user" ]

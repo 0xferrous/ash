@@ -47,7 +47,7 @@ ash mount --mode ro work ../my-nix:/home/agent/my-nix
 
 If `GUEST_PATH` is omitted, ash uses the absolute host path as the guest target.
 
-If `GUEST_PATH` starts with `~`, ash resolves it using the guest SSH user's home.
+If `GUEST_PATH` starts with `~`, ash resolves it using the guest SSH user's home. Before creating metadata, ash removes redundant `.` components and collapses `..` only when doing so does not cross a host symlink. Symlink paths themselves are preserved rather than replaced with their targets.
 
 ## Unmount one directory
 
