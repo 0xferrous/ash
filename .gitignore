@@ -4,6 +4,3 @@ _build/
 .direnv/
 result
 result-*
-node_modules/
-docs/.vitepress/cache/
-docs/.vitepress/dist/
