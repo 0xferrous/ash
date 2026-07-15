@@ -101,7 +101,7 @@ Some operations execute commands inside the guest through `virtle rpc guest-exec
 Spawn options:
 
 - `-p`, `--profile PROFILE` — repeatable agent-box profile; profiles supply mount points.
-- `-f`, `--flake FLAKE#HOST` — required flake directory plus host reference, e.g. `../my-nix#agent`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
+- `-f`, `--flake FLAKE#HOST` — flake directory plus host reference, e.g. `../my-nix#agent`. Required for a new VM; when spawning an existing named VM, omitting it reuses the value saved in `ash.toml`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
 - `-u`, `--user USER` — guest SSH user. Defaults to `runtime.qemu.ssh_user` from config, then `agent`.
 - `-c`, `--config CONFIG` — agent-box style config. Default: `~/.agent-box.toml`.
@@ -176,6 +176,7 @@ Then it reads the selected profiles from `~/.agent-box.toml` and turns their mou
 Profile selection is explicit:
 
 - If no `-p`/`--profile` is passed for a new VM, `ash` uses `default_profile` from the config, falling back to `base`.
+- If `-f`/`--flake` is omitted for an existing named VM with saved `ash.toml`, `ash` reuses the saved flake; new VMs still require it.
 - If no `-p`/`--profile` is passed for an existing named VM with saved `ash.toml`, `ash` reuses the saved profile list.
 - If one or more profiles are passed, `ash` uses exactly those profiles. It does not automatically add `default_profile`.
 - Shared/base profile behavior should be expressed with profile `extends` in the config.

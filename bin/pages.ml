@@ -94,10 +94,14 @@ let spawn =
           "For an existing named VM, spawn first builds new spawn inputs from \
            the current command line and defaults.";
         `P
-          "Profiles have one carry-forward rule: if no --profile option is \
-           passed and an old ash.toml exists, ash reads the old ash.toml and \
-           copies its profile list into the new inputs. Passing one or more \
-           --profile options disables this carry-forward and uses exactly \
+          "For an existing named VM, omitting --flake reuses the flake saved \
+           in ash.toml. A new VM still requires --flake, and an explicit \
+           --flake overrides the saved value.";
+        `P
+          "Profiles have a similar carry-forward rule: if no --profile option \
+           is passed and an old ash.toml exists, ash reads the old ash.toml \
+           and copies its profile list into the new inputs. Passing one or \
+           more --profile options disables this carry-forward and uses exactly \
            those profiles.";
         `P
           "After inputs are built, spawn overwrites ash.toml with the new \
@@ -109,10 +113,10 @@ let spawn =
            running VM.";
         `S "FLAKE TARGET";
         `P
-          "--flake expects FLAKE#HOST. ash evaluates nixosConfigurations.HOST \
-           from that flake and uses it for the guest kernel, initrd, kernel \
-           params, system toplevel, host-side ssh, and host-side \
-           systemd-ssh-proxy paths.";
+          "--flake expects FLAKE#HOST and is required when creating a new VM. \
+           ash evaluates nixosConfigurations.HOST from that flake and uses it \
+           for the guest kernel, initrd, kernel params, system toplevel, \
+           host-side ssh, and host-side systemd-ssh-proxy paths.";
         `P
           "Path-like flake references are saved in ash.toml as resolved \
            absolute paths so ash regenerate NAME works from any current \

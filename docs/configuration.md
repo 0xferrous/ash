@@ -14,7 +14,7 @@ The fragment resolves to:
 nixosConfigurations.agent
 ```
 
-Pass the flake directory, not `flake.nix`. Path-like flake references are stored as resolved absolute paths in `ash.toml`, so later `ash regenerate NAME` does not depend on the current directory.
+Pass the flake directory, not `flake.nix`. `--flake` is required when creating a new VM. When spawning an existing named VM, ash reuses the flake saved in `ash.toml` if `--flake` is omitted; an explicit value overrides it. Path-like flake references are stored as resolved absolute paths, so later commands do not depend on the current directory.
 
 ## Agent-box config
 
@@ -77,6 +77,9 @@ ash stores spawn inputs in:
 This file is used by:
 
 ```sh
+ash spawn --name <name>
 ash regenerate <name>
 ash attach --spawn <name>
 ```
+
+For `ash spawn --name <name>`, saved values are reused only for options with documented carry-forward behavior, including `--flake` and `--profile` when those options are omitted.

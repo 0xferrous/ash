@@ -1268,6 +1268,16 @@ let load_ash_config ~name =
     virtle = string_of_doc doc [ "spawn"; "virtle" ];
   }
 
+let resolve_spawn_flake ~name = function
+  | Some flake -> flake
+  | None ->
+      let saved_path = ash_config_path ~name in
+      if Sys.file_exists saved_path then (
+        let saved = load_ash_config ~name in
+        Log.debug "using saved flake for existing VM %s: %s" name saved.flake;
+        saved.flake)
+      else Log.fatal "spawn requires --flake for a new VM"
+
 let render_manifest (inputs : manifest_inputs) =
   let config = Agent_box.load inputs.config_path in
   let target = Nix.resolve_target ~flake:inputs.flake in
@@ -1312,7 +1322,15 @@ let write_manifest_for_inputs inputs =
   path
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~kitty () =
+    ~config_path ?flake ~profiles ~print_serial ~mount_cwd ~kitty () =
+  let name = Option.value name ~default:(default_name ()) in
+  Log.debug "using VM name: %s" name;
+  let flake = Nix.storage_flake_ref (resolve_spawn_flake ~name flake) in
+  let saved =
+    lazy
+      (let saved_path = ash_config_path ~name in
+       if Sys.file_exists saved_path then Some (load_ash_config ~name) else None)
+  in
   let virtle = find_virtle virtle in
   if kitty then ignore (find_kitten ());
   let ssh = Option.map (fun path -> find_ssh (Some path)) ssh in
@@ -1322,20 +1340,16 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       systemd_ssh_proxy
   in
   let virtiofsd = find_virtiofsd () in
-  let flake = Nix.storage_flake_ref flake in
-  let name = Option.value name ~default:(default_name ()) in
-  Log.debug "using VM name: %s" name;
   let ro_store_socket = Option.map Util.absolute_path ro_store_socket in
   let profiles =
     if profiles <> [] then profiles
     else
-      let saved_path = ash_config_path ~name in
-      if Sys.file_exists saved_path then (
-        let saved = load_ash_config ~name in
-        Log.debug "using saved profiles for existing VM %s: %s" name
-          (String.concat "," saved.profiles);
-        saved.profiles)
-      else profiles
+      match Lazy.force saved with
+      | Some saved ->
+          Log.debug "using saved profiles for existing VM %s: %s" name
+            (String.concat "," saved.profiles);
+          saved.profiles
+      | None -> profiles
   in
   let inputs =
     {
@@ -1416,11 +1430,11 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
   | None -> Util.exec inputs.virtle args
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~ephemeral ~attach
+    ~config_path ?flake ~profiles ~print_serial ~mount_cwd ~ephemeral ~attach
     ~keep ~kitty ~verbose () =
   let inputs, path =
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-      ~config_path ~flake ~profiles ~print_serial ~mount_cwd ~kitty ()
+      ~config_path ?flake ~profiles ~print_serial ~mount_cwd ~kitty ()
   in
   if attach && keep then
     launch_background_and_attach ~resume:None inputs path ~verbose

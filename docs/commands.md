@@ -3,7 +3,7 @@
 ## `ash spawn`
 
 ```sh
-ash spawn -f FLAKE#HOST [options]
+ash spawn [--flake FLAKE#HOST] [options]
 ```
 
 Creates or updates VM state, renders `virtle.toml`, writes `ash.toml`, and launches the VM.
@@ -11,6 +11,7 @@ Creates or updates VM state, renders `virtle.toml`, writes `ash.toml`, and launc
 Common options:
 
 - `--name NAME`
+- `--flake FLAKE#HOST`, `-f FLAKE#HOST` (required for a new VM; reused from saved `ash.toml` for an existing named VM)
 - `--profile PROFILE`, `-p PROFILE`
 - `--user USER`, `-u USER`
 - `--config CONFIG`, `-c CONFIG`

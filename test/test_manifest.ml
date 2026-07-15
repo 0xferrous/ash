@@ -504,6 +504,33 @@ let test_kitty_selects_kitten_ssh_wrapper () =
   assert_equal "selected kitty wrapper" kitty_wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]))
 
+let test_spawn_reuses_saved_flake_when_omitted () =
+  let root = temp_dir "ash-test-saved-flake" in
+  Unix.putenv "XDG_STATE_HOME" root;
+  let name = "existing-vm" in
+  let saved_flake = "/tmp/saved-flake#agent" in
+  let inputs : Virtle.manifest_inputs =
+    {
+      config_path = "/tmp/agent-box.toml";
+      flake = saved_flake;
+      name;
+      profiles = [ "base" ];
+      user = None;
+      print_serial = false;
+      mount_cwd = false;
+      ro_store_socket = None;
+      ssh = None;
+      systemd_ssh_proxy = None;
+      kitty = false;
+      virtiofsd = "/bin/virtiofsd";
+      virtle = "/bin/virtle";
+    }
+  in
+  write_file (Virtle.ash_config_path ~name) (Virtle.ash_config inputs);
+  assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
+  assert_equal "explicit flake overrides saved" "github:owner/repo#other"
+    (Virtle.resolve_spawn_flake ~name (Some "github:owner/repo#other"))
+
 let test_nix_storage_flake_ref_absolutizes_relative_paths () =
   mkdir_p (Filename.concat (Filename.dirname (Sys.getcwd ())) "my-nix");
   mkdir_p (Filename.concat (Sys.getcwd ()) "flake");
@@ -565,6 +592,8 @@ let () =
     test_hotmount_default_guest_path_matches_host_path;
   run "hotmount tilde guest path uses guest home"
     test_hotmount_tilde_guest_path_uses_guest_home;
+  run "spawn reuses saved flake when omitted"
+    test_spawn_reuses_saved_flake_when_omitted;
   run "nix storage flake refs absolutize relative paths"
     test_nix_storage_flake_ref_absolutizes_relative_paths;
   run "nix json string array parser" test_nix_json_string_array_parser;

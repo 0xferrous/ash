@@ -20,13 +20,8 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake name user
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
-  let flake =
-    match flake with
-    | Some flake -> flake
-    | None -> Log.fatal "spawn requires --flake"
-  in
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ?name ?user ~config_path:config ~flake ~profiles ~print_serial ~mount_cwd
+    ?name ?user ~config_path:config ?flake ~profiles ~print_serial ~mount_cwd
     ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
 
 let list_vms global =
@@ -129,7 +124,10 @@ let flake_arg =
     value
     & opt (some string) None
     & info [ "flake"; "f" ]
-        ~doc:"Flake reference in the form FLAKE#HOST, e.g. ../my-nix#agent."
+        ~doc:
+          "Flake reference in the form FLAKE#HOST, e.g. ../my-nix#agent. \
+           Required for a new VM; defaults to the saved ash.toml value for an \
+           existing named VM."
         ~docv:"FLAKE#HOST")
 
 let name_arg =
