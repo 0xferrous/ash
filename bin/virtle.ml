@@ -380,6 +380,15 @@ let control_socket_ssh_stats path =
       Option.bind (Qga.output_data response) parse_ssh_stats
   | _ -> None
 
+let active_ssh_warning ~name = function
+  | Some (connections, ptys) when connections > 0 ->
+      Some
+        (Printf.sprintf
+           "stopping VM %S with %d active SSH connection(s) and %d active \
+            PTY(s)"
+           name connections ptys)
+  | _ -> None
+
 let rec path_size ?(exclude_entry = fun _ -> false) path =
   try
     let stat = Unix.lstat path in
@@ -1542,6 +1551,9 @@ let stop ?name () =
     Log.fatal
       "VM %S is running, but not as an ash background unit; refusing to stop it"
       vm.name;
+  control_socket_ssh_stats (control_socket_path vm.path)
+  |> active_ssh_warning ~name:vm.name
+  |> Option.iter (fun warning -> Log.warn "%s" warning);
   let code = Systemd_run.stop_user_unit ~name:vm.name in
   exit code
 

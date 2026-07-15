@@ -75,7 +75,7 @@ Rewrites `virtle.toml` from the VM's saved `ash.toml`.
 ash stop [NAME]
 ```
 
-Stops an ash-owned background VM.
+Stops an ash-owned background VM. If QGA reports active SSH connections, ash warns with the connection and PTY counts before continuing.
 
 ## `ash logs`
 

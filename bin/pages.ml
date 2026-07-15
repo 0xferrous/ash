@@ -492,6 +492,11 @@ let stop =
         `P
           "Foreground attached VMs are not owned by a background unit, so ash \
            stop will refuse to stop them.";
+        `S "ACTIVE SSH CONNECTIONS";
+        `P
+          "Before stopping the unit, ash queries the guest through QGA. If the \
+           VM has active SSH connections, ash prints a warning with its SSH \
+           connection and PTY counts, then continues stopping the VM.";
         `S "SUSPEND";
         `P
           "With --suspend, ash runs virtle suspend for the VM's manifest \

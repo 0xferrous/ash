@@ -430,6 +430,17 @@ let test_qga_ssh_stats_action () =
       assert_int "ssh ptys" 6 ptys
   | None -> fail "ssh stats output should parse"
 
+let test_active_ssh_warning () =
+  let warning = Virtle.active_ssh_warning ~name:"work" (Some (2, 6)) in
+  assert_string_contains "stop ssh count"
+    (Option.value warning ~default:"")
+    "2 active SSH connection(s)";
+  assert_string_contains "stop pty count"
+    (Option.value warning ~default:"")
+    "6 active PTY(s)";
+  assert_bool "no warning without connections" true
+    (Virtle.active_ssh_warning ~name:"work" (Some (0, 0)) = None)
+
 let test_qga_unmount_removes_empty_mountpoint () =
   let action = Qga.unmount_action ~name:"test-unmount" ~guest_path:"/tmp/mnt" in
   let script = List.nth action.args 1 in
@@ -540,6 +551,7 @@ let () =
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
   run "qga output data decodes base64" test_qga_output_data_decodes_base64;
   run "qga ssh stats action" test_qga_ssh_stats_action;
+  run "stop warns about active ssh" test_active_ssh_warning;
   run "qga unmount removes empty mountpoint"
     test_qga_unmount_removes_empty_mountpoint;
   run "qga mountpoint inherits parent owner"
