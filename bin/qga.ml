@@ -40,6 +40,21 @@ let shell_action ?(args = []) ~name script =
     name;
   }
 
+let install_mountpoint_script =
+  {sh|
+install_mountpoint() {
+  path=$1
+  parent=$(dirname "$path")
+  while [ ! -e "$parent" ] && [ "$parent" != / ]; do
+    parent=$(dirname "$parent")
+  done
+
+  owner=$(stat -c %u "$parent")
+  group=$(stat -c %g "$parent")
+  install -d -o "$owner" -g "$group" "$path"
+}
+|sh}
+
 (* QGA ACTION SCRIPT: mount a virtiofs tag at its target path. *)
 let mount_virtiofs_action ~name ~tag ~target ~read_only =
   let script =
@@ -55,7 +70,7 @@ if mountpoint -q "$target"; then
   exit 42
 fi
 
-install -d "$target"
+install_mountpoint "$target"
 if [ "$read_only" = 1 ]; then
   mount -t virtiofs -o ro -- "$tag" "$target"
 else
@@ -65,7 +80,7 @@ fi
   in
   shell_action ~name
     ~args:[ tag; target; (if read_only then "1" else "0") ]
-    script
+    (install_mountpoint_script ^ script)
 
 (* QGA ACTION SCRIPT: mount ash's hotmounts virtiofs staging share and bind one
    staged entry to the requested guest target. *)
@@ -91,7 +106,7 @@ if mountpoint -q "$target"; then
   exit 42
 fi
 
-install -d "$target"
+install_mountpoint "$target"
 mount --bind "$source" "$target"
 if [ "$read_only" = 1 ]; then
   mount -o remount,bind,ro "$target"
@@ -106,7 +121,7 @@ fi
         guest_path;
         (if read_only then "1" else "0");
       ]
-    script
+    (install_mountpoint_script ^ script)
 
 (* QGA ACTION SCRIPT: unmount a guest hotmount target. *)
 let unmount_action ~name ~guest_path =

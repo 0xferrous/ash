@@ -420,6 +420,21 @@ let test_qga_unmount_removes_empty_mountpoint () =
   assert_string_contains "unmount rmdir" script
     "rmdir \"$target\" 2>/dev/null || true"
 
+let test_qga_mountpoint_inherits_parent_owner () =
+  let action =
+    Qga.hotmount_action ~name:"test-hotmount" ~read_only:false
+      ~hotmounts_guest_dir:"/run/ash/hotmounts" ~source_name:"source"
+      ~guest_path:"/home/agent/project"
+  in
+  let script = List.nth action.args 1 in
+  assert_string_contains "mountpoint helper" script "install_mountpoint()";
+  assert_string_contains "mountpoint parent stat" script
+    "stat -c %u \"$parent\"";
+  assert_string_contains "mountpoint owner install" script
+    "install -d -o \"$owner\" -g \"$group\" \"$path\"";
+  assert_string_contains "target uses helper" script
+    "install_mountpoint \"$target\""
+
 let test_hotmount_default_guest_path_matches_host_path () =
   assert_equal "default guest path" "/host/project"
     (Virtle.resolve_hotmount_guest_path ~user:"agent" ~host_dir:"/host/project"
@@ -496,6 +511,8 @@ let () =
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
   run "qga unmount removes empty mountpoint"
     test_qga_unmount_removes_empty_mountpoint;
+  run "qga mountpoint inherits parent owner"
+    test_qga_mountpoint_inherits_parent_owner;
   run "hotmount default guest path matches host path"
     test_hotmount_default_guest_path_matches_host_path;
   run "hotmount tilde guest path uses guest home"

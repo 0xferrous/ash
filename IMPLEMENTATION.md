@@ -95,7 +95,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 `ash` also prints a `journalctl --user -u ash-<name>.service -f` hint for background VMs, but does not run `journalctl` itself.
 
-Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags and installing ash's SSH public key. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `mkdir`, `chown`, `chmod`, and `grep`; they must exist in the guest image.
+Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags and installing ash's SSH public key. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, and `grep`; they must exist in the guest image.
 
 Spawn options:
 

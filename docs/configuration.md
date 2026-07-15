@@ -51,6 +51,7 @@ Runtime features use QGA guest-exec. The guest needs commands such as:
 - `umount`
 - `mountpoint`
 - `install`
+- `stat`
 - `mkdir`
 - `chown`
 - `chmod`

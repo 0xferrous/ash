@@ -42,7 +42,8 @@ let main =
         `P
           "Guest-side operations assume QEMU Guest Agent plus standard NixOS \
            tools under /run/current-system/sw/bin, including sh, mount, \
-           mountpoint, install, mkdir, chown, chmod, grep, date, and printf.";
+           mountpoint, install, stat, mkdir, chown, chmod, grep, date, and \
+           printf.";
         `S Manpage.s_examples;
         `Pre "ash spawn --name work -f ../my-nix#agent";
         `Pre "ash spawn --name tmp -f ../my-nix#agent --attach";
