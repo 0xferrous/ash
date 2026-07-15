@@ -83,7 +83,7 @@ Stops an ash-owned background VM.
 ash ls
 ```
 
-Lists VM state directories.
+Lists VM state directories. Size totals exclude ash's `hotmounts` staging directory.
 
 ## `ash rm`
 

@@ -308,7 +308,8 @@ let ls =
            apparent virtual size, last modification time, and state path.";
         `P
           "DISK is host storage currently used. VIRTUAL is apparent size, \
-           including sparse files such as persist.img.";
+           including sparse files such as persist.img. Both exclude ash's \
+           hotmounts staging directory.";
         `S Manpage.s_examples;
         `Pre "ash ls";
       ];

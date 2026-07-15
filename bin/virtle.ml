@@ -358,7 +358,7 @@ let control_socket_status_cid path =
       with Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _ ->
         None)
 
-let rec path_size path =
+let rec path_size ?(exclude_entry = fun _ -> false) path =
   try
     let stat = Unix.lstat path in
     match stat.st_kind with
@@ -366,7 +366,10 @@ let rec path_size path =
         Sys.readdir path
         |> Array.fold_left
              (fun total entry ->
-               Int64.add total (path_size (Filename.concat path entry)))
+               if exclude_entry entry then total
+               else
+                 Int64.add total
+                   (path_size ~exclude_entry (Filename.concat path entry)))
              (Int64.of_int stat.st_size)
     | _ -> Int64.of_int stat.st_size
   with Unix.Unix_error _ | Sys_error _ -> 0L
@@ -374,18 +377,23 @@ let rec path_size path =
 let first_word value =
   String.trim value |> String.split_on_char ' ' |> List.find_opt (( <> ) "")
 
+let state_path_size path = path_size ~exclude_entry:(( = ) "hotmounts") path
+
 let disk_usage path =
+  let hotmounts = Filename.concat path "hotmounts" in
   try
     let output =
-      Util.command_output ("du -sk -- " ^ Util.shell_quote path ^ " 2>/dev/null")
+      Util.command_output
+        ("du -sk --exclude=" ^ Util.shell_quote hotmounts ^ " -- "
+       ^ Util.shell_quote path ^ " 2>/dev/null")
     in
     let output =
       String.map (function '\t' | '\n' | '\r' -> ' ' | c -> c) output
     in
     match first_word output with
     | Some kib -> Int64.mul (Int64.of_string kib) 1024L
-    | None -> path_size path
-  with Failure _ | Invalid_argument _ -> path_size path
+    | None -> state_path_size path
+  with Failure _ | Invalid_argument _ -> state_path_size path
 
 let human_size bytes =
   let units = [| "B"; "KiB"; "MiB"; "GiB"; "TiB" |] in
@@ -426,7 +434,7 @@ let list_vms () =
                 status;
                 cid;
                 disk_bytes = disk_usage path;
-                apparent_bytes = path_size path;
+                apparent_bytes = state_path_size path;
                 modified = stat.st_mtime;
                 path;
               }

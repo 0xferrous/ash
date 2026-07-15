@@ -493,6 +493,19 @@ let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
 
+let test_state_sizes_ignore_hotmounts () =
+  let root = temp_dir "ash-test-size" in
+  let hotmounts = Filename.concat root "hotmounts" in
+  let workspace = Filename.concat root "workspace" in
+  mkdir_p hotmounts;
+  mkdir_p workspace;
+  write_file (Filename.concat hotmounts "big") (String.make (1024 * 1024) 'x');
+  write_file (Filename.concat workspace "small") "x";
+  assert_bool "disk usage ignores hotmounts" true
+    (Virtle.disk_usage root < 524288L);
+  assert_bool "apparent size ignores hotmounts" true
+    (Virtle.state_path_size root < 524288L)
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -519,4 +532,5 @@ let () =
     test_hotmount_tilde_guest_path_uses_guest_home;
   run "nix storage flake refs absolutize relative paths"
     test_nix_storage_flake_ref_absolutizes_relative_paths;
-  run "nix json string array parser" test_nix_json_string_array_parser
+  run "nix json string array parser" test_nix_json_string_array_parser;
+  run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts

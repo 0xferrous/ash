@@ -91,7 +91,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `systemctl` — checks/stops ash-owned background units for `ash stop`.
 - `ssh-keygen` — creates ash's SSH autoprovisioning key when needed.
 - `/bin/sh` — used internally to run small shell commands and capture output.
-- `du` — used by `ash ls`/state listing to estimate VM state disk usage; ash falls back to walking the directory tree if it fails.
+- `du` — used by `ash ls`/state listing to estimate VM state disk usage, excluding the VM state's `hotmounts` staging directory; ash falls back to walking the directory tree if it fails.
 
 `ash` also prints a `journalctl --user -u ash-<name>.service -f` hint for background VMs, but does not run `journalctl` itself.
 
