@@ -439,7 +439,12 @@ let test_active_ssh_warning () =
     (Option.value warning ~default:"")
     "6 active PTY(s)";
   assert_bool "no warning without connections" true
-    (Virtle.active_ssh_warning ~name:"work" (Some (0, 0)) = None)
+    (Virtle.active_ssh_warning ~name:"work" (Some (0, 0)) = None);
+  assert_bool "yes confirms stop" true (Virtle.affirmative_response "yes");
+  assert_bool "uppercase y confirms stop" true (Virtle.affirmative_response "Y");
+  assert_bool "empty response cancels stop" true
+    (not (Virtle.affirmative_response ""));
+  assert_bool "no cancels stop" true (not (Virtle.affirmative_response "no"))
 
 let test_qga_unmount_removes_empty_mountpoint () =
   let action = Qga.unmount_action ~name:"test-unmount" ~guest_path:"/tmp/mnt" in

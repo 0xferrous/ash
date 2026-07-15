@@ -384,10 +384,32 @@ let active_ssh_warning ~name = function
   | Some (connections, ptys) when connections > 0 ->
       Some
         (Printf.sprintf
-           "stopping VM %S with %d active SSH connection(s) and %d active \
-            PTY(s)"
-           name connections ptys)
+           "VM %S has %d active SSH connection(s) and %d active PTY(s)" name
+           connections ptys)
   | _ -> None
+
+let affirmative_response response =
+  match String.lowercase_ascii (String.trim response) with
+  | "y" | "yes" -> true
+  | _ -> false
+
+let confirm_stop_with_active_ssh ~name ~force stats =
+  match active_ssh_warning ~name stats with
+  | None -> ()
+  | Some warning when force ->
+      Log.warn "%s; stopping because --force was passed" warning
+  | Some warning ->
+      Log.warn "%s" warning;
+      if not (Unix.isatty Unix.stdin) then
+        Log.fatal
+          "refusing to stop VM %S non-interactively; rerun with --force to \
+           override"
+          name;
+      Printf.eprintf "Stop VM %S anyway? [y/N] %!" name;
+      let response = try input_line stdin with End_of_file -> "" in
+      if not (affirmative_response response) then (
+        Log.info "stop cancelled";
+        exit 0)
 
 let rec path_size ?(exclude_entry = fun _ -> false) path =
   try
@@ -1527,7 +1549,7 @@ let suspend ?virtle ?name () =
   in
   exit code
 
-let stop ?name () =
+let stop ?name ~force () =
   let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
   let vm =
     match name with
@@ -1552,8 +1574,7 @@ let stop ?name () =
       "VM %S is running, but not as an ash background unit; refusing to stop it"
       vm.name;
   control_socket_ssh_stats (control_socket_path vm.path)
-  |> active_ssh_warning ~name:vm.name
-  |> Option.iter (fun warning -> Log.warn "%s" warning);
+  |> confirm_stop_with_active_ssh ~name:vm.name ~force;
   let code = Systemd_run.stop_user_unit ~name:vm.name in
   exit code
 

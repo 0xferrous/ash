@@ -48,10 +48,11 @@ let resume opts name attach keep =
   if keep && not attach then Log.fatal "--keep requires --attach";
   Virtle.resume ?virtle:opts.virtle ~name ~attach ~keep ~verbose:opts.verbose ()
 
-let stop opts name suspend =
+let stop opts name suspend force =
   Log.set_debug opts.global.debug;
+  if suspend && force then Log.fatal "--force cannot be used with --suspend";
   if suspend then Virtle.suspend ?virtle:opts.virtle ?name ()
-  else Virtle.stop ?name ()
+  else Virtle.stop ?name ~force ()
 
 let logs global name follow lines =
   Log.set_debug global.debug;
@@ -371,12 +372,18 @@ let stop_name_arg =
         ~doc:"VM/state name. If omitted, stop requires exactly one running VM."
         ~docv:"NAME")
 
+let force_flag =
+  Arg.(
+    value & flag
+    & info [ "force" ] ~doc:"Stop even when the VM has active SSH connections.")
+
 let stop_man = Pages.stop.man
 
 let stop_cmd =
   Cmd.v
     (Cmd.info "stop" ~doc:"stop an ash background VM" ~man:stop_man)
-    Term.(const stop $ virtle_opts_arg $ stop_name_arg $ suspend_flag)
+    Term.(
+      const stop $ virtle_opts_arg $ stop_name_arg $ suspend_flag $ force_flag)
 
 let logs_name_arg =
   Arg.(

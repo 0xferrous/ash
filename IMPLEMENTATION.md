@@ -130,7 +130,7 @@ Attach options:
 | `ash attach --spawn` | start foreground VM from saved state | yes | yes |
 | `ash attach --spawn --keep` | start background systemd user unit from saved state | yes | no |
 
-Background VMs are owned by transient user systemd units named `ash-<name>.service`. `ash stop NAME` stops only those ash-owned background units. If a VM is running because of a foreground `ash spawn --attach` or `ash attach --spawn` session, `ash stop` refuses to stop it. Before stopping a background unit, ash queries the same QGA SSH/PTY statistics used by `ash ls`; when one or more SSH connections are active, it logs a warning with both counts and then continues with the stop.
+Background VMs are owned by transient user systemd units named `ash-<name>.service`. `ash stop NAME` stops only those ash-owned background units. If a VM is running because of a foreground `ash spawn --attach` or `ash attach --spawn` session, `ash stop` refuses to stop it. Before stopping a background unit, ash queries the same QGA SSH/PTY statistics used by `ash ls`; when one or more SSH connections are active, it logs a warning with both counts and asks for interactive confirmation. A non-interactive stop with active connections is refused unless `--force` is passed.
 
 For `attach`, `--keep` is valid only with `--spawn`; `ash attach --keep` is rejected.
 

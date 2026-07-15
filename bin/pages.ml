@@ -495,8 +495,12 @@ let stop =
         `S "ACTIVE SSH CONNECTIONS";
         `P
           "Before stopping the unit, ash queries the guest through QGA. If the \
-           VM has active SSH connections, ash prints a warning with its SSH \
-           connection and PTY counts, then continues stopping the VM.";
+           VM has active SSH connections, ash prints their connection and PTY \
+           counts and asks for confirmation.";
+        `P
+          "In a non-interactive invocation, ash refuses to stop a VM with \
+           active SSH connections. Pass --force to bypass confirmation and \
+           continue after the warning.";
         `S "SUSPEND";
         `P
           "With --suspend, ash runs virtle suspend for the VM's manifest \
@@ -505,6 +509,7 @@ let stop =
         `P "Resume later with ash resume NAME.";
         `S Manpage.s_examples;
         `Pre "ash stop work";
+        `Pre "ash stop --force work";
         `Pre "ash stop --suspend work";
       ];
   }

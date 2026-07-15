@@ -72,10 +72,10 @@ Rewrites `virtle.toml` from the VM's saved `ash.toml`.
 ## `ash stop`
 
 ```sh
-ash stop [NAME]
+ash stop [--force] [NAME]
 ```
 
-Stops an ash-owned background VM. If QGA reports active SSH connections, ash warns with the connection and PTY counts before continuing.
+Stops an ash-owned background VM. If QGA reports active SSH connections, ash warns with the connection and PTY counts and asks for confirmation. Non-interactive invocations refuse to continue unless `--force` is passed.
 
 ## `ash logs`
 
