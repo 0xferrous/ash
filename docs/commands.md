@@ -77,6 +77,14 @@ ash stop [NAME]
 
 Stops an ash-owned background VM.
 
+## `ash logs`
+
+```sh
+ash logs [--follow|-f] [--lines N|-n N] NAME
+```
+
+Shows journal entries from the latest invocation of the VM's `ash-NAME.service` user unit, excluding older processes that reused the unit name. Entries are formatted as `[YYYY-MM-DD HH:MM:SS] MESSAGE`, without hostname or process metadata. It shows the 100 most recent entries by default; `--follow` continues waiting for new entries.
+
 ## `ash ls`
 
 ```sh

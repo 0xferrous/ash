@@ -37,6 +37,12 @@ Attach to it:
 ash attach work
 ```
 
+Follow its logs:
+
+```sh
+ash logs -f work
+```
+
 Use Kitty's SSH kitten for an attached session:
 
 ```sh

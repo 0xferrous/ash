@@ -89,11 +89,12 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `systemd-ssh-proxy` — host SSH proxy used for vsock SSH connections. Defaults to the selected NixOS config's `config.systemd.package`; override with `--systemd-ssh-proxy PATH`.
 - `systemd-run` — starts background VMs as transient user units for `ash spawn`, `ash spawn --attach --keep`, and `ash attach --spawn --keep`.
 - `systemctl` — checks/stops ash-owned background units for `ash stop`.
+- `journalctl` — reads logs from ash-owned background units for `ash logs`.
 - `ssh-keygen` — creates ash's SSH autoprovisioning key when needed.
 - `/bin/sh` — used internally to run small shell commands and capture output.
 - `du` — used by `ash ls`/state listing to estimate VM state disk usage, excluding the VM state's `hotmounts` staging directory; ash falls back to walking the directory tree if it fails.
 
-`ash` also prints a `journalctl --user -u ash-<name>.service -f` hint for background VMs, but does not run `journalctl` itself.
+`ash logs NAME` runs `journalctl --user --unit ash-<name>.service --invocation=0` so only the latest process invocation is shown, with 100 recent lines by default. It requests JSON records and formats each entry as `[YYYY-MM-DD HH:MM:SS] MESSAGE`, omitting hostname and process metadata. `--lines`/`-n` changes the count, and `--follow`/`-f` follows new entries. Background spawn prints `ash logs -f NAME` as a hint. Invocation filtering requires systemd 257 or newer.
 
 Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags and installing ash's SSH public key. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, and `grep`; they must exist in the guest image.
 

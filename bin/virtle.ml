@@ -1304,7 +1304,7 @@ let print_background_started ~name =
   Printf.printf "started VM: %s\n" name;
   Printf.printf "unit: %s\n" (Systemd_run.service_name ~name);
   Printf.printf "attach: ash attach %s\n" (Util.shell_quote name);
-  Printf.printf "logs: %s\n" (Systemd_run.journalctl_hint ~name);
+  Printf.printf "logs: %s\n" (Systemd_run.logs_hint ~name);
   Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
 
 let start_background ~resume ~name ~virtle ~path ~verbose =

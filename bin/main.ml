@@ -53,6 +53,11 @@ let stop opts name suspend =
   if suspend then Virtle.suspend ?virtle:opts.virtle ?name ()
   else Virtle.stop ?name ()
 
+let logs global name follow lines =
+  Log.set_debug global.debug;
+  if lines < 0 then Log.fatal "--lines must be non-negative";
+  Systemd_run.show_user_unit_logs ~name ~follow ~lines
+
 let regenerate opts name =
   Log.set_debug opts.global.debug;
   Virtle.regenerate ?virtle:opts.virtle ~name ()
@@ -373,6 +378,31 @@ let stop_cmd =
     (Cmd.info "stop" ~doc:"stop an ash background VM" ~man:stop_man)
     Term.(const stop $ virtle_opts_arg $ stop_name_arg $ suspend_flag)
 
+let logs_name_arg =
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let follow_flag =
+  Arg.(
+    value & flag
+    & info [ "follow"; "f" ] ~doc:"Follow new journal entries as they arrive.")
+
+let lines_arg =
+  Arg.(
+    value & opt int 100
+    & info [ "lines"; "n" ] ~doc:"Number of recent journal lines to show."
+        ~docv:"N")
+
+let logs_man = Pages.logs.man
+
+let logs_cmd =
+  Cmd.v
+    (Cmd.info "logs" ~doc:"show logs for an ash background VM" ~man:logs_man)
+    Term.(
+      const logs $ global_opts_arg $ logs_name_arg $ follow_flag $ lines_arg)
+
 let rm_man = Pages.rm.man
 
 let rm_cmd =
@@ -394,6 +424,7 @@ let main_cmd =
       mount_profile_cmd;
       umount_profile_cmd;
       stop_cmd;
+      logs_cmd;
       regenerate_cmd;
       ls_cmd;
       rm_cmd;

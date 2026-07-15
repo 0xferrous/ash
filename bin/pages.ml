@@ -34,7 +34,7 @@ let main =
         `P
           "ash assumes host tools are available as needed: nix, virtle, \
            virtiofsd, bindfs, ssh, systemd-ssh-proxy, systemd-run, systemctl, \
-           ssh-keygen, /bin/sh, mountpoint, and du.";
+           journalctl, ssh-keygen, /bin/sh, mountpoint, and du.";
         `P
           "Some paths can be resolved or overridden: virtle comes from \
            --virtle, ASH_VIRTLE, or PATH; ssh and systemd-ssh-proxy default to \
@@ -84,8 +84,8 @@ let spawn =
            transient unit named ash-NAME.service. ash stop NAME stops that \
            unit.";
         `P
-          "After starting a background VM, ash prints the unit name and a \
-           journalctl --user -u ash-NAME.service -f hint for logs.";
+          "After starting a background VM, ash prints the unit name and an ash \
+           logs -f NAME hint for following its logs.";
         `S "MANIFEST GENERATION";
         `P
           "spawn writes ash.toml and virtle.toml before launching virtle. Both \
@@ -499,6 +499,40 @@ let stop =
       ];
   }
 
+let logs =
+  {
+    file = "ash-logs";
+    command = Some "logs";
+    summary = "show logs for an ash background VM";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Shows journal entries from the latest invocation of the transient \
+           user systemd unit that owns an ash background VM. Logs from older \
+           processes that reused the same unit name are excluded.";
+        `S "OUTPUT";
+        `P
+          "Each journal entry is printed as [YYYY-MM-DD HH:MM:SS] MESSAGE. \
+           Hostname, process name, and process ID metadata are omitted.";
+        `S "OPTIONS";
+        `P
+          "By default, ash shows the 100 most recent entries. Use --lines=N or \
+           -n N to choose a different number.";
+        `P
+          "With --follow or -f, journalctl continues waiting for new entries \
+           until interrupted.";
+        `S "BACKGROUND UNITS";
+        `P
+          "ash logs reads the ash-NAME.service user unit created by background \
+           spawn flows. Foreground attached VMs do not run in this unit.";
+        `S Manpage.s_examples;
+        `Pre "ash logs work";
+        `Pre "ash logs --lines 250 work";
+        `Pre "ash logs -f work";
+      ];
+  }
+
 let rm =
   {
     file = "ash-rm";
@@ -534,6 +568,7 @@ let all =
     mount_profile;
     umount_profile;
     stop;
+    logs;
     regenerate;
     ls;
     rm;
