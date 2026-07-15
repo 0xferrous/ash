@@ -28,6 +28,10 @@ let list_vms global =
   Log.set_debug global.debug;
   Virtle.print_vm_list ()
 
+let inspect_vm global json name =
+  Log.set_debug global.debug;
+  Virtle.inspect_vm ~json ~name
+
 let rm_vms global =
   Log.set_debug global.debug;
   Virtle.rm_vms ()
@@ -273,6 +277,26 @@ let ls_cmd =
     (Cmd.info "ls" ~doc:"list ash VM state directories" ~man:ls_man)
     Term.(const list_vms $ global_opts_arg)
 
+let inspect_name_arg =
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let inspect_json_flag =
+  Arg.(
+    value & flag
+    & info [ "json" ] ~doc:"Print the complete machine-readable JSON view.")
+
+let inspect_man = Pages.inspect.man
+
+let inspect_cmd =
+  Cmd.v
+    (Cmd.info "inspect" ~doc:"show detailed VM configuration and state"
+       ~man:inspect_man)
+    Term.(
+      const inspect_vm $ global_opts_arg $ inspect_json_flag $ inspect_name_arg)
+
 let regenerate_name_arg =
   Arg.(
     required
@@ -431,6 +455,7 @@ let main_cmd =
       stop_cmd;
       logs_cmd;
       regenerate_cmd;
+      inspect_cmd;
       ls_cmd;
       rm_cmd;
     ]

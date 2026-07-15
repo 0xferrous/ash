@@ -324,6 +324,38 @@ let ls =
       ];
   }
 
+let inspect =
+  {
+    file = "ash-inspect";
+    command = Some "inspect";
+    summary = "show detailed VM configuration and state";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Shows a concise, human-readable summary of a named running or \
+           stopped VM.";
+        `S "OUTPUT";
+        `P
+          "The default view includes runtime and storage status, flake and \
+           profile configuration, machine resources, workspace paths, \
+           configured virtle mounts and files, and persistent hotmount state.";
+        `P
+          "Malformed hotmount metadata is shown as a warning in the hotmount \
+           section.";
+        `S "JSON";
+        `P
+          "With --json, prints the complete machine-readable view, including \
+           the saved ash.toml, referenced agent-box configuration, generated \
+           virtle.toml, detailed paths, raw virtle runtime status, and the \
+           guest mount table when running.";
+        `S Manpage.s_examples;
+        `Pre "ash inspect work";
+        `Pre "ash inspect --json work | jq '.virtle.config.mounts'";
+        `Pre "ash inspect --json work | jq '.hotmounts'";
+      ];
+  }
+
 let regenerate =
   {
     file = "ash-regenerate";
@@ -589,6 +621,7 @@ let all =
     stop;
     logs;
     regenerate;
+    inspect;
     ls;
     rm;
   ]

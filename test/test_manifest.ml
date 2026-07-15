@@ -490,6 +490,18 @@ let test_virtiofs_cache_options () =
   assert_bool "immutable mount keeps default cache" false
     (List.exists (String.starts_with ~prefix:"--cache=") (args default_mount))
 
+let test_inspect_infers_fixed_mount_targets () =
+  let fields tag =
+    [ ("type", Otoml.TomlString "virtiofs"); ("tag", Otoml.TomlString tag) ]
+  in
+  assert_bool "hotmount target" true
+    (Virtle.configured_mount_target (fields "hotmounts")
+    = Some "/run/ash/hotmounts");
+  assert_bool "ro-store target" true
+    (Virtle.configured_mount_target (fields "ro-store") = Some "/nix/store");
+  assert_bool "workspace cwd target" true
+    (Virtle.configured_mount_target (fields "workspace_cwd") = Some "/mnt/cwd")
+
 let test_bindfs_disables_kernel_metadata_caches () =
   let expected = "attr_timeout=0,entry_timeout=0,negative_timeout=0" in
   let rw_args = Virtle.bindfs_args_for_mode Virtle.Read_write in
@@ -662,6 +674,64 @@ let test_read_hotmounts_reports_valid_and_invalid_records () =
   assert_equal "invalid metadata path" invalid_path
     (fst (List.hd state.invalid))
 
+let test_inspect_includes_config_and_hotmounts () =
+  let root = temp_dir "ash-test-inspect" in
+  Unix.putenv "XDG_STATE_HOME" root;
+  let name = "inspect-vm" in
+  let state_dir = Virtle.state_dir name in
+  let host_dir = Filename.concat root "project" in
+  mkdir_p state_dir;
+  mkdir_p host_dir;
+  write_file
+    (Virtle.manifest_path ~name)
+    {|memory = 2048
+
+[[mounts]]
+tag = "workspace"
+type = "virtiofs"
+source = "/tmp/workspace"
+read_only = false
+|};
+  let agent_box_path = Filename.concat root "agent-box.toml" in
+  write_file agent_box_path
+    {|default_profile = "rust"
+
+[profiles.rust]
+[profiles.go]
+|};
+  write_file
+    (Virtle.ash_config_path ~name)
+    (Printf.sprintf
+       {|[spawn]
+config_path = %S
+flake = "github:example/vms#agent"
+profiles = ["rust", "go"]
+|}
+       agent_box_path);
+  let guest_path = "/home/agent/project" in
+  let source_name = Virtle.hotmount_slug ~host_dir ~guest_path in
+  Virtle.write_hotmount_metadata_record
+    (Virtle.hotmount_metadata ~name ~source_name ~host_dir ~guest_path
+       ~mode:Virtle.Read_write);
+  let json = Virtle.inspect_vm_json ~name in
+  let open Yojson.Safe.Util in
+  assert_equal "inspect name" name (json |> member "name" |> to_string);
+  assert_equal "inspect status" "stopped" (json |> member "status" |> to_string);
+  assert_equal "inspect flake" "github:example/vms#agent"
+    (json |> member "ash" |> member "config" |> member "spawn" |> member "flake"
+   |> to_string);
+  assert_equal "inspect agent-box default profile" "rust"
+    (json |> member "agentBox" |> member "config" |> member "default_profile"
+   |> to_string);
+  assert_int "inspect configured mounts" 1
+    (json |> member "virtle" |> member "config" |> member "mounts" |> to_list
+   |> List.length);
+  assert_int "inspect hotmounts" 1
+    (json |> member "hotmounts" |> member "mounts" |> to_list |> List.length);
+  assert_equal "inspect hotmount guest path" guest_path
+    (json |> member "hotmounts" |> member "mounts" |> index 0
+   |> member "guestPath" |> to_string)
+
 let test_atomic_write_replaces_complete_file () =
   let root = temp_dir "ash-test-atomic-write" in
   let path = Filename.concat root "record.meta" in
@@ -780,6 +850,8 @@ let () =
   run "qga mountpoint inherits parent owner"
     test_qga_mountpoint_inherits_parent_owner;
   run "virtiofs cache options" test_virtiofs_cache_options;
+  run "inspect infers fixed mount targets"
+    test_inspect_infers_fixed_mount_targets;
   run "bindfs disables kernel metadata caches"
     test_bindfs_disables_kernel_metadata_caches;
   run "hotmount host path normalization cases"
@@ -794,6 +866,8 @@ let () =
   run "hotmount metadata roundtrip" test_hotmount_metadata_roundtrip;
   run "read hotmounts reports valid and invalid records"
     test_read_hotmounts_reports_valid_and_invalid_records;
+  run "inspect includes config and hotmounts"
+    test_inspect_includes_config_and_hotmounts;
   run "atomic write replaces complete file"
     test_atomic_write_replaces_complete_file;
   run "spawn reuses saved flake when omitted"

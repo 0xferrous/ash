@@ -859,6 +859,438 @@ let log_invalid_hotmount_metadata invalid =
       Log.warn "ignoring invalid hotmount metadata %s: %s" path err)
     invalid
 
+let rec toml_to_json = function
+  | Otoml.TomlString value -> `String value
+  | Otoml.TomlInteger value -> `Int value
+  | Otoml.TomlFloat value when Float.is_finite value -> `Float value
+  | Otoml.TomlFloat value -> `String (string_of_float value)
+  | Otoml.TomlBoolean value -> `Bool value
+  | Otoml.TomlOffsetDateTime value
+  | Otoml.TomlLocalDateTime value
+  | Otoml.TomlLocalDate value
+  | Otoml.TomlLocalTime value ->
+      `String value
+  | Otoml.TomlArray values | Otoml.TomlTableArray values ->
+      `List (List.map toml_to_json values)
+  | Otoml.TomlTable fields | Otoml.TomlInlineTable fields ->
+      `Assoc (List.map (fun (key, value) -> (key, toml_to_json value)) fields)
+
+let inspect_toml_file path =
+  if not (Sys.file_exists path) then
+    `Assoc
+      [ ("path", `String path); ("exists", `Bool false); ("config", `Null) ]
+  else
+    try
+      let text = In_channel.with_open_text path In_channel.input_all in
+      match Otoml.Parser.from_string_result text with
+      | Ok doc ->
+          `Assoc
+            [
+              ("path", `String path);
+              ("exists", `Bool true);
+              ("config", toml_to_json doc);
+            ]
+      | Error err ->
+          `Assoc
+            [
+              ("path", `String path);
+              ("exists", `Bool true);
+              ("config", `Null);
+              ("error", `String err);
+            ]
+    with Sys_error err ->
+      `Assoc
+        [
+          ("path", `String path);
+          ("exists", `Bool true);
+          ("config", `Null);
+          ("error", `String err);
+        ]
+
+let inspect_agent_box_config ~name =
+  let ash_path = ash_config_path ~name in
+  if not (Sys.file_exists ash_path) then `Null
+  else
+    try
+      let text = In_channel.with_open_text ash_path In_channel.input_all in
+      match Otoml.Parser.from_string_result text with
+      | Error _ -> `Null
+      | Ok doc -> (
+          match
+            Otoml.find_opt doc Otoml.get_string [ "spawn"; "config_path" ]
+          with
+          | Some path -> inspect_toml_file (Util.expand_home path)
+          | None -> `Null)
+    with Sys_error _ -> `Null
+
+let json_int64 value = `Intlit (Int64.to_string value)
+
+let file_kind path =
+  try
+    match (Unix.lstat path).st_kind with
+    | Unix.S_REG -> Some "file"
+    | Unix.S_DIR -> Some "directory"
+    | Unix.S_CHR -> Some "character-device"
+    | Unix.S_BLK -> Some "block-device"
+    | Unix.S_LNK -> Some "symlink"
+    | Unix.S_FIFO -> Some "fifo"
+    | Unix.S_SOCK -> Some "socket"
+  with Unix.Unix_error _ | Sys_error _ -> None
+
+let inspect_path path =
+  let exists = Sys.file_exists path in
+  let details =
+    try
+      let stat = Unix.stat path in
+      [
+        ("sizeBytes", json_int64 (Int64.of_int stat.st_size));
+        ("modified", `String (format_time stat.st_mtime));
+        ("modifiedUnix", `Float stat.st_mtime);
+      ]
+    with Unix.Unix_error _ | Sys_error _ -> []
+  in
+  `Assoc
+    ([
+       ("path", `String path);
+       ("exists", `Bool exists);
+       ( "kind",
+         match file_kind path with Some kind -> `String kind | None -> `Null );
+     ]
+    @ details)
+
+let host_mountpoint_state path =
+  match Util.find_in_path "mountpoint" with
+  | None -> `Null
+  | Some mountpoint ->
+      `Bool (Util.run_foreground mountpoint [ "-q"; "--"; path ] = 0)
+
+let hotmount_inspect_json ~name metadata =
+  let staging_path =
+    Filename.concat (hotmounts_dir ~name) metadata.source_name
+  in
+  `Assoc
+    [
+      ("guestPath", `String metadata.guest_path);
+      ("hostPath", `String metadata.host_dir);
+      ("mode", `String (hotmount_mode_name metadata.mode));
+      ("sourceName", `String metadata.source_name);
+      ("metadataPath", `String metadata.path);
+      ("hostExists", `Bool (Sys.file_exists metadata.host_dir));
+      ( "hostKind",
+        match file_kind metadata.host_dir with
+        | Some kind -> `String kind
+        | None -> `Null );
+      ("stagingPath", `String staging_path);
+      ("stagingExists", `Bool (Sys.file_exists staging_path));
+      ("stagingMounted", host_mountpoint_state staging_path);
+    ]
+
+let parse_json_or_string text =
+  try Yojson.Safe.from_string text with Yojson.Json_error _ -> `String text
+
+let guest_mounts_from_control_socket path =
+  let action =
+    Qga.shell_action ~name:"ash-inspect-mounts"
+      "PATH=/run/current-system/sw/bin:/bin\ncat /proc/self/mountinfo"
+  in
+  let params = Yojson.Safe.from_string (Qga.params action) in
+  match control_socket_rpc path ~method_name:"guest-exec" ~params with
+  | Some response when Qga.int_field ~field:"exitCode" response = Some 0 -> (
+      match Qga.output_data response with
+      | Some output ->
+          output |> String.split_on_char '\n'
+          |> List.filter (fun line -> line <> "")
+          |> List.map (fun line -> `String line)
+          |> fun lines -> `List lines
+      | None -> `Null)
+  | _ -> `Null
+
+let inspect_runtime_json (vm : vm_info) =
+  let socket_path = control_socket_path vm.path in
+  match vm.status with
+  | Stopped ->
+      `Assoc
+        [
+          ("running", `Bool false);
+          ("controlSocket", `String socket_path);
+          ("cid", `Null);
+          ("sshConnections", `Null);
+          ("sshPtys", `Null);
+          ("status", `Null);
+          ("guestMountInfo", `Null);
+        ]
+  | Running ->
+      let connections, ptys = ssh_stats vm in
+      let option_int = function Some value -> `Int value | None -> `Null in
+      let status =
+        match
+          control_socket_rpc socket_path ~method_name:"status"
+            ~params:(`Assoc [])
+        with
+        | Some response -> parse_json_or_string response
+        | None -> `Null
+      in
+      `Assoc
+        [
+          ("running", `Bool true);
+          ("controlSocket", `String socket_path);
+          ("cid", option_int vm.cid);
+          ("sshConnections", option_int connections);
+          ("sshPtys", option_int ptys);
+          ("status", status);
+          ("guestMountInfo", guest_mounts_from_control_socket socket_path);
+        ]
+
+let find_inspect_vm ~name =
+  let name = Util.name_slug name in
+  match List.find_opt (fun vm -> vm.name = name) (list_vms ()) with
+  | Some vm -> vm
+  | None -> Log.fatal "no VM named %S (expected %s)" name (manifest_path ~name)
+
+let inspect_vm_json ~name =
+  let vm = find_inspect_vm ~name in
+  let name = vm.name in
+  let hotmounts = read_hotmounts ~name in
+  let invalid_hotmounts =
+    List.map
+      (fun (path, error) ->
+        `Assoc [ ("path", `String path); ("error", `String error) ])
+      hotmounts.invalid
+  in
+  `Assoc
+    [
+      ("name", `String vm.name);
+      ("status", `String (status_string vm.status));
+      ( "state",
+        `Assoc
+          [
+            ("directory", `String vm.path);
+            ("modified", `String (format_time vm.modified));
+            ("modifiedUnix", `Float vm.modified);
+            ("diskBytes", json_int64 vm.disk_bytes);
+            ("apparentBytes", json_int64 vm.apparent_bytes);
+            ( "persistImage",
+              inspect_path (Filename.concat vm.path "persist.img") );
+            ("workspace", inspect_path (Filename.concat vm.path "workspace"));
+          ] );
+      ("runtime", inspect_runtime_json vm);
+      ("ash", inspect_toml_file (ash_config_path ~name));
+      ("agentBox", inspect_agent_box_config ~name);
+      ("virtle", inspect_toml_file (manifest_path ~name));
+      ( "hotmounts",
+        `Assoc
+          [
+            ("directory", `String (hotmounts_dir ~name));
+            ("metadataDirectory", `String (hotmount_metadata_dir ~name));
+            ( "mounts",
+              `List (List.map (hotmount_inspect_json ~name) hotmounts.mounts) );
+            ("invalid", `List invalid_hotmounts);
+          ] );
+    ]
+
+let read_toml_for_inspect path =
+  try
+    let text = In_channel.with_open_text path In_channel.input_all in
+    match Otoml.Parser.from_string_result text with
+    | Ok doc -> Some doc
+    | Error err ->
+        Log.warn "could not parse %s: %s" path err;
+        None
+  with Sys_error err ->
+    Log.warn "could not read %s: %s" path err;
+    None
+
+let inspect_print_field label value =
+  Printf.printf "  %-16s %s\n" (label ^ ":") value
+
+let inspect_optional_field label = function
+  | Some value -> inspect_print_field label value
+  | None -> ()
+
+let inspect_string doc path = Otoml.find_opt doc Otoml.get_string path
+let inspect_int doc path = Otoml.find_opt doc Otoml.get_integer path
+let inspect_bool doc path = Otoml.find_opt doc Otoml.get_boolean path
+
+let inspect_strings doc path =
+  Otoml.find_opt doc (Otoml.get_array Otoml.get_string) path
+
+let inspect_tables doc path =
+  match Otoml.find_opt doc Otoml.get_value path with
+  | Some (Otoml.TomlTableArray values) ->
+      List.filter_map
+        (function Otoml.TomlTable fields -> Some fields | _ -> None)
+        values
+  | _ -> []
+
+let inspect_table_string fields key =
+  match List.assoc_opt key fields with
+  | Some (Otoml.TomlString value) -> Some value
+  | _ -> None
+
+let inspect_table_bool fields key =
+  match List.assoc_opt key fields with
+  | Some (Otoml.TomlBoolean value) -> Some value
+  | _ -> None
+
+let configured_mount_target fields =
+  match inspect_table_string fields "target" with
+  | Some target -> Some target
+  | None -> (
+      match inspect_table_string fields "tag" with
+      | Some "hotmounts" -> Some hotmounts_guest_dir
+      | Some "ro-store" -> Some "/nix/store"
+      | Some "workspace_cwd" -> Some "/mnt/cwd"
+      | _ -> None)
+
+let print_configured_mount fields =
+  let mount_type =
+    inspect_table_string fields "type" |> Option.value ~default:"unknown"
+  in
+  let source =
+    inspect_table_string fields "source" |> Option.value ~default:"?"
+  in
+  let target = configured_mount_target fields in
+  let tag = inspect_table_string fields "tag" in
+  let read_only =
+    inspect_table_bool fields "read_only" |> Option.value ~default:false
+  in
+  let name =
+    match tag with
+    | Some tag -> tag
+    | None -> (
+        match List.assoc_opt "image" fields with
+        | Some (Otoml.TomlTable image) ->
+            inspect_table_string image "label"
+            |> Option.value ~default:mount_type
+        | _ -> mount_type)
+  in
+  let destination =
+    match target with Some target -> " -> " ^ target | None -> ""
+  in
+  Printf.printf "  - %s [%s,%s] %s%s\n" name mount_type
+    (if read_only then "ro" else "rw")
+    source destination
+
+let print_write_file fields =
+  let source =
+    inspect_table_string fields "source" |> Option.value ~default:"?"
+  in
+  let guest_path =
+    inspect_table_string fields "guest_path" |> Option.value ~default:"?"
+  in
+  Printf.printf "  - %s -> %s\n" source guest_path
+
+let inspect_vm_human ~name =
+  let vm = find_inspect_vm ~name in
+  let name = vm.name in
+  let connections, ptys = ssh_stats vm in
+  Printf.printf "%s\n" vm.name;
+  inspect_print_field "Status" (status_string vm.status);
+  inspect_optional_field "CID" (Option.map string_of_int vm.cid);
+  inspect_optional_field "SSH connections"
+    (Option.map string_of_int connections);
+  inspect_optional_field "SSH PTYs" (Option.map string_of_int ptys);
+  Printf.printf "\nState\n";
+  inspect_print_field "Directory" vm.path;
+  inspect_print_field "Disk" (human_size vm.disk_bytes);
+  inspect_print_field "Virtual size" (human_size vm.apparent_bytes);
+  inspect_print_field "Modified" (format_time vm.modified);
+  let persist = Filename.concat vm.path "persist.img" in
+  if Sys.file_exists persist then
+    inspect_print_field "Persist image" (human_size (state_path_size persist));
+  Printf.printf "\nConfiguration\n";
+  (match read_toml_for_inspect (ash_config_path ~name) with
+  | None -> ()
+  | Some ash ->
+      inspect_optional_field "Flake" (inspect_string ash [ "spawn"; "flake" ]);
+      inspect_optional_field "Agent-box config"
+        (inspect_string ash [ "spawn"; "config_path" ]
+        |> Option.map Util.expand_home);
+      (match inspect_strings ash [ "spawn"; "profiles" ] with
+      | Some [] -> inspect_print_field "Profiles" "(default)"
+      | Some profiles ->
+          inspect_print_field "Profiles" (String.concat ", " profiles)
+      | None -> ());
+      inspect_optional_field "Requested user"
+        (inspect_string ash [ "spawn"; "user" ]));
+  let manifest = read_toml_for_inspect (manifest_path ~name) in
+  (match manifest with
+  | None -> ()
+  | Some manifest -> (
+      inspect_optional_field "Host name"
+        (inspect_string manifest [ "host_name" ]);
+      inspect_optional_field "SSH user"
+        (inspect_string manifest [ "ssh"; "user" ]);
+      inspect_optional_field "Memory"
+        (inspect_int manifest [ "machine"; "memory" ]
+        |> Option.map (fun mib -> Printf.sprintf "%d MiB" mib));
+      inspect_optional_field "vCPUs"
+        (inspect_int manifest [ "machine"; "vcpu" ] |> Option.map string_of_int);
+      inspect_optional_field "Kernel"
+        (inspect_string manifest [ "kernel"; "path" ]);
+      inspect_optional_field "Initrd"
+        (inspect_string manifest [ "kernel"; "initrd_path" ]);
+      inspect_optional_field "Workspace host"
+        (inspect_string manifest [ "workspace"; "host_dir" ]);
+      inspect_optional_field "Workspace guest"
+        (inspect_string manifest [ "workspace"; "guest_dir" ]);
+      match inspect_bool manifest [ "workspace"; "mount_cwd" ] with
+      | Some value -> inspect_print_field "Mount cwd" (string_of_bool value)
+      | None -> ()));
+  let mounts =
+    match manifest with
+    | None -> []
+    | Some doc -> inspect_tables doc [ "mounts" ]
+  in
+  Printf.printf "\nConfigured mounts (%d)\n" (List.length mounts);
+  List.iter print_configured_mount mounts;
+  let write_files =
+    match manifest with
+    | None -> []
+    | Some doc -> inspect_tables doc [ "write_files" ]
+  in
+  if write_files <> [] then (
+    Printf.printf "\nConfigured files (%d)\n" (List.length write_files);
+    List.iter print_write_file write_files);
+  let hotmounts = read_hotmounts ~name in
+  Printf.printf "\nHotmounts (%d)\n" (List.length hotmounts.mounts);
+  List.iter
+    (fun metadata ->
+      let staging =
+        Filename.concat (hotmounts_dir ~name) metadata.source_name
+      in
+      let annotations =
+        [
+          (if Sys.file_exists metadata.host_dir then None
+           else Some "host missing");
+          (match host_mountpoint_state staging with
+          | `Bool true -> Some "staged"
+          | _ -> None);
+        ]
+        |> List.filter_map Fun.id
+      in
+      let suffix =
+        match annotations with
+        | [] -> ""
+        | values -> " [" ^ String.concat ", " values ^ "]"
+      in
+      Printf.printf "  - %s -> %s (%s)%s\n" metadata.host_dir
+        metadata.guest_path
+        (hotmount_mode_name metadata.mode)
+        suffix)
+    hotmounts.mounts;
+  List.iter
+    (fun (path, error) -> Printf.printf "  ! invalid %s: %s\n" path error)
+    hotmounts.invalid;
+  flush stdout
+
+let inspect_vm ~json ~name =
+  if json then (
+    inspect_vm_json ~name |> Yojson.Safe.pretty_to_channel stdout;
+    output_char stdout '\n';
+    flush stdout)
+  else inspect_vm_human ~name
+
 let find_hotmount_metadata_by_guest_path ~name ~guest_path =
   let state = read_hotmounts ~name in
   log_invalid_hotmount_metadata state.invalid;

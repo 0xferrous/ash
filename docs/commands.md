@@ -86,6 +86,16 @@ ash logs [--follow|-f] [--lines N|-n N] NAME
 
 Shows journal entries from the latest invocation of the VM's `ash-NAME.service` user unit, excluding older processes that reused the unit name. Entries are formatted as `[YYYY-MM-DD HH:MM:SS] MESSAGE`, without hostname or process metadata. It shows the 100 most recent entries by default; `--follow` continues waiting for new entries.
 
+## `ash inspect`
+
+```sh
+ash inspect NAME
+```
+
+Prints a concise human-readable summary for a running or stopped VM, including runtime and storage status, flake and profiles, machine resources, workspace paths, configured mounts/files, and hotmount state.
+
+Pass `--json` for the complete machine-readable view, including the saved `ash.toml`, referenced agent-box configuration, generated `virtle.toml`, detailed paths, raw runtime status, and guest mount table.
+
 ## `ash ls`
 
 ```sh

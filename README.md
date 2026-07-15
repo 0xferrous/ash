@@ -80,9 +80,10 @@ Stop a background VM:
 ash stop work
 ```
 
-List and delete stopped VM state:
+Inspect, list, and delete VM state:
 
 ```sh
+ash inspect work
 ash ls
 ash rm
 ```
