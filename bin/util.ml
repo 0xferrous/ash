@@ -22,6 +22,23 @@ let write_file path content =
     ~finally:(fun () -> close_out oc)
     (fun () -> output_string oc content)
 
+let atomic_write_file path content =
+  let dir = Filename.dirname path in
+  ensure_dir dir;
+  let temp_path, oc =
+    Filename.open_temp_file ~temp_dir:dir (Filename.basename path ^ ".tmp-") ""
+  in
+  try
+    output_string oc content;
+    flush oc;
+    Unix.fsync (Unix.descr_of_out_channel oc);
+    close_out oc;
+    Unix.rename temp_path path
+  with exn ->
+    close_out_noerr oc;
+    (try Unix.unlink temp_path with Unix.Unix_error _ -> ());
+    raise exn
+
 let copy_file ~src ~dst =
   ensure_dir (Filename.dirname dst);
   let ic = open_in_bin src in

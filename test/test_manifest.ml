@@ -511,6 +511,58 @@ let test_hotmount_tilde_guest_path_uses_guest_home () =
     (Virtle.resolve_hotmount_guest_path ~user:"root" ~host_dir:"/host/project"
        (Some "~/project"))
 
+let test_hotmount_metadata_roundtrip () =
+  let root = temp_dir "ash-test-hotmount-metadata" in
+  let host_dir = Filename.concat root "host" in
+  let guest_path = "/home/agent/project" in
+  let source_name = Virtle.hotmount_slug ~host_dir ~guest_path in
+  let path = Filename.concat root (source_name ^ ".meta") in
+  let metadata : Virtle.hotmount_metadata =
+    { guest_path; host_dir; mode = Virtle.Read_only; source_name; path }
+  in
+  Virtle.write_hotmount_metadata_record metadata;
+  match Virtle.read_hotmount_metadata path with
+  | Error err -> fail ("failed to read metadata: " ^ err)
+  | Ok restored ->
+      assert_equal "metadata guest path" guest_path restored.guest_path;
+      assert_equal "metadata host dir" host_dir restored.host_dir;
+      assert_equal "metadata source name" source_name restored.source_name;
+      assert_bool "metadata read-only mode" true
+        (restored.mode = Virtle.Read_only)
+
+let test_read_hotmounts_reports_valid_and_invalid_records () =
+  let root = temp_dir "ash-test-read-hotmounts" in
+  Unix.putenv "XDG_STATE_HOME" root;
+  let name = "inventory" in
+  let host_dir = Filename.concat root "host" in
+  let guest_path = "/home/agent/project" in
+  let source_name = Virtle.hotmount_slug ~host_dir ~guest_path in
+  let metadata =
+    Virtle.hotmount_metadata ~name ~source_name ~host_dir ~guest_path
+      ~mode:Virtle.Read_write
+  in
+  Virtle.write_hotmount_metadata_record metadata;
+  let invalid_path =
+    Filename.concat (Virtle.hotmount_metadata_dir ~name) "broken.meta"
+  in
+  write_file invalid_path "broken\n";
+  let state = Virtle.read_hotmounts ~name in
+  assert_int "valid hotmount count" 1 (List.length state.mounts);
+  assert_int "invalid hotmount count" 1 (List.length state.invalid);
+  assert_equal "inventory guest path" guest_path
+    (List.hd state.mounts).guest_path;
+  assert_equal "invalid metadata path" invalid_path
+    (fst (List.hd state.invalid))
+
+let test_atomic_write_replaces_complete_file () =
+  let root = temp_dir "ash-test-atomic-write" in
+  let path = Filename.concat root "record.meta" in
+  Util.atomic_write_file path "old\n";
+  Util.atomic_write_file path "new\ncomplete\n";
+  assert_equal "atomic file contents" "new\ncomplete\n"
+    (In_channel.with_open_text path In_channel.input_all);
+  assert_int "atomic temp files" 1 (Array.length (Sys.readdir root))
+
 let test_kitty_selects_kitten_ssh_wrapper () =
   let root = temp_dir "ash-test-kitty" in
   let home = Filename.concat root "home" in
@@ -626,6 +678,11 @@ let () =
     test_hotmount_default_guest_path_matches_host_path;
   run "hotmount tilde guest path uses guest home"
     test_hotmount_tilde_guest_path_uses_guest_home;
+  run "hotmount metadata roundtrip" test_hotmount_metadata_roundtrip;
+  run "read hotmounts reports valid and invalid records"
+    test_read_hotmounts_reports_valid_and_invalid_records;
+  run "atomic write replaces complete file"
+    test_atomic_write_replaces_complete_file;
   run "spawn reuses saved flake when omitted"
     test_spawn_reuses_saved_flake_when_omitted;
   run "nix storage flake refs absolutize relative paths"

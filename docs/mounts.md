@@ -96,7 +96,13 @@ The file records:
 <source_name>
 ```
 
-`ash umount` and `ash umount-profile` use this metadata to map guest targets back to host staging mountpoints.
+The metadata is persistent desired state. A successful `ash mount` keeps the record until `ash umount` removes it. When a background VM is started or resumed, ash reads the remaining records after QGA becomes ready and recreates their host staging and guest bind mounts. Missing host directories, invalid records, and individual restoration failures are reported without preventing the VM from starting.
+
+Metadata updates use a temporary file and atomic rename so readers do not observe partially written records. Mount, unmount, and startup reconciliation are serialized with a per-VM metadata lock.
+
+`ash umount` removes the desired-state record before unmounting. If the guest unmount fails normally, ash restores the record; if ash is interrupted after removal, the mount is not recreated on the next start.
+
+Attached foreground launches that stop when SSH exits do not currently run startup reconciliation; persistent background starts and resumes do.
 
 ## Bindfs arguments
 

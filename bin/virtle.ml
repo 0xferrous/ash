@@ -693,7 +693,7 @@ let bindfs_args_for_mode mode =
   ]
   @ mode_args
 
-let ensure_bindfs_mount ~bindfs ~mode ~source ~target =
+let try_ensure_bindfs_mount ~bindfs ~mode ~source ~target =
   Util.ensure_dir target;
   let bindfs_args = bindfs_args_for_mode mode in
   let bindfs_command =
@@ -748,8 +748,10 @@ exit "$bindfs_status"
 |sh}
       (Util.shell_quote target) bindfs_command bind_mount_command
   in
-  let code = Util.run_foreground "/bin/sh" [ "-c"; command ] in
-  if code <> 0 then
+  Util.run_foreground "/bin/sh" [ "-c"; command ] = 0
+
+let ensure_bindfs_mount ~bindfs ~mode ~source ~target =
+  if not (try_ensure_bindfs_mount ~bindfs ~mode ~source ~target) then
     Log.fatal "failed to mount host directory %S at hotmount staging path %S"
       source target
 
@@ -767,29 +769,111 @@ let guest_home user = if user = "root" then "/root" else "/home/" ^ user
 let metadata_path ~name ~source_name =
   Filename.concat (hotmount_metadata_dir ~name) (source_name ^ ".meta")
 
-let write_hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode =
-  let content =
-    String.concat "\n"
-      [ guest_path; host_dir; hotmount_mode_name mode; source_name; "" ]
-  in
-  Util.write_file (metadata_path ~name ~source_name) content
+type hotmount_metadata = {
+  guest_path : string;
+  host_dir : string;
+  mode : hotmount_mode;
+  source_name : string;
+  path : string;
+}
 
-let first_line path =
-  try Some (In_channel.with_open_text path input_line) with _ -> None
+let hotmount_metadata_content metadata =
+  String.concat "\n"
+    [
+      metadata.guest_path;
+      metadata.host_dir;
+      hotmount_mode_name metadata.mode;
+      metadata.source_name;
+      "";
+    ]
+
+let write_hotmount_metadata_record metadata =
+  Util.atomic_write_file metadata.path (hotmount_metadata_content metadata)
+
+let hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode =
+  {
+    guest_path;
+    host_dir;
+    mode;
+    source_name;
+    path = metadata_path ~name ~source_name;
+  }
+
+let read_hotmount_metadata path =
+  try
+    let lines =
+      In_channel.with_open_text path In_channel.input_all
+      |> String.split_on_char '\n'
+    in
+    match lines with
+    | guest_path :: host_dir :: mode_name :: source_name :: _ ->
+        let mode =
+          match mode_name with
+          | "ro" -> Ok Read_only
+          | "rw" -> Ok Read_write
+          | _ -> Error (Printf.sprintf "invalid mode %S" mode_name)
+        in
+        Result.bind mode (fun mode ->
+            let file_source_name =
+              Filename.basename path |> Filename.remove_extension
+            in
+            if guest_path = "" || Filename.is_relative guest_path then
+              Error "guest path is not absolute"
+            else if host_dir = "" || Filename.is_relative host_dir then
+              Error "host directory is not absolute"
+            else if source_name = "" || source_name <> file_source_name then
+              Error "source name does not match metadata filename"
+            else if source_name <> hotmount_slug ~host_dir ~guest_path then
+              Error "source name does not match host and guest paths"
+            else Ok { guest_path; host_dir; mode; source_name; path })
+    | _ -> Error "expected four metadata lines"
+  with Sys_error err -> Error err
+
+type hotmounts_read = {
+  mounts : hotmount_metadata list;
+  invalid : (string * string) list;
+}
+
+(* Read the complete persistent hotmount inventory without performing mounts or
+   logging. Callers such as startup reconciliation and a future inspect command
+   can decide how to present malformed records. *)
+let read_hotmounts ~name =
+  let dir = hotmount_metadata_dir ~name in
+  if not (Sys.file_exists dir) then { mounts = []; invalid = [] }
+  else
+    Sys.readdir dir |> Array.to_list |> List.sort String.compare
+    |> List.filter (fun entry -> Filename.check_suffix entry ".meta")
+    |> List.fold_left
+         (fun state entry ->
+           let path = Filename.concat dir entry in
+           match read_hotmount_metadata path with
+           | Ok metadata -> { state with mounts = metadata :: state.mounts }
+           | Error err -> { state with invalid = (path, err) :: state.invalid })
+         { mounts = []; invalid = [] }
+    |> fun state ->
+    { mounts = List.rev state.mounts; invalid = List.rev state.invalid }
+
+let log_invalid_hotmount_metadata invalid =
+  List.iter
+    (fun (path, err) ->
+      Log.warn "ignoring invalid hotmount metadata %s: %s" path err)
+    invalid
 
 let find_hotmount_metadata_by_guest_path ~name ~guest_path =
+  let state = read_hotmounts ~name in
+  log_invalid_hotmount_metadata state.invalid;
+  List.find_opt (fun metadata -> metadata.guest_path = guest_path) state.mounts
+
+let with_hotmount_lock ~name f =
   let dir = hotmount_metadata_dir ~name in
-  if not (Sys.file_exists dir) then None
-  else
-    Sys.readdir dir |> Array.to_list
-    |> List.filter_map (fun entry ->
-        let path = Filename.concat dir entry in
-        match first_line path with
-        | Some line when line = guest_path ->
-            let source_name = Filename.remove_extension entry in
-            Some (source_name, path)
-        | _ -> None)
-    |> List.find_opt (fun _ -> true)
+  Util.ensure_dir dir;
+  let path = Filename.concat dir "lock" in
+  let fd = Unix.openfile path [ Unix.O_CREAT; Unix.O_RDWR ] 0o600 in
+  Fun.protect
+    ~finally:(fun () -> Unix.close fd)
+    (fun () ->
+      Unix.lockf fd Unix.F_LOCK 0;
+      f ())
 
 let resolve_hotmount_guest_path ~user ~host_dir = function
   | None -> host_dir
@@ -807,28 +891,57 @@ let hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir
     Log.fatal "host directory %S does not exist" host_dir;
   if (Unix.stat host_dir).st_kind <> Unix.S_DIR then
     Log.fatal "host path %S is not a directory" host_dir;
-  let hotmounts_dir = hotmounts_dir ~name in
-  let source_name = hotmount_slug ~host_dir ~guest_path in
-  let mount_dir = Filename.concat hotmounts_dir source_name in
-  ensure_bindfs_mount ~bindfs ~mode ~source:host_dir ~target:mount_dir;
-  let action =
-    Qga.hotmount_action ~name:"ash-hotmount"
-      ~read_only:(match mode with Read_only -> true | Read_write -> false)
-      ~hotmounts_guest_dir ~source_name ~guest_path
-  in
-  let output =
-    virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-      ~params:(Qga.params action) ()
-  in
-  match (Qga.result action output).exit_code with
-  | Some 0 ->
-      write_hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode;
-      Log.info "mounted %s at %s (%s)" host_dir guest_path
-        (hotmount_mode_name mode);
-      Printf.printf "%s -> %s (%s)\n" host_dir guest_path
-        (hotmount_mode_name mode)
-  | Some 42 -> Log.info "%s is already a mountpoint" guest_path
-  | _ -> Log.fatal "failed to hotmount %s at %s: %s" host_dir guest_path output
+  with_hotmount_lock ~name (fun () ->
+      let hotmounts_dir = hotmounts_dir ~name in
+      let source_name = hotmount_slug ~host_dir ~guest_path in
+      let mount_dir = Filename.concat hotmounts_dir source_name in
+      (match find_hotmount_metadata_by_guest_path ~name ~guest_path with
+      | Some existing when existing.source_name <> source_name ->
+          Log.fatal "guest path %S is already assigned to host directory %S"
+            guest_path existing.host_dir
+      | Some existing when existing.mode <> mode ->
+          Log.fatal
+            "guest path %S is already recorded in %s mode; unmount it before \
+             changing mode"
+            guest_path
+            (hotmount_mode_name existing.mode)
+      | _ -> ());
+      ensure_bindfs_mount ~bindfs ~mode ~source:host_dir ~target:mount_dir;
+      let metadata =
+        hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode
+      in
+      let metadata_existed = Sys.file_exists metadata.path in
+      if not metadata_existed then write_hotmount_metadata_record metadata;
+      let action =
+        Qga.hotmount_action ~name:"ash-hotmount"
+          ~read_only:(match mode with Read_only -> true | Read_write -> false)
+          ~hotmounts_guest_dir ~source_name ~guest_path
+      in
+      let output =
+        try
+          virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
+            ~params:(Qga.params action) ()
+        with exn ->
+          (if not metadata_existed then
+             try Unix.unlink metadata.path with Unix.Unix_error _ -> ());
+          raise exn
+      in
+      match (Qga.result action output).exit_code with
+      | Some 0 ->
+          if metadata_existed then write_hotmount_metadata_record metadata;
+          Log.info "mounted %s at %s (%s)" host_dir guest_path
+            (hotmount_mode_name mode);
+          Printf.printf "%s -> %s (%s)\n" host_dir guest_path
+            (hotmount_mode_name mode)
+      | Some 42 when metadata_existed ->
+          Log.info "%s is already a desired hotmount" guest_path
+      | Some 42 ->
+          (try Unix.unlink metadata.path with Unix.Unix_error _ -> ());
+          Log.fatal "%s is already a mountpoint" guest_path
+      | _ ->
+          (if not metadata_existed then
+             try Unix.unlink metadata.path with Unix.Unix_error _ -> ());
+          Log.fatal "failed to hotmount %s at %s: %s" host_dir guest_path output)
 
 let hotmount ?virtle ~mode ~name ~spec () =
   let bindfs = find_bindfs () in
@@ -844,7 +957,7 @@ let hotmount ?virtle ~mode ~name ~spec () =
   hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir ~guest_path
     ()
 
-let unmount_hotmount_staging mount_dir =
+let try_unmount_hotmount_staging mount_dir =
   let command =
     Printf.sprintf
       {sh|set -u
@@ -871,29 +984,157 @@ exit 1
 |sh}
       (Util.shell_quote mount_dir)
   in
-  let code = Util.run_foreground "/bin/sh" [ "-c"; command ] in
-  if code <> 0 then Log.fatal "failed to unmount host staging path %S" mount_dir
+  Util.run_foreground "/bin/sh" [ "-c"; command ] = 0
+
+let unmount_hotmount_staging mount_dir =
+  if not (try_unmount_hotmount_staging mount_dir) then
+    Log.fatal "failed to unmount host staging path %S" mount_dir
+
+let cleanup_orphan_hotmount_staging ~name records =
+  let desired = List.map (fun metadata -> metadata.source_name) records in
+  let dir = hotmounts_dir ~name in
+  if Sys.file_exists dir then
+    Sys.readdir dir |> Array.to_list
+    |> List.filter (fun entry ->
+        entry <> ".ash" && not (List.mem entry desired))
+    |> List.iter (fun entry ->
+        let path = Filename.concat dir entry in
+        try
+          if (Unix.lstat path).st_kind = Unix.S_DIR then
+            if try_unmount_hotmount_staging path then (
+              (try Unix.rmdir path with Unix.Unix_error _ -> ());
+              Log.info "cleaned orphan hotmount staging path %s" path)
+            else Log.warn "failed to clean orphan hotmount staging path %s" path
+        with Unix.Unix_error _ -> ())
+
+let restore_hotmounts ~virtle ~manifest_path ~name =
+  with_hotmount_lock ~name (fun () ->
+      let state = read_hotmounts ~name in
+      log_invalid_hotmount_metadata state.invalid;
+      cleanup_orphan_hotmount_staging ~name state.mounts;
+      match state.mounts with
+      | [] -> ()
+      | records -> (
+          match Util.find_in_path "bindfs" with
+          | None ->
+              Log.warn
+                "cannot restore %d hotmount(s): bindfs is not available in PATH"
+                (List.length records)
+          | Some bindfs ->
+              let restored = ref 0 in
+              let failed = ref 0 in
+              List.iter
+                (fun metadata ->
+                  if not (Sys.file_exists metadata.host_dir) then (
+                    incr failed;
+                    Log.warn
+                      "cannot restore hotmount %s: host directory %S does not \
+                       exist"
+                      metadata.guest_path metadata.host_dir)
+                  else
+                    try
+                      if (Unix.stat metadata.host_dir).st_kind <> Unix.S_DIR
+                      then (
+                        incr failed;
+                        Log.warn
+                          "cannot restore hotmount %s: host path %S is not a \
+                           directory"
+                          metadata.guest_path metadata.host_dir)
+                      else
+                        let mount_dir =
+                          Filename.concat (hotmounts_dir ~name)
+                            metadata.source_name
+                        in
+                        if
+                          not
+                            (try_ensure_bindfs_mount ~bindfs ~mode:metadata.mode
+                               ~source:metadata.host_dir ~target:mount_dir)
+                        then (
+                          incr failed;
+                          Log.warn
+                            "cannot restore hotmount %s: failed to mount host \
+                             staging path %s"
+                            metadata.guest_path mount_dir)
+                        else
+                          let action =
+                            Qga.hotmount_action ~name:"ash-hotmount-restore"
+                              ~read_only:
+                                (match metadata.mode with
+                                | Read_only -> true
+                                | Read_write -> false)
+                              ~hotmounts_guest_dir
+                              ~source_name:metadata.source_name
+                              ~guest_path:metadata.guest_path
+                          in
+                          let output =
+                            virtle_rpc ~virtle ~path:manifest_path
+                              ~method_name:"guest-exec"
+                              ~params:(Qga.params action) ()
+                          in
+                          match (Qga.result action output).exit_code with
+                          | Some 0 ->
+                              incr restored;
+                              Log.info "restored hotmount %s at %s (%s)"
+                                metadata.host_dir metadata.guest_path
+                                (hotmount_mode_name metadata.mode)
+                          | Some 42 ->
+                              incr failed;
+                              Log.warn
+                                "cannot restore hotmount %s: guest target is \
+                                 already a mountpoint"
+                                metadata.guest_path
+                          | _ ->
+                              incr failed;
+                              Log.warn "failed to restore hotmount %s at %s: %s"
+                                metadata.host_dir metadata.guest_path output
+                    with
+                    | Unix.Unix_error (err, _, _) ->
+                        incr failed;
+                        Log.warn "failed to restore hotmount %s: %s"
+                          metadata.guest_path (Unix.error_message err)
+                    | Sys_error err | Failure err ->
+                        incr failed;
+                        Log.warn "failed to restore hotmount %s: %s"
+                          metadata.guest_path err)
+                records;
+              Log.info "hotmount restoration complete: %d restored, %d failed"
+                !restored !failed))
 
 let hotunmount_path ~virtle ~manifest_path ~name ~guest_path () =
-  let metadata = find_hotmount_metadata_by_guest_path ~name ~guest_path in
-  let action = Qga.unmount_action ~name:"ash-hotunmount" ~guest_path in
-  let output =
-    virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-      ~params:(Qga.params action) ()
-  in
-  (match (Qga.result action output).exit_code with
-  | Some 0 -> Log.info "unmounted guest path %s" guest_path
-  | Some 42 -> Log.info "%s is not a mountpoint in guest" guest_path
-  | _ -> Log.fatal "failed to unmount guest path %s: %s" guest_path output);
-  (match metadata with
-  | None -> Log.warn "no hotmount metadata found for %s" guest_path
-  | Some (source_name, metadata_path) ->
-      let mount_dir = Filename.concat (hotmounts_dir ~name) source_name in
-      unmount_hotmount_staging mount_dir;
-      (try Unix.unlink metadata_path with Unix.Unix_error _ -> ());
-      (try Unix.rmdir mount_dir with Unix.Unix_error _ -> ());
-      Log.info "unmounted host staging path %s" mount_dir);
-  Printf.printf "unmounted %s\n" guest_path
+  with_hotmount_lock ~name (fun () ->
+      let metadata = find_hotmount_metadata_by_guest_path ~name ~guest_path in
+      Option.iter
+        (fun metadata ->
+          try Unix.unlink metadata.path
+          with Unix.Unix_error (err, _, _) ->
+            Log.fatal "failed to remove hotmount metadata %s: %s" metadata.path
+              (Unix.error_message err))
+        metadata;
+      let action = Qga.unmount_action ~name:"ash-hotunmount" ~guest_path in
+      let output =
+        try
+          virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
+            ~params:(Qga.params action) ()
+        with exn ->
+          Option.iter write_hotmount_metadata_record metadata;
+          raise exn
+      in
+      (match (Qga.result action output).exit_code with
+      | Some 0 -> Log.info "unmounted guest path %s" guest_path
+      | Some 42 -> Log.info "%s is not a mountpoint in guest" guest_path
+      | _ ->
+          Option.iter write_hotmount_metadata_record metadata;
+          Log.fatal "failed to unmount guest path %s: %s" guest_path output);
+      (match metadata with
+      | None -> Log.warn "no hotmount metadata found for %s" guest_path
+      | Some metadata ->
+          let mount_dir =
+            Filename.concat (hotmounts_dir ~name) metadata.source_name
+          in
+          unmount_hotmount_staging mount_dir;
+          (try Unix.rmdir mount_dir with Unix.Unix_error _ -> ());
+          Log.info "unmounted host staging path %s" mount_dir);
+      Printf.printf "unmounted %s\n" guest_path)
 
 let hotunmount ?virtle ~name ~guest_path () =
   let virtle = find_virtle virtle in
@@ -1414,7 +1655,8 @@ let start_background ~resume ~name ~virtle ~path ~verbose =
 let wait_and_mount (inputs : manifest_inputs) path =
   wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name;
   execute_profile_mounts ~virtle:inputs.virtle ~path
-    (profile_mounts_for_inputs inputs)
+    (profile_mounts_for_inputs inputs);
+  restore_hotmounts ~virtle:inputs.virtle ~manifest_path:path ~name:inputs.name
 
 let launch_background ~resume (inputs : manifest_inputs) path ~verbose =
   start_background ~resume ~name:inputs.name ~virtle:inputs.virtle ~path
