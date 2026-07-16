@@ -1,7 +1,16 @@
 # Copy this file to $XDG_CONFIG_HOME/ash/config.toml. If XDG_CONFIG_HOME is
 # unset, use ~/.config/ash/config.toml. You can also pass `ash spawn --config PATH`.
 
+[spaces.common]
+ro_mounts = [
+  "~/.config/git:~/.config/git",
+]
+
 [spaces.ash]
+# Extended spaces are evaluated first. Composition is recursive, and each space
+# is evaluated once even when it is reachable through multiple paths.
+extends = ["common"]
+
 # Entries may use HOST_PATH or HOST_PATH:GUEST_PATH.
 # Host ~ resolves to the host user's home. Guest ~ resolves to the guest user's home.
 rw_mounts = [

@@ -275,6 +275,136 @@ let test_space_mount_spec_parsing () =
   assert_mount_parse_error "empty guest" ~host_home ~guest_user:"agent"
     "/host/path:"
 
+let expect_space_resolution label config spaces expected =
+  match Ash_config.resolve_spaces config spaces with
+  | Ok actual ->
+      assert_equal label (String.concat "," expected) (String.concat "," actual)
+  | Error message -> fail (label ^ ": unexpected error: " ^ message)
+
+let expect_space_resolution_error label config spaces expected =
+  match Ash_config.resolve_spaces config spaces with
+  | Ok actual ->
+      fail
+        (Printf.sprintf "%s: expected error, resolved %S" label
+           (String.concat "," actual))
+  | Error message -> assert_string_contains label message expected
+
+let test_space_extension_graph_traversal () =
+  let config =
+    parse_toml
+      {|[spaces.base]
+[spaces.left]
+extends = ["base"]
+[spaces.right]
+extends = ["base"]
+[spaces.app]
+extends = ["left", "right"]
+[spaces.extra]
+extends = ["right"]
+|}
+  in
+  expect_space_resolution "diamond traversal" config [ "app" ]
+    [ "base"; "left"; "right"; "app" ];
+  expect_space_resolution "multiple roots are stable and unique" config
+    [ "app"; "extra"; "base" ]
+    [ "base"; "left"; "right"; "app"; "extra" ];
+  expect_space_resolution_error "unknown extension" config [ "missing" ]
+    "space not found in config: missing";
+  let unknown_parent = parse_toml {|[spaces.child]
+extends = ["missing"]
+|} in
+  expect_space_resolution_error "unknown parent" unknown_parent [ "child" ]
+    "space not found in config: missing";
+  let cyclic =
+    parse_toml
+      {|[spaces.a]
+extends = ["b"]
+[spaces.b]
+extends = ["c"]
+[spaces.c]
+extends = ["a"]
+|}
+  in
+  expect_space_resolution_error "extension cycle" cyclic [ "a" ]
+    "a -> b -> c -> a"
+
+let test_space_extension_evaluation () =
+  let root = temp_dir "ash-test-space-extension" in
+  let home = Filename.concat root "home" in
+  mkdir_p home;
+  List.iter
+    (fun name -> mkdir_p (Filename.concat home name))
+    [ "base"; "left"; "right"; "app" ];
+  Unix.putenv "HOME" home;
+  let config =
+    parse_toml
+      {|[spaces.base]
+rw_mounts = ["~/base:/mnt/base"]
+[spaces.left]
+extends = ["base"]
+rw_mounts = ["~/left:/mnt/left"]
+[spaces.right]
+extends = ["base"]
+ro_mounts = ["~/right:/mnt/right"]
+[spaces.app]
+extends = ["left", "right"]
+rw_mounts = ["~/app:/mnt/app"]
+|}
+  in
+  let resources =
+    Ash_config.resources_for_spaces ~guest_user:"agent" config [ "app" ]
+  in
+  let mounts : Ash_config.mount list = resources.mounts in
+  assert_equal "extended mount evaluation order"
+    "/mnt/base,/mnt/left,/mnt/right,/mnt/app"
+    (mounts
+    |> List.map (fun (mount : Ash_config.mount) -> mount.target)
+    |> String.concat ",");
+  assert_int "diamond base evaluated once" 4 (List.length mounts);
+  let right =
+    List.find
+      (fun (mount : Ash_config.mount) -> mount.target = "/mnt/right")
+      mounts
+  in
+  assert_bool "inherited read-only mode" true right.read_only
+
+let test_space_mount_deduplication_after_parsing () =
+  let root = temp_dir "ash-test-space-dedup" in
+  let home = Filename.concat root "home" in
+  let shared = Filename.concat home "shared" in
+  mkdir_p shared;
+  Unix.putenv "HOME" home;
+  let config =
+    parse_toml
+      (Printf.sprintf
+         {|[spaces.base]
+rw_mounts = ["~/shared:/mnt/shared"]
+[spaces.left]
+extends = ["base"]
+rw_mounts = [%S]
+[spaces.right]
+extends = ["base"]
+rw_mounts = ["~/shared:/mnt/shared", "~/shared:/mnt/other"]
+[spaces.app]
+extends = ["left", "right"]
+rw_mounts = [%S]
+|}
+         (shared ^ ":/mnt/shared") (shared ^ ":/mnt/shared"))
+  in
+  let resources =
+    Ash_config.resources_for_spaces ~guest_user:"agent" config [ "app" ]
+  in
+  let mounts : Ash_config.mount list = resources.mounts in
+  assert_int "equivalent parsed mounts deduplicate" 2 (List.length mounts);
+  assert_equal "deduplicated mount order" "/mnt/shared,/mnt/other"
+    (mounts
+    |> List.map (fun (mount : Ash_config.mount) -> mount.target)
+    |> String.concat ",");
+  let shared_mount = List.hd mounts in
+  assert_equal "deduplication keeps first defining space tag"
+    (Ash_config.path_tag "base" shared "/mnt/shared")
+    shared_mount.tag
+
 let test_ro_store_socket_override () =
   let root = temp_dir "ash-test" in
   let home = Filename.concat root "home" in
@@ -759,6 +889,10 @@ let () =
   run "no spaces selected by default" test_no_spaces_selected_by_default;
   run "XDG config path" test_xdg_config_path;
   run "space mount spec parsing" test_space_mount_spec_parsing;
+  run "space extension graph traversal" test_space_extension_graph_traversal;
+  run "space extension evaluation" test_space_extension_evaluation;
+  run "space mount deduplication after parsing"
+    test_space_mount_deduplication_after_parsing;
   run "ro-store socket override" test_ro_store_socket_override;
   run "kitty selects kitten ssh wrapper" test_kitty_selects_kitten_ssh_wrapper;
   run "qga params use valid json" test_qga_params_use_valid_json;

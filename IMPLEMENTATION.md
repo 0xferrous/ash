@@ -175,7 +175,7 @@ nixosConfigurations.<HOST>.config.services.getty.autologinUser
 nixosConfigurations.<HOST>.config.users.users.<USER>.name
 ```
 
-Then it reads selected spaces from `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`) and turns their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts.
+Then it reads selected spaces from `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`) and turns their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
 
 Space selection is explicit:
 
@@ -184,7 +184,7 @@ Space selection is explicit:
 - If `-f`/`--flake` is omitted for an existing named VM with saved `ash-state.toml`, `ash` reuses the saved flake; new VMs still require it.
 - If one or more spaces are passed, `ash` uses exactly those spaces and replaces the saved selection.
 
-Each mount entry is either `HOST_PATH` or `HOST_PATH:GUEST_PATH`. Host `~` resolves against the host user's home. Guest `~` resolves against the evaluated guest SSH user's home. When the guest path is omitted, the original host path string is reused and resolved for the guest. Absolute paths are accepted on both sides. Missing host paths are skipped with a warning.
+Each mount entry is either `HOST_PATH` or `HOST_PATH:GUEST_PATH`. Host `~` resolves against the host user's home. Guest `~` resolves against the evaluated guest SSH user's home. When the guest path is omitted, the original host path string is reused and resolved for the guest. Absolute paths are accepted on both sides. Missing host paths are skipped with a warning. Mounts are deduplicated after parsing and path expansion by source, target, and read-only mode, preserving the first occurrence.
 
 The guest SSH user defaults to `config.services.getty.autologinUser` from the selected NixOS configuration. `--user` overrides it, and ash validates the result through `config.users.users.<user>.name`.
 

@@ -35,7 +35,9 @@ ash spawn --name work -s ash -f ../my-nix#agent
 ```
 
 For a new VM, omitting `--space` applies no configured spaces. For an existing
-named VM, it reuses the saved space list.
+named VM, it reuses the saved space list. Spaces can compose other spaces with
+`extends = ["base", ...]`; extended spaces are evaluated recursively before the
+extending space.
 
 ## Quickstart
 

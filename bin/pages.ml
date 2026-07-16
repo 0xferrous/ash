@@ -133,13 +133,16 @@ let spawn =
           "The config defaults to XDG_CONFIG_HOME/ash/config.toml, falling \
            back to ~/.config/ash/config.toml, and can be overridden with \
            --config. Each [spaces.NAME] table may define rw_mounts and \
-           ro_mounts arrays.";
+           ro_mounts arrays, plus an extends array naming other spaces. \
+           Extended spaces are evaluated recursively before the extending \
+           space. Unknown spaces and inheritance cycles are errors.";
         `P
           "Each mount is HOST_PATH or HOST_PATH:GUEST_PATH. Host ~ resolves \
            against the host user's home; guest ~ resolves against the guest \
            SSH user's home. If GUEST_PATH is omitted, the original host path \
            string is reused as the guest path. Absolute paths are also \
-           accepted. Missing host paths are skipped with a warning.";
+           accepted. Missing host paths are skipped with a warning. Duplicate \
+           mounts are removed after parsing and path expansion.";
         `S "MOUNTS";
         `P
           "Spaces selected with --space add their configured directory mounts \

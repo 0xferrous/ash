@@ -27,6 +27,57 @@ let strings path config =
 
 let space_exists config space = Otoml.path_exists config [ "spaces"; space ]
 
+let space_extends config space =
+  strings [ "spaces"; space; "extends" ] config |> Option.value ~default:[]
+
+let resolve_spaces config spaces =
+  let states = ref [] in
+  let order = ref [] in
+  let state name = List.assoc_opt name !states in
+  let set_state name value =
+    states := (name, value) :: List.remove_assoc name !states
+  in
+  let rec cycle_from name = function
+    | [] -> [ name ]
+    | current :: rest as path ->
+        if current = name then path @ [ name ] else cycle_from name rest
+  in
+  let rec visit path name =
+    match state name with
+    | Some `Done -> Ok ()
+    | Some `Visiting ->
+        Error
+          ("space inheritance cycle: "
+          ^ String.concat " -> " (cycle_from name path))
+    | None ->
+        if not (space_exists config name) then
+          Error (Printf.sprintf "space not found in config: %s" name)
+        else (
+          set_state name `Visiting;
+          let result =
+            List.fold_left
+              (fun result parent ->
+                match result with
+                | Error _ -> result
+                | Ok () -> visit (path @ [ name ]) parent)
+              (Ok ())
+              (space_extends config name)
+          in
+          match result with
+          | Error _ as error -> error
+          | Ok () ->
+              set_state name `Done;
+              order := name :: !order;
+              Ok ())
+  in
+  let result =
+    List.fold_left
+      (fun result space ->
+        match result with Error _ -> result | Ok () -> visit [] space)
+      (Ok ()) spaces
+  in
+  match result with Error _ as error -> error | Ok () -> Ok (List.rev !order)
+
 let path_tag space source target =
   let max_name_len = 20 in
   let hash_len = 12 in
@@ -122,8 +173,13 @@ let uniq_mounts (mounts : mount list) =
   List.rev rev
 
 let resources_for_spaces ~guest_user config spaces =
+  let resolved_spaces =
+    match resolve_spaces config spaces with
+    | Ok spaces -> spaces
+    | Error message -> Log.fatal "%s" message
+  in
   let mounts =
-    spaces
+    resolved_spaces
     |> List.concat_map (collect_space_mounts ~guest_user config)
     |> uniq_mounts
   in
