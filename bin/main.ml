@@ -130,8 +130,8 @@ let flake_arg =
     & info [ "flake"; "f" ]
         ~doc:
           "Flake reference in the form FLAKE#HOST, e.g. ../my-nix#agent. \
-           Required for a new VM; defaults to the saved ash.toml value for an \
-           existing named VM."
+           Required for a new VM; defaults to the saved ash-state.toml value \
+           for an existing named VM."
         ~docv:"FLAKE#HOST")
 
 let name_arg =

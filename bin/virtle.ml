@@ -111,7 +111,8 @@ let state_base_dir () =
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
 let manifest_path ~name = Filename.concat (state_dir name) "virtle.toml"
-let ash_config_path ~name = Filename.concat (state_dir name) "ash.toml"
+let ash_config_path ~name = Filename.concat (state_dir name) "ash-state.toml"
+let has_saved_ash_config ~name = Sys.file_exists (ash_config_path ~name)
 
 let profile_mount_ssh_wrapper_path ~name =
   Filename.concat (state_dir name) "ssh-with-profile-mounts"
@@ -126,19 +127,21 @@ let bool_of_doc doc path =
   match Otoml.find_opt doc Otoml.get_boolean path with
   | Some value -> value
   | None ->
-      Log.fatal "ash.toml is missing boolean field %s" (String.concat "." path)
+      Log.fatal "ash-state.toml is missing boolean field %s"
+        (String.concat "." path)
 
 let string_of_doc doc path =
   match Otoml.find_opt doc Otoml.get_string path with
   | Some value -> value
   | None ->
-      Log.fatal "ash.toml is missing string field %s" (String.concat "." path)
+      Log.fatal "ash-state.toml is missing string field %s"
+        (String.concat "." path)
 
 let string_array_of_doc doc path =
   match Otoml.find_opt doc (Otoml.get_array Otoml.get_string) path with
   | Some value -> value
   | None ->
-      Log.fatal "ash.toml is missing string array field %s"
+      Log.fatal "ash-state.toml is missing string array field %s"
         (String.concat "." path)
 
 let virtiofs_section ?cache ~socket ~bin () =
@@ -1985,8 +1988,7 @@ let load_ash_config ~name =
 let resolve_spawn_flake ~name = function
   | Some flake -> flake
   | None ->
-      let saved_path = ash_config_path ~name in
-      if Sys.file_exists saved_path then (
+      if has_saved_ash_config ~name then (
         let saved = load_ash_config ~name in
         Log.debug "using saved flake for existing VM %s: %s" name saved.flake;
         saved.flake)
@@ -2042,8 +2044,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
   let flake = Nix.storage_flake_ref (resolve_spawn_flake ~name flake) in
   let saved =
     lazy
-      (let saved_path = ash_config_path ~name in
-       if Sys.file_exists saved_path then Some (load_ash_config ~name) else None)
+      (if has_saved_ash_config ~name then Some (load_ash_config ~name) else None)
   in
   let virtle = find_virtle virtle in
   if kitty then ignore (find_kitten ());

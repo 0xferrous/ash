@@ -6,12 +6,12 @@
 ash spawn [--flake FLAKE#HOST] [options]
 ```
 
-Creates or updates VM state, renders `virtle.toml`, writes `ash.toml`, and launches the VM.
+Creates or updates VM state, renders `virtle.toml`, writes `ash-state.toml`, and launches the VM.
 
 Common options:
 
 - `--name NAME`
-- `--flake FLAKE#HOST`, `-f FLAKE#HOST` (required for a new VM; reused from saved `ash.toml` for an existing named VM)
+- `--flake FLAKE#HOST`, `-f FLAKE#HOST` (required for a new VM; reused from saved `ash-state.toml` for an existing named VM)
 - `--profile PROFILE`, `-p PROFILE`
 - `--user USER`, `-u USER`
 - `--config CONFIG`, `-c CONFIG`
@@ -27,7 +27,7 @@ Common options:
 ash attach [--spawn] [--keep] [--kitty] [NAME]
 ```
 
-Attaches over SSH to a running VM. With `--spawn`, a stopped VM is relaunched from saved `ash.toml`.
+Attaches over SSH to a running VM. With `--spawn`, a stopped VM is relaunched from saved `ash-state.toml`.
 Pass `--kitty` to use `kitten ssh` for the attached session instead of plain `ssh`.
 
 ## `ash mount`
@@ -68,7 +68,7 @@ Unmounts all hotmount targets resolved from one or more agent-box profiles.
 ash regenerate NAME
 ```
 
-Rewrites `virtle.toml` from the VM's saved `ash.toml`.
+Rewrites `virtle.toml` from the VM's saved `ash-state.toml`.
 
 ## `ash stop`
 
@@ -94,7 +94,7 @@ ash inspect NAME
 
 Prints a concise human-readable summary for a running or stopped VM, including runtime and storage status, flake and profiles, machine resources, workspace paths, configured mounts/files, and hotmount state.
 
-Pass `--json` for the complete machine-readable view, including the saved `ash.toml`, referenced agent-box configuration, generated `virtle.toml`, detailed paths, raw runtime status, and guest mount table.
+Pass `--json` for the complete machine-readable view, including the saved `ash-state.toml`, referenced agent-box configuration, generated `virtle.toml`, detailed paths, raw runtime status, and guest mount table.
 
 ## `ash ls`
 

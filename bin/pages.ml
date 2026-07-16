@@ -88,27 +88,27 @@ let spawn =
            logs -f NAME hint for following its logs.";
         `S "MANIFEST GENERATION";
         `P
-          "spawn writes ash.toml and virtle.toml before launching virtle. Both \
-           files live in the VM state directory.";
+          "spawn writes ash-state.toml and virtle.toml before launching \
+           virtle. Both files live in the VM state directory.";
         `P
           "For an existing named VM, spawn first builds new spawn inputs from \
            the current command line and defaults.";
         `P
           "For an existing named VM, omitting --flake reuses the flake saved \
-           in ash.toml. A new VM still requires --flake, and an explicit \
+           in ash-state.toml. A new VM still requires --flake, and an explicit \
            --flake overrides the saved value.";
         `P
           "Profiles have a similar carry-forward rule: if no --profile option \
-           is passed and an old ash.toml exists, ash reads the old ash.toml \
-           and copies its profile list into the new inputs. Passing one or \
-           more --profile options disables this carry-forward and uses exactly \
-           those profiles.";
+           is passed and an old ash-state.toml exists, ash reads the old \
+           ash-state.toml and copies its profile list into the new inputs. \
+           Passing one or more --profile options disables this carry-forward \
+           and uses exactly those profiles.";
         `P
-          "After inputs are built, spawn overwrites ash.toml with the new \
-           inputs and renders virtle.toml from those same new inputs.";
+          "After inputs are built, spawn overwrites ash-state.toml with the \
+           new inputs and renders virtle.toml from those same new inputs.";
         `P
           "Use ash regenerate NAME to re-render virtle.toml later from saved \
-           ash.toml without launching the VM. Regeneration updates the \
+           ash-state.toml without launching the VM. Regeneration updates the \
            manifest for a future launch; it does not reconfigure an already \
            running VM.";
         `S "FLAKE TARGET";
@@ -118,7 +118,7 @@ let spawn =
            for the guest kernel, initrd, kernel params, system toplevel, \
            host-side ssh, and host-side systemd-ssh-proxy paths.";
         `P
-          "Path-like flake references are saved in ash.toml as resolved \
+          "Path-like flake references are saved in ash-state.toml as resolved \
            absolute paths so ash regenerate NAME works from any current \
            directory.";
         `P
@@ -134,9 +134,9 @@ let spawn =
           "For a new VM with no --profile options, ash uses default_profile \
            from the agent-box config, falling back to base.";
         `P
-          "For an existing named VM with saved ash.toml, omitting --profile \
-           carries the saved profile list forward. Passing one or more \
-           --profile options uses exactly those profiles and does not \
+          "For an existing named VM with saved ash-state.toml, omitting \
+           --profile carries the saved profile list forward. Passing one or \
+           more --profile options uses exactly those profiles and does not \
            automatically add the default profile.";
         `P
           "Shared/base behavior should be expressed with profile extends in \
@@ -204,7 +204,7 @@ let spawn =
            with that identity.";
         `P
           "Pass --kitty to spawn to use kitten ssh instead of ssh for attached \
-           spawn sessions and save that choice in ash.toml for later \
+           spawn sessions and save that choice in ash-state.toml for later \
            regenerated launches.";
         `P
           "This requires the guest to have QEMU Guest Agent support and the \
@@ -245,7 +245,7 @@ let attach =
         `S "SPAWNING STOPPED VMS";
         `P
           "With --spawn, attach can start a stopped named VM from saved \
-           ash.toml, regenerate virtle.toml, then attach.";
+           ash-state.toml, regenerate virtle.toml, then attach.";
         `P
           "--spawn starts a foreground VM that stops when SSH exits. Add \
            --keep to start it as a background systemd user unit and keep it \
@@ -346,9 +346,9 @@ let inspect =
         `S "JSON";
         `P
           "With --json, prints the complete machine-readable view, including \
-           the saved ash.toml, referenced agent-box configuration, generated \
-           virtle.toml, detailed paths, raw virtle runtime status, and the \
-           guest mount table when running.";
+           the saved ash-state.toml, referenced agent-box configuration, \
+           generated virtle.toml, detailed paths, raw virtle runtime status, \
+           and the guest mount table when running.";
         `S Manpage.s_examples;
         `Pre "ash inspect work";
         `Pre "ash inspect --json work | jq '.virtle.config.mounts'";
@@ -365,12 +365,12 @@ let regenerate =
       [
         `S Manpage.s_description;
         `P
-          "Reads saved ash.toml, re-renders generated files, and exits without \
-           launching the VM.";
+          "Reads saved ash-state.toml, re-renders generated files, and exits \
+           without launching the VM.";
         `S "WHAT IT REWRITES";
         `P
           "regenerate rewrites virtle.toml and generated helper files such as \
-           ssh-with-profile-mounts. It does not rewrite ash.toml.";
+           ssh-with-profile-mounts. It does not rewrite ash-state.toml.";
         `S "WHEN USEFUL";
         `P
           "Use after upgrading ash when generated output changed, after \
@@ -461,10 +461,10 @@ let mount_profile =
            into a running VM.";
         `S "HOW IT WORKS";
         `P
-          "ash reads the config path saved in the VM's ash.toml, then resolves \
-           the PROFILE arguments from that agent-box config. It does not use \
-           the saved spawn profile list unless you pass those profile names \
-           here.";
+          "ash reads the config path saved in the VM's ash-state.toml, then \
+           resolves the PROFILE arguments from that agent-box config. It does \
+           not use the saved spawn profile list unless you pass those profile \
+           names here.";
         `P
           "Each resolved profile directory mount is mounted using the same \
            runtime hotmount mechanism as ash mount.";
@@ -491,10 +491,10 @@ let umount_profile =
            running VM.";
         `S "HOW IT WORKS";
         `P
-          "ash reads the config path saved in the VM's ash.toml, then resolves \
-           the PROFILE arguments from that agent-box config. It does not use \
-           the saved spawn profile list unless you pass those profile names \
-           here.";
+          "ash reads the config path saved in the VM's ash-state.toml, then \
+           resolves the PROFILE arguments from that agent-box config. It does \
+           not use the saved spawn profile list unless you pass those profile \
+           names here.";
         `P
           "Each resolved profile directory mount target is then unmounted from \
            the running guest.";

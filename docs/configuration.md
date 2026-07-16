@@ -14,7 +14,7 @@ The fragment resolves to:
 nixosConfigurations.agent
 ```
 
-Pass the flake directory, not `flake.nix`. `--flake` is required when creating a new VM. When spawning an existing named VM, ash reuses the flake saved in `ash.toml` if `--flake` is omitted; an explicit value overrides it. Path-like flake references are stored as resolved absolute paths, so later commands do not depend on the current directory.
+Pass the flake directory, not `flake.nix`. `--flake` is required when creating a new VM. When spawning an existing named VM, ash reuses the flake saved in `ash-state.toml` if `--flake` is omitted; an explicit value overrides it. Path-like flake references are stored as resolved absolute paths, so later commands do not depend on the current directory.
 
 ## Agent-box config
 
@@ -71,7 +71,7 @@ services.qemuGuest.enable = true;
 ash stores spawn inputs in:
 
 ```text
-~/.local/state/ash/<name>/ash.toml
+~/.local/state/ash/<name>/ash-state.toml
 ```
 
 This file is used by:

@@ -96,14 +96,14 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 `ash logs NAME` runs `journalctl --user --unit ash-<name>.service --invocation=0` so only the latest process invocation is shown, with 100 recent lines by default. It requests JSON records and formats each entry as `[YYYY-MM-DD HH:MM:SS] MESSAGE`, omitting hostname and process metadata. `--lines`/`-n` changes the count, and `--follow`/`-f` follows new entries. Background spawn prints `ash logs -f NAME` as a hint. Invocation filtering requires systemd 257 or newer.
 
-`ash inspect NAME` emits a concise human-readable summary for a running or stopped VM, covering runtime/storage status, saved flake and profiles, machine resources, configured mounts/files, workspace paths, and hotmount desired state. `ash inspect --json NAME` emits the complete machine-readable object: it converts the saved `ash.toml`, referenced agent-box TOML, and generated `virtle.toml` documents to JSON; reports state sizes and persist/workspace artifacts; includes parsed hotmount desired state and malformed metadata; and checks host staging mountpoints. For running VMs the JSON view additionally queries the virtle control socket for raw status and the guest kernel mount table through QGA.
+`ash inspect NAME` emits a concise human-readable summary for a running or stopped VM, covering runtime/storage status, saved flake and profiles, machine resources, configured mounts/files, workspace paths, and hotmount desired state. `ash inspect --json NAME` emits the complete machine-readable object: it converts the saved `ash-state.toml`, referenced agent-box TOML, and generated `virtle.toml` documents to JSON; reports state sizes and persist/workspace artifacts; includes parsed hotmount desired state and malformed metadata; and checks host staging mountpoints. For running VMs the JSON view additionally queries the virtle control socket for raw status and the guest kernel mount table through QGA.
 
 Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags, installing ash's SSH public key, and collecting `ash ls` SSH statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket: SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, both columns show a dash.
 
 Spawn options:
 
 - `-p`, `--profile PROFILE` — repeatable agent-box profile; profiles supply mount points.
-- `-f`, `--flake FLAKE#HOST` — flake directory plus host reference, e.g. `../my-nix#agent`. Required for a new VM; when spawning an existing named VM, omitting it reuses the value saved in `ash.toml`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
+- `-f`, `--flake FLAKE#HOST` — flake directory plus host reference, e.g. `../my-nix#agent`. Required for a new VM; when spawning an existing named VM, omitting it reuses the value saved in `ash-state.toml`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
 - `-u`, `--user USER` — guest SSH user. Defaults to `runtime.qemu.ssh_user` from config, then `agent`.
 - `-c`, `--config CONFIG` — agent-box style config. Default: `~/.agent-box.toml`.
@@ -118,7 +118,7 @@ Spawn options:
 
 Attach options:
 
-- `--spawn` — if the named VM is stopped, load its saved `ash.toml`, regenerate the manifest, start it, then attach.
+- `--spawn` — if the named VM is stopped, load its saved `ash-state.toml`, regenerate the manifest, start it, then attach.
 - `--keep` — with `--spawn`, start the stopped VM as a background systemd unit and keep it running after SSH exits. `ash attach --keep` without `--spawn` is invalid.
 
 ## Lifecycle commands
@@ -178,8 +178,8 @@ Then it reads the selected profiles from `~/.agent-box.toml` and turns their mou
 Profile selection is explicit:
 
 - If no `-p`/`--profile` is passed for a new VM, `ash` uses `default_profile` from the config, falling back to `base`.
-- If `-f`/`--flake` is omitted for an existing named VM with saved `ash.toml`, `ash` reuses the saved flake; new VMs still require it.
-- If no `-p`/`--profile` is passed for an existing named VM with saved `ash.toml`, `ash` reuses the saved profile list.
+- If `-f`/`--flake` is omitted for an existing named VM with saved `ash-state.toml`, `ash` reuses the saved flake; new VMs still require it.
+- If no `-p`/`--profile` is passed for an existing named VM with saved `ash-state.toml`, `ash` reuses the saved profile list.
 - If one or more profiles are passed, `ash` uses exactly those profiles. It does not automatically add `default_profile`.
 - Shared/base profile behavior should be expressed with profile `extends` in the config.
 
@@ -297,7 +297,7 @@ systemd-run --user --unit ash-NAME --collect --same-dir virtle --manifest GENERA
 virtle --manifest GENERATED launch --ssh
 ```
 
-To attach to an already running named VM, `ash attach NAME` reads the existing generated manifest under the VM state directory, asks the running `virtle` control socket for its vsock CID, and executes the manifest's SSH command. If no name is supplied, `ash attach` only succeeds when exactly one VM is running. `ash attach --spawn NAME` can start a stopped VM from its saved `ash.toml`; add `--keep` to start it as a background systemd unit instead of a foreground VM that stops on SSH exit.
+To attach to an already running named VM, `ash attach NAME` reads the existing generated manifest under the VM state directory, asks the running `virtle` control socket for its vsock CID, and executes the manifest's SSH command. If no name is supplied, `ash attach` only succeeds when exactly one VM is running. `ash attach --spawn NAME` can start a stopped VM from its saved `ash-state.toml`; add `--keep` to start it as a background systemd unit instead of a foreground VM that stops on SSH exit.
 
 Host-side SSH attach requires `ssh` and `systemd-ssh-proxy`. `ash` resolves them from the selected NixOS config by default, unless `--ssh` or `--systemd-ssh-proxy` are passed, and writes the resolved absolute paths into the generated manifest.
 

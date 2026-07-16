@@ -787,7 +787,9 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       virtle = "/bin/virtle";
     }
   in
-  write_file (Virtle.ash_config_path ~name) (Virtle.ash_config inputs);
+  let state_path = Virtle.ash_config_path ~name in
+  assert_equal "state filename" "ash-state.toml" (Filename.basename state_path);
+  write_file state_path (Virtle.ash_config inputs);
   assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
   assert_equal "explicit flake overrides saved" "github:owner/repo#other"
     (Virtle.resolve_spawn_flake ~name (Some "github:owner/repo#other"))
