@@ -15,13 +15,13 @@ let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake name user
-    profiles print_serial mount_cwd ephemeral attach keep kitty =
+    spaces print_serial mount_cwd ephemeral attach keep kitty =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ?name ?user ~config_path:config ?flake ~profiles ~print_serial ~mount_cwd
+    ?name ?user ~config_path:config ?flake ~spaces ~print_serial ~mount_cwd
     ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
 
 let list_vms global =
@@ -72,13 +72,13 @@ let umount opts name guest_path =
   Log.set_debug opts.global.debug;
   Virtle.hotunmount ?virtle:opts.virtle ~name ~guest_path ()
 
-let mount_profile opts name profiles =
+let mount_space opts name spaces =
   Log.set_debug opts.global.debug;
-  Virtle.hotmount_profiles ?virtle:opts.virtle ~name ~profiles ()
+  Virtle.hotmount_spaces ?virtle:opts.virtle ~name ~spaces ()
 
-let umount_profile opts name profiles =
+let umount_space opts name spaces =
   Log.set_debug opts.global.debug;
-  Virtle.hotunmount_profiles ?virtle:opts.virtle ~name ~profiles ()
+  Virtle.hotunmount_spaces ?virtle:opts.virtle ~name ~spaces ()
 
 let virtle_arg =
   Arg.(
@@ -120,8 +120,8 @@ let ro_store_socket_arg =
 let config_arg =
   Arg.(
     value
-    & opt string "~/.agent-box.toml"
-    & info [ "config"; "c" ] ~doc:"Agent-box style config file." ~docv:"CONFIG")
+    & opt string (Util.default_ash_config_path ())
+    & info [ "config"; "c" ] ~doc:"Ash config file." ~docv:"CONFIG")
 
 let flake_arg =
   Arg.(
@@ -147,15 +147,15 @@ let user_arg =
     & opt (some string) None
     & info [ "user"; "u" ]
         ~doc:
-          "Guest SSH user. Defaults to runtime.qemu.ssh_user from config, then \
-           agent."
+          "Override the guest SSH user. By default ash evaluates the selected \
+           NixOS configuration's services.getty.autologinUser."
         ~docv:"USER")
 
-let profiles_arg =
+let spaces_arg =
   Arg.(
     value & opt_all string []
-    & info [ "profile"; "p" ]
-        ~doc:"Profile whose mounts should be added. Repeatable." ~docv:"PROFILE")
+    & info [ "space"; "s" ]
+        ~doc:"Space whose mounts should be added. Repeatable." ~docv:"SPACE")
 
 let verbose_arg =
   Arg.(
@@ -235,7 +235,7 @@ let spawn_cmd =
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ ro_store_socket_arg $ config_arg $ flake_arg $ name_arg $ user_arg
-      $ profiles_arg $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg
+      $ spaces_arg $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg
       $ attach_flag $ keep_flag $ kitty_flag)
 
 let attach_name_arg =
@@ -362,29 +362,28 @@ let umount_cmd =
     Term.(
       const umount $ virtle_opts_arg $ mount_name_arg $ umount_guest_path_arg)
 
-let profile_names_arg =
+let space_names_arg =
   Arg.(
     non_empty & pos_right 1 string []
-    & info [] ~doc:"Profile names to hotmount." ~docv:"PROFILE")
+    & info [] ~doc:"Space names to hotmount." ~docv:"SPACE")
 
-let mount_profile_man = Pages.mount_profile.man
+let mount_space_man = Pages.mount_space.man
 
-let mount_profile_cmd =
+let mount_space_cmd =
   Cmd.v
-    (Cmd.info "mount-profile" ~doc:"hot-mount one or more profiles"
-       ~man:mount_profile_man)
+    (Cmd.info "mount-space" ~doc:"hot-mount one or more spaces"
+       ~man:mount_space_man)
     Term.(
-      const mount_profile $ virtle_opts_arg $ mount_name_arg $ profile_names_arg)
+      const mount_space $ virtle_opts_arg $ mount_name_arg $ space_names_arg)
 
-let umount_profile_man = Pages.umount_profile.man
+let umount_space_man = Pages.umount_space.man
 
-let umount_profile_cmd =
+let umount_space_cmd =
   Cmd.v
-    (Cmd.info "umount-profile" ~doc:"unmount one or more hot-mounted profiles"
-       ~man:umount_profile_man)
+    (Cmd.info "umount-space" ~doc:"unmount one or more hot-mounted spaces"
+       ~man:umount_space_man)
     Term.(
-      const umount_profile $ virtle_opts_arg $ mount_name_arg
-      $ profile_names_arg)
+      const umount_space $ virtle_opts_arg $ mount_name_arg $ space_names_arg)
 
 let stop_name_arg =
   Arg.(
@@ -450,8 +449,8 @@ let main_cmd =
       resume_cmd;
       mount_cmd;
       umount_cmd;
-      mount_profile_cmd;
-      umount_profile_cmd;
+      mount_space_cmd;
+      umount_space_cmd;
       stop_cmd;
       logs_cmd;
       regenerate_cmd;

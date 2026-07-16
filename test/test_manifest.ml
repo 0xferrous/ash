@@ -32,11 +32,6 @@ let find_int doc path =
   | Some value -> value
   | None -> fail ("missing int: " ^ String.concat "." path)
 
-let find_bool doc path =
-  match Otoml.find_opt doc Otoml.get_boolean path with
-  | Some value -> value
-  | None -> fail ("missing bool: " ^ String.concat "." path)
-
 let find_strings doc path =
   match Otoml.find_opt doc (Otoml.get_array Otoml.get_string) path with
   | Some value -> value
@@ -89,10 +84,6 @@ let assert_int label expected actual =
   if expected <> actual then
     fail (Printf.sprintf "%s: expected %d, got %d" label expected actual)
 
-let assert_string_prefix label prefix value =
-  if not (String.starts_with ~prefix value) then
-    fail (Printf.sprintf "%s: expected %S to start with %S" label value prefix)
-
 let assert_string_contains label value needle =
   let value_len = String.length value in
   let needle_len = String.length needle in
@@ -116,7 +107,7 @@ let test_boot : Nix.boot =
 let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
-let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
+let render ?(spaces = []) ?user ?(print_serial = false) ?(mount_cwd = false)
     ?ro_store_socket ?(kitty = false) ~config ~flake ~name () =
   Virtle.render_resolved_manifest
     {
@@ -125,7 +116,7 @@ let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       target = test_target;
       boot = test_boot;
       name;
-      profiles;
+      spaces;
       user;
       print_serial;
       mount_cwd;
@@ -137,219 +128,152 @@ let render ?(profiles = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       virtle = "/bin/virtle";
     }
 
-let test_agent_box_to_virtle_manifest () =
-  let root = temp_dir "ash-test" in
+let test_spaces_to_virtle_manifest () =
+  let root = temp_dir "ash-test-spaces" in
   let home = Filename.concat root "home" in
   let state = Filename.concat root "state" in
-  let abs_cache = Filename.concat root "abs-cache" in
+  let absolute = Filename.concat root "absolute" in
   mkdir_p home;
   mkdir_p state;
-  mkdir_p abs_cache;
-  mkdir_p (Filename.concat home ".cargo");
-  mkdir_p (Filename.concat home "dev/ro-project");
-  write_file
-    (Filename.concat home ".config/nix/nix.conf")
-    "experimental-features = nix-command flakes\n";
+  mkdir_p absolute;
+  mkdir_p (Filename.concat home "dev/fr/ash");
+  mkdir_p (Filename.concat home "dev/read-only");
   Unix.putenv "HOME" home;
   Unix.putenv "XDG_STATE_HOME" state;
-  let config_path = Filename.concat root "agent-box.toml" in
+  let config_path = Filename.concat root "config.toml" in
   write_file config_path
     (Printf.sprintf
-       {|default_profile = "base"
-
-[runtime.qemu]
-memory = "8G"
-cpus = 4
-ssh_user = "agent"
-
-[profiles.base.mounts.ro]
-home_relative = ["dev/ro-project"]
-
-[profiles.rust]
-extends = ["base"]
-
-[profiles.rust.mounts.rw]
-home_relative = [".cargo", ".config/nix/nix.conf"]
-absolute = ["%s"]
+       {|[spaces.ash]
+rw_mounts = ["~/dev/fr/ash", "~/dev/fr/ash:/home/agent/workspace/ash", %S]
+ro_mounts = ["~/dev/read-only:~/src/read-only"]
 |}
-       abs_cache);
-  let config = Agent_box.load config_path in
-  let _, manifest =
-    render ~config ~flake:"../my-nix#agent" ~name:"unit-test"
-      ~profiles:[ "rust" ] ~print_serial:true ~mount_cwd:true ()
+       absolute);
+  let config = Ash_config.load config_path in
+  let spaces, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"unit-test" ~spaces:[ "ash" ]
+      ~print_serial:true ~mount_cwd:true ()
   in
+  assert_equal "selected spaces" "ash" (String.concat "," spaces);
   let doc = parse_toml manifest in
   assert_equal "host_name" "agent" (find_string doc [ "host_name" ]);
-  assert_equal "state_dir"
-    (Filename.concat state "ash/unit-test")
-    (find_string doc [ "state_dir" ]);
-  if find_int doc [ "machine"; "memory" ] <> 8192 then
-    fail "memory should be 8192";
-  if find_int doc [ "machine"; "vcpu" ] <> 4 then fail "vcpu should be 4";
+  assert_int "default memory" 4096 (find_int doc [ "machine"; "memory" ]);
+  assert_int "default vcpu" 2 (find_int doc [ "machine"; "vcpu" ]);
   assert_equal "kernel serial" "print" (find_string doc [ "kernel"; "serial" ]);
-  assert_bool "workspace mount_cwd" true
-    (find_bool doc [ "workspace"; "mount_cwd" ]);
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
-  let wrapper = Filename.concat state "ash/unit-test/ssh-with-profile-mounts" in
-  assert_equal "profile mount ssh wrapper" wrapper
+  let wrapper = Filename.concat state "ash/unit-test/ssh-with-space-mounts" in
+  assert_equal "space mount ssh wrapper" wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]));
-  let kitty_wrapper =
-    Filename.concat state "ash/unit-test/ssh-with-profile-mounts-kitty"
-  in
-  if
-    Otoml.find_opt doc
-      (Otoml.get_array Otoml.get_string)
-      [ "ssh"; "kitty_exec" ]
-    <> None
-  then fail "virtle manifest should not include unknown ssh.kitty_exec key";
-  if not (Sys.file_exists wrapper) then
-    fail "profile mount ssh wrapper should exist";
-  if not (Sys.file_exists kitty_wrapper) then
-    fail "kitty ssh wrapper should exist";
-  let wrapper_content =
-    In_channel.with_open_text wrapper In_channel.input_all
-  in
-  assert_string_contains "wrapper guest-exec" wrapper_content "rpc guest-exec";
-  assert_string_contains "wrapper handles successful mount" wrapper_content
-    "*'\"exitCode\":0'*)";
-  assert_string_contains "wrapper handles already mounted" wrapper_content
-    "*'\"exitCode\":42'*) ;;";
-  assert_string_contains "wrapper execs ssh" wrapper_content
-    "-o IdentitiesOnly=yes \"$@\"";
-  let kitty_wrapper_content =
-    In_channel.with_open_text kitty_wrapper In_channel.input_all
-  in
-  assert_string_contains "kitty wrapper execs kitten ssh" kitty_wrapper_content
-    "exec 'kitten' 'ssh'";
+  if not (Sys.file_exists wrapper) then fail "space mount wrapper should exist";
   let mounts = table_array doc "mounts" in
-  let workspace = find_table_by_string mounts "tag" "workspace" in
-  assert_equal "workspace source"
-    (Filename.concat state "ash/unit-test/workspace")
-    (string_field workspace "source");
-  assert_equal "workspace target" "/home/agent/workspace"
-    (string_field workspace "target");
-  let hotmounts = find_table_by_string mounts "tag" "hotmounts" in
-  assert_equal "hotmounts source"
-    (Filename.concat state "ash/unit-test/hotmounts")
-    (string_field hotmounts "source");
-  assert_bool "hotmounts read_only" false (bool_field hotmounts "read_only");
-  let ro_store = find_table_by_string mounts "tag" "ro-store" in
-  assert_equal "ro-store source" "/nix/store" (string_field ro_store "source");
-  assert_bool "ro-store read_only" true (bool_field ro_store "read_only");
-  let cwd = find_table_by_string mounts "tag" "workspace_cwd" in
-  assert_equal "cwd source" "." (string_field cwd "source");
-  let cargo = find_table_by_string mounts "target" "/home/agent/.cargo" in
-  assert_equal "cargo source"
-    (Filename.concat home ".cargo")
-    (string_field cargo "source");
-  assert_string_prefix "cargo tag" "cargo-" (string_field cargo "tag");
-  if String.length (string_field cargo "tag") > 36 then
-    fail "cargo tag should fit virtiofs tag length limit";
-  assert_bool "cargo read_only" false (bool_field cargo "read_only");
-  let ro_project =
-    find_table_by_string mounts "target" "/home/agent/dev/ro-project"
+  let same_path =
+    find_table_by_string mounts "target" "/home/agent/dev/fr/ash"
   in
-  assert_equal "ro project source"
-    (Filename.concat home "dev/ro-project")
-    (string_field ro_project "source");
-  assert_bool "ro project read_only" true (bool_field ro_project "read_only");
-  let abs = find_table_by_string mounts "target" abs_cache in
-  assert_equal "abs source" abs_cache (string_field abs "source");
-  let write_files = table_array doc "write_files" in
-  let nix_conf =
-    find_table_by_string write_files "guest_path"
-      "/home/agent/.config/nix/nix.conf"
+  assert_equal "implicit guest target source"
+    (Filename.concat home "dev/fr/ash")
+    (string_field same_path "source");
+  assert_bool "implicit mount writable" false (bool_field same_path "read_only");
+  let workspace_path =
+    find_table_by_string mounts "target" "/home/agent/workspace/ash"
   in
-  assert_equal "write file source"
-    (Filename.concat home ".config/nix/nix.conf")
-    (string_field nix_conf "source");
-  assert_bool "write file write_back" true (bool_field nix_conf "write_back");
-  assert_equal "write file chown" "agent:users" (string_field nix_conf "chown")
+  assert_equal "explicit guest target source"
+    (Filename.concat home "dev/fr/ash")
+    (string_field workspace_path "source");
+  let read_only =
+    find_table_by_string mounts "target" "/home/agent/src/read-only"
+  in
+  assert_equal "read-only source"
+    (Filename.concat home "dev/read-only")
+    (string_field read_only "source");
+  assert_bool "read-only mount" true (bool_field read_only "read_only");
+  let absolute_mount = find_table_by_string mounts "target" absolute in
+  assert_equal "absolute source" absolute (string_field absolute_mount "source")
 
-let test_default_profile_without_mount_cwd () =
-  let root = temp_dir "ash-test-default" in
+let test_no_spaces_selected_by_default () =
+  let root = temp_dir "ash-test-no-spaces" in
   let home = Filename.concat root "home" in
   let state = Filename.concat root "state" in
   mkdir_p home;
   mkdir_p state;
-  mkdir_p (Filename.concat home ".cache/example");
   Unix.putenv "HOME" home;
   Unix.putenv "XDG_STATE_HOME" state;
-  let config_path = Filename.concat root "agent-box.toml" in
-  write_file config_path
-    {|default_profile = "base"
-
-[runtime.qemu]
-ssh_user = "dev"
-
-[profiles.base.mounts.rw]
-home_relative = [".cache/example"]
-|};
-  let config = Agent_box.load config_path in
-  let profiles, manifest =
-    render ~config ~flake:"../my-nix#agent" ~name:"default-profile" ()
+  let config_path = Filename.concat root "missing-config.toml" in
+  let config = Ash_config.load_for_spaces config_path [] in
+  let spaces, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"no-spaces" ()
   in
-  assert_equal "selected default profile" "base" (String.concat "," profiles);
+  assert_equal "no selected spaces" "" (String.concat "," spaces);
   let doc = parse_toml manifest in
-  assert_equal "ssh user" "dev" (find_string doc [ "ssh"; "user" ]);
-  assert_equal "workspace guest dir" "/home/dev/workspace"
-    (find_string doc [ "workspace"; "guest_dir" ]);
-  assert_bool "mount_cwd default" false
-    (find_bool doc [ "workspace"; "mount_cwd" ]);
   let mounts = table_array doc "mounts" in
-  if
-    List.exists
-      (fun table ->
-        List.assoc_opt "tag" table = Some (Otoml.TomlString "workspace_cwd"))
-      mounts
-  then fail "workspace_cwd should not be emitted by default";
-  let hotmounts = find_table_by_string mounts "tag" "hotmounts" in
-  assert_equal "hotmounts source"
-    (Filename.concat state "ash/default-profile/hotmounts")
-    (string_field hotmounts "source");
-  let cache = find_table_by_string mounts "target" "/home/dev/.cache/example" in
-  assert_equal "cache source"
-    (Filename.concat home ".cache/example")
-    (string_field cache "source");
-  if table_array doc "write_files" <> [] then
-    fail "write_files should be absent"
+  assert_int "fixed mount count without spaces" 4 (List.length mounts);
+  assert_equal "default ssh user" "agent" (find_string doc [ "ssh"; "user" ])
 
-let test_readonly_file_write_has_no_write_back () =
-  let root = temp_dir "ash-test-ro-file" in
-  let home = Filename.concat root "home" in
-  let state = Filename.concat root "state" in
-  mkdir_p home;
-  mkdir_p state;
-  write_file (Filename.concat home ".gitconfig") "[user]\n  name = Test\n";
-  Unix.putenv "HOME" home;
-  Unix.putenv "XDG_STATE_HOME" state;
-  let config_path = Filename.concat root "agent-box.toml" in
-  write_file config_path
-    {|default_profile = "base"
+let assert_mount_parse_ok label ~host_home ~guest_user ~read_only spec
+    expected_source expected_target =
+  match
+    Ash_config.parse_mount_spec ~host_home ~guest_user ~space:"test" ~read_only
+      spec
+  with
+  | Error message -> fail (label ^ ": unexpected parse error: " ^ message)
+  | Ok (mount : Ash_config.mount) ->
+      assert_equal (label ^ " source") expected_source mount.source;
+      assert_equal (label ^ " target") expected_target mount.target;
+      assert_bool (label ^ " read_only") read_only mount.read_only
 
-[profiles.base.mounts.ro]
-home_relative = [".gitconfig"]
-|};
-  let config = Agent_box.load config_path in
-  let _, manifest =
-    render ~config ~flake:"../my-nix#agent" ~name:"ro-file" ()
-  in
-  let doc = parse_toml manifest in
-  let wrapper = Filename.concat state "ash/ro-file/ssh-with-profile-mounts" in
-  assert_equal "workspace mount ssh wrapper" wrapper
-    (List.hd (find_strings doc [ "ssh"; "exec" ]));
-  if not (Sys.file_exists wrapper) then
-    fail "workspace mount ssh wrapper should exist";
-  let write_files = table_array doc "write_files" in
-  let gitconfig =
-    find_table_by_string write_files "guest_path" "/home/agent/.gitconfig"
-  in
-  assert_equal "gitconfig source"
-    (Filename.concat home ".gitconfig")
-    (string_field gitconfig "source");
-  if List.mem_assoc "write_back" gitconfig then
-    fail "read-only file should not set write_back"
+let assert_mount_parse_error label ~host_home ~guest_user spec =
+  match
+    Ash_config.parse_mount_spec ~host_home ~guest_user ~space:"test"
+      ~read_only:false spec
+  with
+  | Ok _ -> fail (label ^ ": expected parse error")
+  | Error _ -> ()
+
+let test_xdg_config_path () =
+  let old_home = Sys.getenv_opt "HOME" in
+  let old_xdg = Sys.getenv_opt "XDG_CONFIG_HOME" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "HOME" (Option.value old_home ~default:"");
+      Unix.putenv "XDG_CONFIG_HOME" (Option.value old_xdg ~default:""))
+    (fun () ->
+      Unix.putenv "HOME" "/home/tester";
+      Unix.putenv "XDG_CONFIG_HOME" "/tmp/test-config";
+      assert_equal "XDG config path" "/tmp/test-config/ash/config.toml"
+        (Util.default_ash_config_path ());
+      Unix.putenv "XDG_CONFIG_HOME" "";
+      assert_equal "fallback config path" "/home/tester/.config/ash/config.toml"
+        (Util.default_ash_config_path ()))
+
+let test_space_mount_spec_parsing () =
+  let host_home = "/home/host" in
+  assert_mount_parse_ok "tilde implicit target" ~host_home ~guest_user:"agent"
+    ~read_only:false "~/dev/fr/ash" "/home/host/dev/fr/ash"
+    "/home/agent/dev/fr/ash";
+  assert_mount_parse_ok "tilde explicit tilde target" ~host_home
+    ~guest_user:"agent" ~read_only:true "~/dev/fr/ash:~/workspace/ash"
+    "/home/host/dev/fr/ash" "/home/agent/workspace/ash";
+  assert_mount_parse_ok "tilde explicit absolute target" ~host_home
+    ~guest_user:"agent" ~read_only:false
+    "~/dev/fr/ash:/home/agent/workspace/ash" "/home/host/dev/fr/ash"
+    "/home/agent/workspace/ash";
+  assert_mount_parse_ok "absolute implicit target" ~host_home
+    ~guest_user:"agent" ~read_only:true "/srv/source" "/srv/source"
+    "/srv/source";
+  assert_mount_parse_ok "absolute explicit tilde target" ~host_home
+    ~guest_user:"dev" ~read_only:false "/srv/source:~/src" "/srv/source"
+    "/home/dev/src";
+  assert_mount_parse_ok "root guest home" ~host_home ~guest_user:"root"
+    ~read_only:false "~/source:~/target" "/home/host/source" "/root/target";
+  assert_mount_parse_ok "home roots" ~host_home ~guest_user:"agent"
+    ~read_only:false "~:~" "/home/host" "/home/agent";
+  assert_mount_parse_error "relative host" ~host_home ~guest_user:"agent"
+    "relative/path";
+  assert_mount_parse_error "relative guest" ~host_home ~guest_user:"agent"
+    "/host/path:relative/path";
+  assert_mount_parse_error "empty host" ~host_home ~guest_user:"agent"
+    ":/guest/path";
+  assert_mount_parse_error "empty guest" ~host_home ~guest_user:"agent"
+    "/host/path:"
 
 let test_ro_store_socket_override () =
   let root = temp_dir "ash-test" in
@@ -358,16 +282,9 @@ let test_ro_store_socket_override () =
   Unix.putenv "HOME" home;
   Unix.putenv "XDG_STATE_HOME" state;
   Util.ensure_dir home;
-  let config_path = Filename.concat root "agent-box.toml" in
-  write_file config_path
-    {|default_profile = "base"
-
-[runtime.qemu]
-ssh_user = "agent"
-
-[profiles.base]
-|};
-  let config = Agent_box.load config_path in
+  let config_path = Filename.concat root "config.toml" in
+  write_file config_path "[spaces]\n";
+  let config = Ash_config.load config_path in
   let _, manifest =
     render ~config ~flake:"../my-nix#agent" ~name:"ro-store-socket"
       ~ro_store_socket:"/run/ro-store.sock" ()
@@ -692,12 +609,13 @@ type = "virtiofs"
 source = "/tmp/workspace"
 read_only = false
 |};
-  let agent_box_path = Filename.concat root "agent-box.toml" in
-  write_file agent_box_path
-    {|default_profile = "rust"
+  let config_path = Filename.concat root "config.toml" in
+  write_file config_path
+    {|[spaces.rust]
+rw_mounts = []
 
-[profiles.rust]
-[profiles.go]
+[spaces.go]
+ro_mounts = []
 |};
   write_file
     (Virtle.ash_config_path ~name)
@@ -705,9 +623,9 @@ read_only = false
        {|[spawn]
 config_path = %S
 flake = "github:example/vms#agent"
-profiles = ["rust", "go"]
+spaces = ["rust", "go"]
 |}
-       agent_box_path);
+       config_path);
   let guest_path = "/home/agent/project" in
   let source_name = Virtle.hotmount_slug ~host_dir ~guest_path in
   Virtle.write_hotmount_metadata_record
@@ -720,9 +638,9 @@ profiles = ["rust", "go"]
   assert_equal "inspect flake" "github:example/vms#agent"
     (json |> member "ash" |> member "config" |> member "spawn" |> member "flake"
    |> to_string);
-  assert_equal "inspect agent-box default profile" "rust"
-    (json |> member "agentBox" |> member "config" |> member "default_profile"
-   |> to_string);
+  assert_bool "inspect ash config contains rust space" true
+    (json |> member "config" |> member "config" |> member "spaces"
+   |> member "rust" <> `Null);
   assert_int "inspect configured mounts" 1
     (json |> member "virtle" |> member "config" |> member "mounts" |> to_list
    |> List.length);
@@ -749,18 +667,15 @@ let test_kitty_selects_kitten_ssh_wrapper () =
   mkdir_p state;
   Unix.putenv "HOME" home;
   Unix.putenv "XDG_STATE_HOME" state;
-  let config_path = Filename.concat root "agent-box.toml" in
-  write_file config_path {|default_profile = "base"
-
-[profiles.base]
-|};
-  let config = Agent_box.load config_path in
+  let config_path = Filename.concat root "config.toml" in
+  write_file config_path "[spaces]\n";
+  let config = Ash_config.load config_path in
   let _, manifest =
     render ~config ~flake:"../my-nix#agent" ~name:"kitty" ~kitty:true ()
   in
   let doc = parse_toml manifest in
   let kitty_wrapper =
-    Filename.concat state "ash/kitty/ssh-with-profile-mounts-kitty"
+    Filename.concat state "ash/kitty/ssh-with-space-mounts-kitty"
   in
   assert_equal "selected kitty wrapper" kitty_wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]))
@@ -772,10 +687,10 @@ let test_spawn_reuses_saved_flake_when_omitted () =
   let saved_flake = "/tmp/saved-flake#agent" in
   let inputs : Virtle.manifest_inputs =
     {
-      config_path = "/tmp/agent-box.toml";
+      config_path = "/tmp/ash-config.toml";
       flake = saved_flake;
       name;
-      profiles = [ "base" ];
+      spaces = [ "base" ];
       user = None;
       print_serial = false;
       mount_cwd = false;
@@ -792,7 +707,13 @@ let test_spawn_reuses_saved_flake_when_omitted () =
   write_file state_path (Virtle.ash_config inputs);
   assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
   assert_equal "explicit flake overrides saved" "github:owner/repo#other"
-    (Virtle.resolve_spawn_flake ~name (Some "github:owner/repo#other"))
+    (Virtle.resolve_spawn_flake ~name (Some "github:owner/repo#other"));
+  assert_equal "saved spaces" "base"
+    (String.concat "," (Virtle.resolve_spawn_spaces ~name []));
+  assert_equal "explicit spaces override saved" "rust,go"
+    (String.concat "," (Virtle.resolve_spawn_spaces ~name [ "rust"; "go" ]));
+  assert_equal "new VM has no default spaces" ""
+    (String.concat "," (Virtle.resolve_spawn_spaces ~name:"new-vm" []))
 
 let test_nix_storage_flake_ref_absolutizes_relative_paths () =
   mkdir_p (Filename.concat (Filename.dirname (Sys.getcwd ())) "my-nix");
@@ -834,12 +755,10 @@ let run name test =
   Printf.printf "ok\n%!"
 
 let () =
-  run "agent-box profiles render to virtle manifest"
-    test_agent_box_to_virtle_manifest;
-  run "default profile renders without mount-cwd"
-    test_default_profile_without_mount_cwd;
-  run "read-only file write does not write back"
-    test_readonly_file_write_has_no_write_back;
+  run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
+  run "no spaces selected by default" test_no_spaces_selected_by_default;
+  run "XDG config path" test_xdg_config_path;
+  run "space mount spec parsing" test_space_mount_spec_parsing;
   run "ro-store socket override" test_ro_store_socket_override;
   run "kitty selects kitten ssh wrapper" test_kitty_selects_kitten_ssh_wrapper;
   run "qga params use valid json" test_qga_params_use_valid_json;

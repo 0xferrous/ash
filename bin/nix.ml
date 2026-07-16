@@ -130,7 +130,15 @@ let attr_segment segment =
   Buffer.add_char b '"';
   Buffer.contents b
 
-let validate_user ~target ~user =
+let rec resolve_ssh_user ~target =
+  let attr = target.attr ^ ".config.services.getty.autologinUser" in
+  let user = eval_raw ~label:"guest SSH user" attr in
+  if user = "" then
+    Log.fatal "guest SSH user resolved to an empty value\n\nNix attr: %s" attr;
+  validate_user ~target ~user;
+  user
+
+and validate_user ~target ~user =
   let attr =
     target.attr ^ ".config.users.users." ^ attr_segment user ^ ".name"
   in

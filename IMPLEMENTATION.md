@@ -1,6 +1,6 @@
 # ash - (a)gent (sh)ell
 
-A small OCaml CLI for spawning, attaching to, and managing optionally ephemeral NixOS agent VMs via [`virtle`](https://github.com/shazow/virtle), with profile-based mounts from an [`agent-box`](https://github.com/0xferrous/agent-box) TOML config.
+A small OCaml CLI for spawning, attaching to, and managing optionally ephemeral NixOS agent VMs via [`virtle`](https://github.com/shazow/virtle), with space-based mounts from ash's TOML config.
 
 ## Quickstart
 
@@ -18,25 +18,25 @@ nix build
 ## Interface
 
 ```sh
-ash spawn -p rust -p go --flake path/to/flake#agent
+ash spawn -s rust -s go --flake path/to/flake#agent
 ```
 
 Short form:
 
 ```sh
-ash spawn -p rust -p go -f ../my-nix#agent
+ash spawn -s rust -s go -f ../my-nix#agent
 ```
 
 Mount the current repository into the guest workspace:
 
 ```sh
-ash spawn -p rust -f ../my-nix#agent --mount-cwd
+ash spawn -s rust -f ../my-nix#agent --mount-cwd
 ```
 
 Reuse the same VM state and persistent image across runs:
 
 ```sh
-ash spawn --name rustbox -p rust -f ../my-nix#agent
+ash spawn --name rustbox -s rust -f ../my-nix#agent
 ```
 
 SSH into an already running VM by name:
@@ -96,17 +96,17 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 `ash logs NAME` runs `journalctl --user --unit ash-<name>.service --invocation=0` so only the latest process invocation is shown, with 100 recent lines by default. It requests JSON records and formats each entry as `[YYYY-MM-DD HH:MM:SS] MESSAGE`, omitting hostname and process metadata. `--lines`/`-n` changes the count, and `--follow`/`-f` follows new entries. Background spawn prints `ash logs -f NAME` as a hint. Invocation filtering requires systemd 257 or newer.
 
-`ash inspect NAME` emits a concise human-readable summary for a running or stopped VM, covering runtime/storage status, saved flake and profiles, machine resources, configured mounts/files, workspace paths, and hotmount desired state. `ash inspect --json NAME` emits the complete machine-readable object: it converts the saved `ash-state.toml`, referenced agent-box TOML, and generated `virtle.toml` documents to JSON; reports state sizes and persist/workspace artifacts; includes parsed hotmount desired state and malformed metadata; and checks host staging mountpoints. For running VMs the JSON view additionally queries the virtle control socket for raw status and the guest kernel mount table through QGA.
+`ash inspect NAME` emits a concise human-readable summary for a running or stopped VM, covering runtime/storage status, saved flake and spaces, machine resources, configured mounts/files, workspace paths, and hotmount desired state. `ash inspect --json NAME` emits the complete machine-readable object: it converts the saved `ash-state.toml`, referenced ash config TOML, and generated `virtle.toml` documents to JSON; reports state sizes and persist/workspace artifacts; includes parsed hotmount desired state and malformed metadata; and checks host staging mountpoints. For running VMs the JSON view additionally queries the virtle control socket for raw status and the guest kernel mount table through QGA.
 
-Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting profile/workspace/hotmount virtiofs tags, installing ash's SSH public key, and collecting `ash ls` SSH statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket: SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, both columns show a dash.
+Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting space/workspace/hotmount virtiofs tags, installing ash's SSH public key, and collecting `ash ls` SSH statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket: SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, both columns show a dash.
 
 Spawn options:
 
-- `-p`, `--profile PROFILE` — repeatable agent-box profile; profiles supply mount points.
+- `-s`, `--space SPACE` — repeatable ash config space; spaces supply mount points. New VMs apply no spaces when omitted; existing named VMs reuse the saved space list.
 - `-f`, `--flake FLAKE#HOST` — flake directory plus host reference, e.g. `../my-nix#agent`. Required for a new VM; when spawning an existing named VM, omitting it reuses the value saved in `ash-state.toml`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
-- `-u`, `--user USER` — guest SSH user. Defaults to `runtime.qemu.ssh_user` from config, then `agent`.
-- `-c`, `--config CONFIG` — agent-box style config. Default: `~/.agent-box.toml`.
+- `-u`, `--user USER` — override the guest SSH user. The default is evaluated from `config.services.getty.autologinUser` in the selected NixOS configuration.
+- `-c`, `--config CONFIG` — ash config. Default: `$XDG_CONFIG_HOME/ash/config.toml`, falling back to `~/.config/ash/config.toml`.
 - `--ssh PATH` — override path to host `ssh`. Defaults to the selected NixOS config's `pkgs.openssh`.
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
 - `--ro-store-socket PATH` — use an existing virtiofs daemon socket for the read-only `/nix/store` mount instead of starting ash's own `ro-store` virtiofsd.
@@ -141,7 +141,7 @@ For `attach`, `--keep` is valid only with `--spawn`; `ash attach --keep` is reje
 For:
 
 ```sh
-ash spawn -p rust -p go -f ../my-nix#agent
+ash spawn -s rust -s go -f ../my-nix#agent
 ```
 
 `ash` evaluates/builds the NixOS configuration at:
@@ -171,28 +171,22 @@ nixosConfigurations.<HOST>.config.system.build.toplevel
 nixosConfigurations.<HOST>.config.boot.kernelParams
 nixosConfigurations.<HOST>.pkgs.openssh
 nixosConfigurations.<HOST>.config.systemd.package
+nixosConfigurations.<HOST>.config.services.getty.autologinUser
+nixosConfigurations.<HOST>.config.users.users.<USER>.name
 ```
 
-Then it reads the selected profiles from `~/.agent-box.toml` and turns their mounts into `virtle` `virtiofs` mounts.
+Then it reads selected spaces from `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`) and turns their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts.
 
-Profile selection is explicit:
+Space selection is explicit:
 
-- If no `-p`/`--profile` is passed for a new VM, `ash` uses `default_profile` from the config, falling back to `base`.
+- If no `-s`/`--space` option is passed for a new VM, no configured spaces are applied.
+- If no `-s`/`--space` option is passed for an existing named VM, `ash` reuses the saved space list.
 - If `-f`/`--flake` is omitted for an existing named VM with saved `ash-state.toml`, `ash` reuses the saved flake; new VMs still require it.
-- If no `-p`/`--profile` is passed for an existing named VM with saved `ash-state.toml`, `ash` reuses the saved profile list.
-- If one or more profiles are passed, `ash` uses exactly those profiles. It does not automatically add `default_profile`.
-- Shared/base profile behavior should be expressed with profile `extends` in the config.
+- If one or more spaces are passed, `ash` uses exactly those spaces and replaces the saved selection.
 
-Profile entries preserve the intended guest path in the generated manifest:
+Each mount entry is either `HOST_PATH` or `HOST_PATH:GUEST_PATH`. Host `~` resolves against the host user's home. Guest `~` resolves against the evaluated guest SSH user's home. When the guest path is omitted, the original host path string is reused and resolved for the guest. Absolute paths are accepted on both sides. Missing host paths are skipped with a warning.
 
-- `mounts.*.home_relative` maps host paths under the host user's home to the same relative path under the guest SSH user's home. For example, host `~/.cargo` targets guest `/home/agent/.cargo`.
-- `mounts.*.absolute` maps paths to the same absolute path in the guest. For example, host `/var/cache/foo` targets guest `/var/cache/foo`.
-
-Existing file entries are emitted as `[[write_files]]` instead of virtiofs mounts. Read-only file entries are copied into the guest; read-write/overlay file entries also set `write_back = true` so guest changes are copied back to the host source during teardown. Profiles with file entries require the guest to run QEMU Guest Agent, because `virtle` applies `write_files` through QGA.
-
-Existing directory entries are emitted as launch-time `[[mounts]]` with a `target`. Missing profile paths are skipped with a warning.
-
-Limitation: `virtle` only uses `target` for `[[hotplug.mounts]]`, not launch-time `[[mounts]]`. As a result, directory profile mounts are exposed to the guest as virtiofs tags/devices, but are not automatically mounted at their target paths during launch. Guest config or manual mount commands must mount those tags for now.
+The guest SSH user defaults to `config.services.getty.autologinUser` from the selected NixOS configuration. `--user` overrides it, and ash validates the result through `config.users.users.<user>.name`.
 
 It also exposes these mount devices to the guest:
 
@@ -227,7 +221,7 @@ fileSystems."/mnt/cwd" = {
 };
 ```
 
-Not every exposed mount must be mounted by the guest, but features depending on a path require the matching mount. For example, `--mount-cwd` sets `workspace.mount_cwd = true` and expects `workspace_cwd` to be mounted at `/mnt/cwd` inside the guest. `ash mount [--mode ro|rw] NAME HOST_PATH[:GUEST_PATH]` mounts `HOST_PATH` into `<state_dir>/hotmounts` with `bindfs`, then uses QGA to mount the `hotmounts` virtiofs tag at `/run/ash/hotmounts` if needed and bind-mount the selected subdirectory onto `GUEST_PATH`. If `GUEST_PATH` starts with `~`, ash resolves it using the guest SSH user's home; if it is omitted, ash uses the absolute host path. Successful hotmounts are recorded as persistent desired state under `<state_dir>/hotmounts/.ash`; records are written with temporary-file-plus-rename atomic replacement, and mount/unmount/reconciliation operations use a per-VM advisory lock. Background spawn and resume reconcile those records after QGA is ready, recreating host staging mounts and guest bind mounts without blocking startup when an individual record cannot be restored. `ash umount NAME GUEST_PATH` removes the desired-state record, unmounts the guest target, and tears down the host-side staging mount, restoring the record when a normal guest-unmount failure occurs and falling back to lazy FUSE unmount if virtiofsd still briefly holds the staging mount busy. `ash mount-profile NAME PROFILE...` resolves one or more agent-box profiles from the VM's saved config and hotmounts each directory mount at its profile target; read-only profile mounts become read-only hotmounts. `ash umount-profile NAME PROFILE...` resolves the same profile mount targets and unmounts them as a batch. Runtime profile mounting skips profile file entries for now. Overlay mode is intentionally left for later.
+Not every exposed mount must be mounted by the guest, but features depending on a path require the matching mount. For example, `--mount-cwd` sets `workspace.mount_cwd = true` and expects `workspace_cwd` to be mounted at `/mnt/cwd` inside the guest. `ash mount [--mode ro|rw] NAME HOST_PATH[:GUEST_PATH]` mounts `HOST_PATH` into `<state_dir>/hotmounts` with `bindfs`, then uses QGA to mount the `hotmounts` virtiofs tag at `/run/ash/hotmounts` if needed and bind-mount the selected subdirectory onto `GUEST_PATH`. If `GUEST_PATH` starts with `~`, ash resolves it using the guest SSH user's home; if it is omitted, ash uses the absolute host path. Successful hotmounts are recorded as persistent desired state under `<state_dir>/hotmounts/.ash`; records are written with temporary-file-plus-rename atomic replacement, and mount/unmount/reconciliation operations use a per-VM advisory lock. Background spawn and resume reconcile those records after QGA is ready, recreating host staging mounts and guest bind mounts without blocking startup when an individual record cannot be restored. `ash umount NAME GUEST_PATH` removes the desired-state record, unmounts the guest target, and tears down the host-side staging mount, restoring the record when a normal guest-unmount failure occurs and falling back to lazy FUSE unmount if virtiofsd still briefly holds the staging mount busy. `ash mount-space NAME SPACE...` resolves one or more spaces from the ash config path saved in VM state and hotmounts each directory mount at its configured target; `ro_mounts` become read-only hotmounts. `ash umount-space NAME SPACE...` resolves the same targets and unmounts them as a batch.
 
 `ash` uses `/home/<ssh-user>/workspace` as the guest workspace directory. For the default `agent` user, this is `/home/agent/workspace`. The SSH user can be overridden per run with `--user`; `ash` validates that the selected NixOS configuration defines `users.users.<user>`. If the guest mounts the `workspace` tag via static guest config, that config must use the same user/path.
 

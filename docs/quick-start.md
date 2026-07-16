@@ -52,13 +52,13 @@ To choose a guest path:
 ash mount work ~/dev/project:~/project
 ```
 
-## Mount profiles at runtime
+## Mount spaces at runtime
 
 ```sh
-ash mount-profile work base rust
+ash mount-space work base rust
 ```
 
-This resolves agent-box profiles from the VM's saved config and hotmounts all directory mounts from those profiles.
+This resolves spaces from the ash config path saved in the VM state and hotmounts all directory mounts from those spaces.
 
 ## Stop the VM
 

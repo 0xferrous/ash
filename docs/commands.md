@@ -12,7 +12,7 @@ Common options:
 
 - `--name NAME`
 - `--flake FLAKE#HOST`, `-f FLAKE#HOST` (required for a new VM; reused from saved `ash-state.toml` for an existing named VM)
-- `--profile PROFILE`, `-p PROFILE`
+- `--space SPACE`, `-s SPACE` (repeatable; new VMs apply none by default, while existing named VMs reuse their saved spaces)
 - `--user USER`, `-u USER`
 - `--config CONFIG`, `-c CONFIG`
 - `--mount-cwd`
@@ -46,21 +46,21 @@ ash umount NAME GUEST_PATH
 
 Unmounts a hotmounted guest target and tears down its host-side staging mount.
 
-## `ash mount-profile`
+## `ash mount-space`
 
 ```sh
-ash mount-profile NAME PROFILE...
+ash mount-space NAME SPACE...
 ```
 
-Hotmounts all directory mounts from one or more agent-box profiles.
+Hotmounts all directory mounts from one or more configured spaces.
 
-## `ash umount-profile`
+## `ash umount-space`
 
 ```sh
-ash umount-profile NAME PROFILE...
+ash umount-space NAME SPACE...
 ```
 
-Unmounts all hotmount targets resolved from one or more agent-box profiles.
+Unmounts all hotmount targets resolved from one or more configured spaces.
 
 ## `ash regenerate`
 
@@ -92,9 +92,9 @@ Shows journal entries from the latest invocation of the VM's `ash-NAME.service` 
 ash inspect NAME
 ```
 
-Prints a concise human-readable summary for a running or stopped VM, including runtime and storage status, flake and profiles, machine resources, workspace paths, configured mounts/files, and hotmount state.
+Prints a concise human-readable summary for a running or stopped VM, including runtime and storage status, flake and spaces, machine resources, workspace paths, configured mounts/files, and hotmount state.
 
-Pass `--json` for the complete machine-readable view, including the saved `ash-state.toml`, referenced agent-box configuration, generated `virtle.toml`, detailed paths, raw runtime status, and guest mount table.
+Pass `--json` for the complete machine-readable view, including the saved `ash-state.toml`, referenced ash configuration, generated `virtle.toml`, detailed paths, raw runtime status, and guest mount table.
 
 ## `ash ls`
 

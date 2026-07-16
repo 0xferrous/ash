@@ -16,10 +16,9 @@ let main =
       [
         `S Manpage.s_description;
         `P
-          "ash coordinates NixOS agent VMs through virtle. It reads an \
-           agent-box style config, evaluates a NixOS flake host, writes a \
-           virtle manifest, and manages spawn, attach, mount, stop, and \
-           cleanup flows.";
+          "ash coordinates NixOS agent VMs through virtle. It reads its space \
+           config, evaluates a NixOS flake host, writes a virtle manifest, and \
+           manages spawn, attach, mount, stop, and cleanup flows.";
         `S "STATE";
         `P
           "Named VMs keep ash state under XDG_STATE_HOME/ash/NAME/ when \
@@ -98,11 +97,10 @@ let spawn =
            in ash-state.toml. A new VM still requires --flake, and an explicit \
            --flake overrides the saved value.";
         `P
-          "Profiles have a similar carry-forward rule: if no --profile option \
-           is passed and an old ash-state.toml exists, ash reads the old \
-           ash-state.toml and copies its profile list into the new inputs. \
-           Passing one or more --profile options disables this carry-forward \
-           and uses exactly those profiles.";
+          "For a new VM, no configured spaces are applied unless --space is \
+           passed. For an existing named VM, omitting --space reuses the space \
+           list saved in ash-state.toml. Passing --space explicitly replaces \
+           the saved selection.";
         `P
           "After inputs are built, spawn overwrites ash-state.toml with the \
            new inputs and renders virtle.toml from those same new inputs.";
@@ -127,47 +125,38 @@ let spawn =
            config.system.build.initialRamdisk, config.system.build.toplevel, \
            config.boot.kernelParams, pkgs.openssh, and config.systemd.package.";
         `P
-          "ash validates that the selected guest SSH user exists as \
-           users.users.USER in the NixOS configuration.";
-        `S "PROFILE RESOLUTION";
+          "By default ash evaluates config.services.getty.autologinUser for \
+           the guest SSH user, then validates that users.users.USER exists. \
+           --user overrides the evaluated value.";
+        `S "SPACE CONFIGURATION";
         `P
-          "For a new VM with no --profile options, ash uses default_profile \
-           from the agent-box config, falling back to base.";
+          "The config defaults to XDG_CONFIG_HOME/ash/config.toml, falling \
+           back to ~/.config/ash/config.toml, and can be overridden with \
+           --config. Each [spaces.NAME] table may define rw_mounts and \
+           ro_mounts arrays.";
         `P
-          "For an existing named VM with saved ash-state.toml, omitting \
-           --profile carries the saved profile list forward. Passing one or \
-           more --profile options uses exactly those profiles and does not \
-           automatically add the default profile.";
-        `P
-          "Shared/base behavior should be expressed with profile extends in \
-           the agent-box config.";
-        `S "PROFILE ENTRIES";
-        `P
-          "Profile directory entries become virtiofs mounts. home_relative \
-           entries map host paths under the host user's home to the same \
-           relative path under the guest SSH user's home; absolute entries map \
-           to the same absolute guest path.";
-        `P
-          "Profile file entries become virtle write_files entries instead of \
-           virtiofs mounts. Read-write/overlay file entries request write-back \
-           during teardown. Missing profile paths are skipped with a warning.";
+          "Each mount is HOST_PATH or HOST_PATH:GUEST_PATH. Host ~ resolves \
+           against the host user's home; guest ~ resolves against the guest \
+           SSH user's home. If GUEST_PATH is omitted, the original host path \
+           string is reused as the guest path. Absolute paths are also \
+           accepted. Missing host paths are skipped with a warning.";
         `S "MOUNTS";
         `P
-          "Profiles selected with --profile add their configured directory \
-           mounts as launch-time virtiofs shares. If no profile is selected, \
-           ash uses the config's default profile.";
+          "Spaces selected with --space add their configured directory mounts \
+           as launch-time virtiofs shares. New VMs have no selected spaces by \
+           default; existing named VMs reuse their saved selection.";
         `P
           "--mount-cwd also adds the current host directory as a workspace/cwd \
            mount for the guest.";
         `P
           "Guest-side mounting is done by ash through virtle guest-exec. For \
-           background spawns, ash waits for the VM and mounts \
-           workspace/profile targets after launch. For foreground attached \
-           spawns, the generated SSH wrapper mounts them just before SSH \
-           starts. The mount operation is idempotent.";
+           background spawns, ash waits for the VM and mounts workspace/space \
+           targets after launch. For foreground attached spawns, the generated \
+           SSH wrapper mounts them just before SSH starts. The mount operation \
+           is idempotent.";
         `P
           "Runtime hotmounts are managed later with ash mount, ash umount, ash \
-           mount-profile, and ash umount-profile.";
+           mount-space, and ash umount-space.";
         `S "ASSUMED MOUNTS";
         `P
           "Every generated virtle.toml includes ash's fixed mounts: workspace, \
@@ -338,17 +327,17 @@ let inspect =
         `S "OUTPUT";
         `P
           "The default view includes runtime and storage status, flake and \
-           profile configuration, machine resources, workspace paths, \
-           configured virtle mounts and files, and persistent hotmount state.";
+           space configuration, machine resources, workspace paths, configured \
+           virtle mounts and files, and persistent hotmount state.";
         `P
           "Malformed hotmount metadata is shown as a warning in the hotmount \
            section.";
         `S "JSON";
         `P
           "With --json, prints the complete machine-readable view, including \
-           the saved ash-state.toml, referenced agent-box configuration, \
-           generated virtle.toml, detailed paths, raw virtle runtime status, \
-           and the guest mount table when running.";
+           the saved ash-state.toml, referenced ash configuration, generated \
+           virtle.toml, detailed paths, raw virtle runtime status, and the \
+           guest mount table when running.";
         `S Manpage.s_examples;
         `Pre "ash inspect work";
         `Pre "ash inspect --json work | jq '.virtle.config.mounts'";
@@ -370,7 +359,7 @@ let regenerate =
         `S "WHAT IT REWRITES";
         `P
           "regenerate rewrites virtle.toml and generated helper files such as \
-           ssh-with-profile-mounts. It does not rewrite ash-state.toml.";
+           ssh-with-space-mounts. It does not rewrite ash-state.toml.";
         `S "WHEN USEFUL";
         `P
           "Use after upgrading ash when generated output changed, after \
@@ -448,61 +437,54 @@ let umount =
       ];
   }
 
-let mount_profile =
+let mount_space =
   {
-    file = "ash-mount-profile";
-    command = Some "mount-profile";
-    summary = "hot-mount one or more profiles";
+    file = "ash-mount-space";
+    command = Some "mount-space";
+    summary = "hot-mount one or more spaces";
     man =
       [
         `S Manpage.s_description;
         `P
-          "Hot-mounts directory mounts from one or more agent-box profiles \
-           into a running VM.";
+          "Hot-mounts directory mounts from one or more configured spaces into \
+           a running VM.";
         `S "HOW IT WORKS";
         `P
           "ash reads the config path saved in the VM's ash-state.toml, then \
-           resolves the PROFILE arguments from that agent-box config. It does \
-           not use the saved spawn profile list unless you pass those profile \
-           names here.";
+           resolves the SPACE arguments from that ash config.";
         `P
-          "Each resolved profile directory mount is mounted using the same \
+          "Each resolved space directory mount is mounted using the same \
            runtime hotmount mechanism as ash mount.";
-        `P
-          "Read-only profile mounts stay read-only. Profile file entries are \
-           not hot-mounted.";
+        `P "Read-only space mounts stay read-only.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;
-        `Pre "ash mount-profile work rust go";
+        `Pre "ash mount-space work rust go";
       ];
   }
 
-let umount_profile =
+let umount_space =
   {
-    file = "ash-umount-profile";
-    command = Some "umount-profile";
-    summary = "unmount one or more hot-mounted profiles";
+    file = "ash-umount-space";
+    command = Some "umount-space";
+    summary = "unmount one or more hot-mounted spaces";
     man =
       [
         `S Manpage.s_description;
         `P
-          "Unmounts directory mounts for one or more agent-box profiles from a \
+          "Unmounts directory mounts for one or more configured spaces from a \
            running VM.";
         `S "HOW IT WORKS";
         `P
           "ash reads the config path saved in the VM's ash-state.toml, then \
-           resolves the PROFILE arguments from that agent-box config. It does \
-           not use the saved spawn profile list unless you pass those profile \
-           names here.";
+           resolves the SPACE arguments from that ash config.";
         `P
-          "Each resolved profile directory mount target is then unmounted from \
+          "Each resolved space directory mount target is then unmounted from \
            the running guest.";
-        `P "Profile file entries are ignored, matching ash mount-profile.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;
-        `Pre "ash umount-profile work rust go";
+        `Pre "ash umount-space work rust go";
       ];
   }
 
@@ -616,8 +598,8 @@ let all =
     resume;
     mount;
     umount;
-    mount_profile;
-    umount_profile;
+    mount_space;
+    umount_space;
     stop;
     logs;
     regenerate;

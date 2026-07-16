@@ -1,5 +1,13 @@
 let home_dir () = Sys.getenv_opt "HOME" |> Option.value ~default:"."
 
+let config_home_dir () =
+  match Sys.getenv_opt "XDG_CONFIG_HOME" with
+  | Some path when path <> "" -> path
+  | _ -> Filename.concat (home_dir ()) ".config"
+
+let default_ash_config_path () =
+  Filename.concat (config_home_dir ()) "ash/config.toml"
+
 let expand_home path =
   if path = "~" then home_dir ()
   else if String.length path >= 2 && String.sub path 0 2 = "~/" then

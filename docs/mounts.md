@@ -15,7 +15,7 @@ Every rendered manifest exposes:
 - `persist` — writable ext4 image
 - `workspace_cwd` — current working directory, only with `--mount-cwd`
 
-Profile directory mounts selected at spawn are also emitted as virtiofs mounts.
+Space directory mounts selected at spawn are also emitted as virtiofs mounts.
 
 ## Hotmount model
 
@@ -29,7 +29,7 @@ host directory
   -> guest bind mount at target path
 ```
 
-The guest-side `/run/ash/hotmounts` mount is lazy. It is mounted on the first successful `ash mount` or profile hotmount.
+The guest-side `/run/ash/hotmounts` mount is lazy. It is mounted on the first successful `ash mount` or space hotmount.
 
 ## Mount one directory
 
@@ -65,19 +65,17 @@ Host-side unmount tries:
 4. `fusermount -uz`
 5. root-only `umount`
 
-## Mount profiles at runtime
+## Mount spaces at runtime
 
 ```sh
-ash mount-profile NAME PROFILE...
-ash umount-profile NAME PROFILE...
+ash mount-space NAME SPACE...
+ash umount-space NAME SPACE...
 ```
 
-These commands resolve profiles from the VM's saved agent-box config and hotmount each directory mount as a batch.
+These commands resolve spaces from the ash config path saved in the VM state and hotmount each directory mount as a batch.
 
-- read-only profile mounts become `--mode ro` hotmounts
-- writable profile mounts become `--mode rw` hotmounts
-- profile file entries are skipped for now with a warning
-- overlay profile mode is left for later
+- `ro_mounts` become `--mode ro` hotmounts
+- `rw_mounts` become `--mode rw` hotmounts
 
 ## Metadata
 
@@ -122,6 +120,6 @@ bindfs --multithreaded --no-allow-other \
 
 The zero-valued FUSE timeouts force metadata and pathname lookups to be revalidated, reducing stale handles when the source is also modified through its original host path.
 
-Mutable virtiofs shares (`workspace`, profile directories, `hotmounts`, and `workspace_cwd`) run virtiofsd with `--cache=never`. The immutable `/nix/store` share keeps virtiofsd's default cache behavior.
+Mutable virtiofs shares (`workspace`, space directories, `hotmounts`, and `workspace_cwd`) run virtiofsd with `--cache=never`. The immutable `/nix/store` share keeps virtiofsd's default cache behavior.
 
 If bindfs fails and ash is running as root, ash can fall back to a kernel `mount --bind` staging mount.
