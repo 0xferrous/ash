@@ -23,6 +23,20 @@ Run directly:
 nix run github:0xferrous/ash -- --help
 ```
 
+## Configuration
+
+Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
+`~/.config/ash/config.toml`. See [`example_config.toml`](./example_config.toml)
+for the space mount format. Select a space with a repeatable `--space`/`-s`
+option:
+
+```sh
+ash spawn --name work -s ash -f ../my-nix#agent
+```
+
+For a new VM, omitting `--space` applies no configured spaces. For an existing
+named VM, it reuses the saved space list.
+
 ## Quickstart
 
 Start a reusable background VM:

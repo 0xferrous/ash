@@ -156,7 +156,9 @@ let spawn =
            is idempotent.";
         `P
           "Runtime hotmounts are managed later with ash mount, ash umount, ash \
-           mount-space, and ash umount-space.";
+           mount-space, and ash umount-space. Successful hotmounts are saved \
+           as desired state and restored by later background starts and \
+           resumes. Foreground attached starts do not currently restore them.";
         `S "ASSUMED MOUNTS";
         `P
           "Every generated virtle.toml includes ash's fixed mounts: workspace, \
@@ -276,7 +278,11 @@ let resume =
            stops when SSH exits.";
         `P
           "--attach --keep resumes as a background systemd user unit, waits \
-           for readiness, then attaches. The VM keeps running after SSH exits.";
+           for readiness, restores saved runtime hotmounts, then attaches. The \
+           VM keeps running after SSH exits.";
+        `P
+          "Plain background resume also restores saved runtime hotmounts. A \
+           foreground --attach resume does not currently restore them.";
         `S Manpage.s_examples;
         `Pre "ash resume work";
         `Pre "ash resume --attach work";
@@ -391,7 +397,8 @@ let mount =
            absolute host path as the guest target.";
         `P
           "A guest path starting with ~ is resolved relative to the guest SSH \
-           user's home.";
+           user's home. Ash normalizes redundant path components without \
+           resolving host symlinks to their targets.";
         `S "HOW IT WORKS";
         `P
           "ash stages the host directory under the VM state's hotmounts \
@@ -399,8 +406,13 @@ let mount =
            then uses virtle guest-exec to mount it at GUEST_PATH inside the \
            guest.";
         `P
-          "--mode controls guest access: rw is the default; ro makes the \
-           staged mount read-only.";
+          "The guest hotmounts share is mounted lazily on first use. --mode \
+           controls guest access: rw is the default; ro makes the staged mount \
+           read-only.";
+        `P
+          "A successful mount is recorded as persistent desired state. Later \
+           background starts and resumes attempt to recreate it; an individual \
+           restoration failure is reported without preventing VM startup.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;
@@ -426,9 +438,15 @@ let umount =
            starting with ~ is resolved relative to the guest SSH user's home.";
         `S "HOW IT WORKS";
         `P
-          "ash uses virtle guest-exec to unmount GUEST_PATH in the guest, then \
-           removes the matching staged mount under the VM state's hotmounts \
-           directory.";
+          "ash removes the mount's desired-state record, uses virtle \
+           guest-exec to unmount GUEST_PATH, removes an empty guest \
+           mountpoint, then tears down the matching host staging mount. If the \
+           guest unmount fails normally, ash restores the desired-state \
+           record.";
+        `P
+          "Host teardown tries normal and lazy FUSE unmounts before a \
+           root-only umount fallback, which handles virtiofsd briefly keeping \
+           the staging mount busy.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;
@@ -455,7 +473,10 @@ let mount_space =
         `P
           "Each resolved space directory mount is mounted using the same \
            runtime hotmount mechanism as ash mount.";
-        `P "Read-only space mounts stay read-only.";
+        `P
+          "Read-only space mounts stay read-only. Successful space mounts use \
+           the same persistent desired-state records as ash mount and are \
+           restored by later background starts and resumes.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;
@@ -479,8 +500,8 @@ let umount_space =
           "ash reads the config path saved in the VM's ash-state.toml, then \
            resolves the SPACE arguments from that ash config.";
         `P
-          "Each resolved space directory mount target is then unmounted from \
-           the running guest.";
+          "Each resolved space directory target is unmounted from the running \
+           guest and removed from persistent desired state.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;

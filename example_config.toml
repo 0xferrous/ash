@@ -1,0 +1,15 @@
+# Copy this file to $XDG_CONFIG_HOME/ash/config.toml. If XDG_CONFIG_HOME is
+# unset, use ~/.config/ash/config.toml. You can also pass `ash spawn --config PATH`.
+
+[spaces.ash]
+# Entries may use HOST_PATH or HOST_PATH:GUEST_PATH.
+# Host ~ resolves to the host user's home. Guest ~ resolves to the guest user's home.
+rw_mounts = [
+  "~/dev/fr/ash",
+  "~/dev/fr/ash:/home/agent/workspace/ash",
+]
+
+ro_mounts = [
+  "~/dev/reference:~/reference",
+  "/var/lib/data:/mnt/data",
+]

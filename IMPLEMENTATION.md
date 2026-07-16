@@ -82,8 +82,8 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 - `nix` — evaluates the selected flake/NixOS configuration for kernel, initrd, toplevel, kernel params, `ssh`, and `systemd-ssh-proxy` paths.
 - `virtle` — validates, launches, controls, and queries VMs. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`; override with `--virtle PATH`.
-- `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest. Mutable shares use `--cache=never` so host-side changes are revalidated; the immutable `/nix/store` share keeps the default cache behavior.
-- `bindfs` — used by `ash mount` to mirror a host directory into the VM state's `hotmounts` directory before exposing it through the VM's `hotmounts` virtiofs share. Ash invokes it with `--multithreaded --no-allow-other -o attr_timeout=0,entry_timeout=0,negative_timeout=0` to avoid older single-threaded FUSE `-s` compatibility issues, host FUSE setups where `allow_other` is unavailable, and stale metadata when the source changes through its original host path; for read-only mounts ash adds bindfs' `-r` flag. This assumes virtiofsd can access the bindfs mount as the same host user that ran ash/virtle. Some FUSE setups also reject bindfs' internal `default_permissions` option; in that case ash falls back to a kernel `mount --bind` staging mount if the host permits it.
+- `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest.
+- `bindfs` — creates host-side staging mounts for runtime hotmounts. See [Runtime hotmount implementation](#runtime-hotmount-implementation).
 - `mountpoint` — used by `ash mount` to avoid remounting an already-mounted host-side hotmount directory.
 - `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
 - `systemd-ssh-proxy` — host SSH proxy used for vsock SSH connections. Defaults to the selected NixOS config's `config.systemd.package`; override with `--systemd-ssh-proxy PATH`.
@@ -221,7 +221,55 @@ fileSystems."/mnt/cwd" = {
 };
 ```
 
-Not every exposed mount must be mounted by the guest, but features depending on a path require the matching mount. For example, `--mount-cwd` sets `workspace.mount_cwd = true` and expects `workspace_cwd` to be mounted at `/mnt/cwd` inside the guest. `ash mount [--mode ro|rw] NAME HOST_PATH[:GUEST_PATH]` mounts `HOST_PATH` into `<state_dir>/hotmounts` with `bindfs`, then uses QGA to mount the `hotmounts` virtiofs tag at `/run/ash/hotmounts` if needed and bind-mount the selected subdirectory onto `GUEST_PATH`. If `GUEST_PATH` starts with `~`, ash resolves it using the guest SSH user's home; if it is omitted, ash uses the absolute host path. Successful hotmounts are recorded as persistent desired state under `<state_dir>/hotmounts/.ash`; records are written with temporary-file-plus-rename atomic replacement, and mount/unmount/reconciliation operations use a per-VM advisory lock. Background spawn and resume reconcile those records after QGA is ready, recreating host staging mounts and guest bind mounts without blocking startup when an individual record cannot be restored. `ash umount NAME GUEST_PATH` removes the desired-state record, unmounts the guest target, and tears down the host-side staging mount, restoring the record when a normal guest-unmount failure occurs and falling back to lazy FUSE unmount if virtiofsd still briefly holds the staging mount busy. `ash mount-space NAME SPACE...` resolves one or more spaces from the ash config path saved in VM state and hotmounts each directory mount at its configured target; `ro_mounts` become read-only hotmounts. `ash umount-space NAME SPACE...` resolves the same targets and unmounts them as a batch.
+Not every exposed mount must be mounted by the guest, but features depending on a path require the matching mount. For example, `--mount-cwd` sets `workspace.mount_cwd = true` and expects `workspace_cwd` to be mounted at `/mnt/cwd` inside the guest.
+
+## Runtime hotmount implementation
+
+`ash mount [--mode ro|rw] NAME HOST_PATH[:GUEST_PATH]` uses this path:
+
+```text
+host directory
+  -> bindfs staging mount under <state_dir>/hotmounts/<id>
+  -> hotmounts virtiofs share
+  -> /run/ash/hotmounts in guest
+  -> guest bind mount at GUEST_PATH
+```
+
+For writable staging mounts ash runs:
+
+```sh
+bindfs --multithreaded --no-allow-other \
+  -o attr_timeout=0,entry_timeout=0,negative_timeout=0 SOURCE TARGET
+```
+
+Read-only mounts add `-r`. The options avoid bindfs' default single-threaded FUSE mode, avoid requiring `allow_other`, and disable metadata caches. If bindfs fails and ash is running as root, ash can fall back to a kernel `mount --bind`. Mutable virtiofs shares (`workspace`, selected space directories, `hotmounts`, and `workspace_cwd`) use `--cache=never`; the immutable `/nix/store` share keeps virtiofsd's default cache behavior.
+
+Ash stores each persistent desired-state record at:
+
+```text
+<state_dir>/hotmounts/.ash/<source_name>.meta
+```
+
+with this line-oriented format:
+
+```text
+<guest_path>
+<host_dir>
+<mode>
+<source_name>
+```
+
+Metadata writes use temporary-file-plus-rename atomic replacement. Mount, unmount, and startup reconciliation are serialized by a per-VM advisory lock.
+
+Host staging teardown tries, in order:
+
+1. `fusermount3 -u`
+2. `fusermount3 -uz`
+3. `fusermount -u`
+4. `fusermount -uz`
+5. root-only `umount`
+
+The lazy variants handle virtiofsd briefly keeping the staging mount busy.
 
 `ash` uses `/home/<ssh-user>/workspace` as the guest workspace directory. For the default `agent` user, this is `/home/agent/workspace`. The SSH user can be overridden per run with `--user`; `ash` validates that the selected NixOS configuration defines `users.users.<user>`. If the guest mounts the `workspace` tag via static guest config, that config must use the same user/path.
 
