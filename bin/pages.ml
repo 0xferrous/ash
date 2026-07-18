@@ -113,8 +113,9 @@ let spawn =
         `P
           "--flake expects FLAKE#HOST and is required when creating a new VM. \
            ash evaluates nixosConfigurations.HOST from that flake and uses it \
-           for the guest kernel, initrd, kernel params, system toplevel, \
-           host-side ssh, and host-side systemd-ssh-proxy paths.";
+           for the guest kernel, initrd, kernel params, system toplevel, a Nix \
+           store registration dump, host-side ssh, and host-side \
+           systemd-ssh-proxy paths.";
         `P
           "Path-like flake references are saved in ash-state.toml as resolved \
            absolute paths so ash regenerate NAME works from any current \
@@ -152,11 +153,12 @@ let spawn =
           "--mount-cwd also adds the current host directory as a workspace/cwd \
            mount for the guest.";
         `P
-          "Guest-side mounting is done by ash through virtle guest-exec. For \
-           background spawns, ash waits for the VM and mounts workspace/space \
-           targets after launch. For foreground attached spawns, the generated \
-           SSH wrapper mounts them just before SSH starts. The mount operation \
-           is idempotent.";
+          "Guest preparation is done by ash through virtle guest-exec. Ash \
+           first imports the selected system closure's registration dump into \
+           the guest Nix database, then mounts workspace/space targets. \
+           Background spawns do this after launch; foreground attached spawns \
+           use the generated SSH wrapper. A marker under /run prevents \
+           repeated registration imports during the same boot.";
         `P
           "Runtime hotmounts are managed later with ash mount, ash umount, ash \
            mount-space, and ash umount-space. Successful hotmounts are saved \

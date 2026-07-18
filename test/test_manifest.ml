@@ -100,6 +100,7 @@ let test_boot : Nix.boot =
     kernel = "/nix/store/kernel/bzImage";
     initrd = "/nix/store/initrd/initrd";
     kernel_params = [ "init=/nix/store/system/init"; "root=fstab" ];
+    registration = "/nix/store/closure-info/registration";
     ssh = "/nix/store/openssh/bin/ssh";
     systemd_ssh_proxy = "/nix/store/systemd/lib/systemd/systemd-ssh-proxy";
   }
@@ -165,6 +166,13 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   assert_equal "space mount ssh wrapper" wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]));
   if not (Sys.file_exists wrapper) then fail "space mount wrapper should exist";
+  let wrapper_content =
+    In_channel.with_open_text wrapper In_channel.input_all
+  in
+  assert_string_contains "SSH wrapper loads Nix registration" wrapper_content
+    "nix-store --load-db";
+  assert_string_contains "SSH wrapper uses registration path" wrapper_content
+    test_boot.registration;
   let mounts = table_array doc "mounts" in
   let same_path =
     find_table_by_string mounts "target" "/home/agent/dev/fr/ash"
@@ -465,6 +473,19 @@ let test_qga_output_data_decodes_base64 () =
   let text = {|{"result":{"outData":"MiA2Cg=="}}|} in
   assert_equal "qga decoded output" "2 6\n"
     (Option.value (Qga.output_data text) ~default:"")
+
+let test_qga_load_nix_registration_action () =
+  let registration = "/nix/store/closure-info/registration" in
+  let action =
+    Qga.load_nix_registration_action ~name:"test-registration" ~registration
+  in
+  let script = List.nth action.args 1 in
+  assert_string_contains "registration import" script "nix-store --load-db";
+  assert_string_contains "registration marker" script
+    "/run/ash/nix-registration";
+  assert_string_contains "marker written after import" script
+    "nix-store --load-db < \"$registration\"\ntouch \"$marker\"";
+  assert_equal "registration argument" registration (List.nth action.args 3)
 
 let test_qga_ssh_stats_action () =
   let script = List.nth Qga.ssh_stats_action.args 1 in
@@ -827,6 +848,7 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       ro_store_socket = None;
       ssh = None;
       systemd_ssh_proxy = None;
+      registration_path = Some "/nix/store/closure-info/registration";
       kitty = false;
       virtiofsd = "/bin/virtiofsd";
       virtle = "/bin/virtle";
@@ -835,6 +857,9 @@ let test_spawn_reuses_saved_flake_when_omitted () =
   let state_path = Virtle.ash_config_path ~name in
   assert_equal "state filename" "ash-state.toml" (Filename.basename state_path);
   write_file state_path (Virtle.ash_config inputs);
+  let saved = Virtle.load_ash_config ~name in
+  assert_equal "saved registration path" "/nix/store/closure-info/registration"
+    (Option.value saved.registration_path ~default:"");
   assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
   assert_equal "explicit flake overrides saved" "github:owner/repo#other"
     (Virtle.resolve_spawn_flake ~name (Some "github:owner/repo#other"));
@@ -898,6 +923,7 @@ let () =
   run "qga params use valid json" test_qga_params_use_valid_json;
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
   run "qga output data decodes base64" test_qga_output_data_decodes_base64;
+  run "qga loads Nix registration" test_qga_load_nix_registration_action;
   run "qga ssh stats action" test_qga_ssh_stats_action;
   run "stop warns about active ssh" test_active_ssh_warning;
   run "qga unmount removes empty mountpoint"

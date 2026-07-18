@@ -80,7 +80,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 `ash` is a coordinator. It calls these host-side binaries:
 
-- `nix` — evaluates the selected flake/NixOS configuration for kernel, initrd, toplevel, kernel params, `ssh`, and `systemd-ssh-proxy` paths.
+- `nix` — evaluates the selected flake/NixOS configuration for kernel, initrd, toplevel, kernel params, a `pkgs.closureInfo` registration dump, `ssh`, and `systemd-ssh-proxy` paths.
 - `virtle` — validates, launches, controls, and queries VMs. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`; override with `--virtle PATH`.
 - `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest.
 - `bindfs` — creates host-side staging mounts for runtime hotmounts. See [Runtime hotmount implementation](#runtime-hotmount-implementation).
@@ -98,7 +98,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 
 `ash inspect NAME` emits a concise human-readable summary for a running or stopped VM, covering runtime/storage status, saved flake and spaces, machine resources, configured mounts/files, workspace paths, and hotmount desired state. `ash inspect --json NAME` emits the complete machine-readable object: it converts the saved `ash-state.toml`, referenced ash config TOML, and generated `virtle.toml` documents to JSON; reports state sizes and persist/workspace artifacts; includes parsed hotmount desired state and malformed metadata; and checks host staging mountpoints. For running VMs the JSON view additionally queries the virtle control socket for raw status and the guest kernel mount table through QGA.
 
-Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as mounting space/workspace/hotmount virtiofs tags, installing ash's SSH public key, and collecting `ash ls` SSH statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket: SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, both columns show a dash.
+Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as loading the selected system closure into the guest Nix database, mounting space/workspace/hotmount virtiofs tags, installing ash's SSH public key, and collecting `ash ls` SSH statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `nix-store`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket: SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, both columns show a dash.
 
 Spawn options:
 
@@ -156,6 +156,7 @@ and uses it for:
 - initrd path
 - kernel params
 - NixOS toplevel init path
+- a `pkgs.closureInfo` registration dump rooted at the exact selected toplevel
 - OpenSSH package path for the host-side `ssh` command
 - systemd package path for the host-side `systemd-ssh-proxy` command
 
@@ -195,6 +196,8 @@ It also exposes these mount devices to the guest:
 - `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock`; pass `--ro-store-socket PATH` to point this mount at an existing virtiofs daemon socket instead.
 - `persist` — writable ext4 image labeled `persist`
 - `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
+
+Ash also builds `pkgs.closureInfo { rootPaths = [ toplevel ]; }` for the exact resolved NixOS toplevel. After guest readiness and before ash-managed mounts, it imports the resulting `registration` file with guest-root `nix-store --load-db`. Foreground attach flows perform the same operation in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating the import during the same boot; because `/run` is volatile, every new boot imports the registration again. The resolved registration path is saved in `ash-state.toml`, not the virtle manifest, because it is consumed by ash rather than virtle.
 
 The guest may mount these tags/labels as needed. The current agent guest config mounts them as:
 

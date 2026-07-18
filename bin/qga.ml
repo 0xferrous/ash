@@ -70,6 +70,38 @@ let shell_action ?(args = []) ~name script =
     name;
   }
 
+(* QGA ACTION SCRIPT: import the selected NixOS closure into the guest Nix
+   database once per boot. *)
+let load_nix_registration_action ~name ~registration =
+  let script =
+    {sh|
+set -eu
+PATH=/run/current-system/sw/bin:/bin
+
+registration=$1
+marker_dir=/run/ash/nix-registration
+marker=$marker_dir/$(basename "$(dirname "$registration")")
+
+if [ -e "$marker" ]; then
+  exit 42
+fi
+
+if [ ! -r "$registration" ]; then
+  printf 'registration file is not readable: %s\n' "$registration" >&2
+  exit 1
+fi
+if ! command -v nix-store >/dev/null 2>&1; then
+  printf 'nix-store is not available in the guest\n' >&2
+  exit 1
+fi
+
+mkdir -p "$marker_dir"
+nix-store --load-db < "$registration"
+touch "$marker"
+|sh}
+  in
+  shell_action ~name ~args:[ registration ] script
+
 let install_mountpoint_script =
   {sh|
 install_mountpoint() {

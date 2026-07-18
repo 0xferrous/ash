@@ -4,6 +4,7 @@ type boot = {
   kernel : string;
   initrd : string;
   kernel_params : string list;
+  registration : string;
   ssh : string;
   systemd_ssh_proxy : string;
 }
@@ -47,6 +48,13 @@ let build_path ~label attr =
   run_nix ~label ~attr
     ("build --no-link --print-out-paths " ^ Util.shell_quote attr)
 
+let build_expr_path ~label expr =
+  run_nix ~label ~attr:expr
+    ("build --impure --no-link --print-out-paths --expr "
+   ^ Util.shell_quote expr)
+
+let nix_string value = Yojson.Safe.to_string (`String value)
+
 let split_flake_ref value =
   match String.index_opt value '#' with
   | None -> (value, None)
@@ -56,6 +64,27 @@ let split_flake_ref value =
         String.sub value (idx + 1) (String.length value - idx - 1)
       in
       (base, Some fragment)
+
+let resolve_registration ~target ~toplevel =
+  let flake, _ = split_flake_ref target.attr in
+  let expr =
+    Printf.sprintf
+      "let flake = builtins.getFlake %s; configuration = \
+       flake.nixosConfigurations.%s; in configuration.pkgs.closureInfo { \
+       rootPaths = [ (builtins.storePath %s) ]; }"
+      (nix_string flake)
+      (nix_string target.host_name)
+      (nix_string toplevel)
+  in
+  let output = build_expr_path ~label:"Nix store registration closure" expr in
+  let registration = Filename.concat output "registration" in
+  if not (Sys.file_exists registration) then
+    Log.fatal
+      "failed to resolve Nix store registration file\n\n\
+       Closure info output: %s\n\
+       Expected registration file: %s"
+      output registration;
+  registration
 
 let normalize_flake_path path = Util.expand_home path
 
@@ -179,6 +208,7 @@ let resolve_boot ~target =
     build_path ~label:"NixOS toplevel build output"
       (attr ^ ".config.system.build.toplevel")
   in
+  let registration = resolve_registration ~target ~toplevel in
   let openssh = eval_raw ~label:"OpenSSH package" (attr ^ ".pkgs.openssh") in
   let systemd =
     eval_raw ~label:"systemd package" (attr ^ ".config.systemd.package")
@@ -200,6 +230,7 @@ let resolve_boot ~target =
     kernel = Filename.concat kernel_dir kernel_file;
     initrd;
     kernel_params;
+    registration;
     ssh = Filename.concat openssh "bin/ssh";
     systemd_ssh_proxy = Filename.concat systemd "lib/systemd/systemd-ssh-proxy";
   }
