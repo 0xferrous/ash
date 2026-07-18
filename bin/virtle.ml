@@ -111,6 +111,7 @@ let state_base_dir () =
   Filename.concat base "ash"
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
+let gcroots_dir ~name = Filename.concat (state_dir name) "gcroots"
 let manifest_path ~name = Filename.concat (state_dir name) "virtle.toml"
 let ash_config_path ~name = Filename.concat (state_dir name) "ash-state.toml"
 let has_saved_ash_config ~name = Sys.file_exists (ash_config_path ~name)
@@ -2023,7 +2024,9 @@ let render_manifest (inputs : manifest_inputs) =
         user
     | None -> Nix.resolve_ssh_user ~target
   in
-  let boot = Nix.resolve_boot ~target in
+  let gcroots_dir = gcroots_dir ~name:inputs.name in
+  Util.ensure_dir gcroots_dir;
+  let boot = Nix.resolve_boot ~target ~gcroots_dir in
   let ssh = Option.value inputs.ssh ~default:boot.ssh in
   let systemd_ssh_proxy =
     Option.value inputs.systemd_ssh_proxy ~default:boot.systemd_ssh_proxy

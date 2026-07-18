@@ -153,6 +153,11 @@ let spawn =
           "--mount-cwd also adds the current host directory as a workspace/cwd \
            mount for the guest.";
         `P
+          "The resolved kernel, initrd, NixOS toplevel, and closure-info \
+           output are protected by GC roots in the VM state directory. The \
+           roots remain while the VM state exists and are removed with that \
+           state, including after an ephemeral session.";
+        `P
           "Guest preparation is done by ash through virtle guest-exec. Ash \
            first imports the selected system closure's registration dump into \
            the guest Nix database, then mounts workspace/space targets. \

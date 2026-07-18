@@ -197,7 +197,9 @@ It also exposes these mount devices to the guest:
 - `persist` — writable ext4 image labeled `persist`
 - `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
 
-Ash also builds `pkgs.closureInfo { rootPaths = [ toplevel ]; }` for the exact resolved NixOS toplevel. After guest readiness and before ash-managed mounts, it imports the resulting `registration` file with guest-root `nix-store --load-db`. Foreground attach flows perform the same operation in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating the import during the same boot; because `/run` is volatile, every new boot imports the registration again. The resolved registration path is saved in `ash-state.toml`, not the virtle manifest, because it is consumed by ash rather than virtle.
+Ash also builds `pkgs.closureInfo { rootPaths = [ toplevel ]; }` for the exact resolved NixOS toplevel. The kernel, initrd, toplevel, and closure-info outputs are built with indirect GC roots under `<state_dir>/gcroots/`; the closure-info output contains the `registration` file, while the toplevel root retains its transitive system closure. The roots remain valid for stopped VMs and disappear automatically when the VM state directory is deleted, including ephemeral cleanup.
+
+After guest readiness and before ash-managed mounts, ash imports the resulting `registration` file with guest-root `nix-store --load-db`. Foreground attach flows perform the same operation in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating the import during the same boot; because `/run` is volatile, every new boot imports the registration again. The resolved registration path is saved in `ash-state.toml`, not the virtle manifest, because it is consumed by ash rather than virtle.
 
 The guest may mount these tags/labels as needed. The current agent guest config mounts them as:
 

@@ -44,13 +44,18 @@ let eval_raw ~label attr =
 let eval_json ~label attr =
   run_nix ~label ~attr ("eval --json " ^ Util.shell_quote attr)
 
-let build_path ~label attr =
-  run_nix ~label ~attr
-    ("build --no-link --print-out-paths " ^ Util.shell_quote attr)
+let build_link_args = function
+  | None -> "--no-link"
+  | Some path -> "--out-link " ^ Util.shell_quote path
 
-let build_expr_path ~label expr =
+let build_path ?out_link ~label attr =
+  run_nix ~label ~attr
+    ("build " ^ build_link_args out_link ^ " --print-out-paths "
+   ^ Util.shell_quote attr)
+
+let build_expr_path ?out_link ~label expr =
   run_nix ~label ~attr:expr
-    ("build --impure --no-link --print-out-paths --expr "
+    ("build --impure " ^ build_link_args out_link ^ " --print-out-paths --expr "
    ^ Util.shell_quote expr)
 
 let nix_string value = Yojson.Safe.to_string (`String value)
@@ -65,7 +70,7 @@ let split_flake_ref value =
       in
       (base, Some fragment)
 
-let resolve_registration ~target ~toplevel =
+let resolve_registration ~target ~toplevel ~out_link =
   let flake, _ = split_flake_ref target.attr in
   let expr =
     Printf.sprintf
@@ -76,7 +81,9 @@ let resolve_registration ~target ~toplevel =
       (nix_string target.host_name)
       (nix_string toplevel)
   in
-  let output = build_expr_path ~label:"Nix store registration closure" expr in
+  let output =
+    build_expr_path ~out_link ~label:"Nix store registration closure" expr
+  in
   let registration = Filename.concat output "registration" in
   if not (Sys.file_exists registration) then
     Log.fatal
@@ -179,10 +186,11 @@ and validate_user ~target ~user =
        NixOS user attr resolved to: %s"
       user resolved
 
-let resolve_boot ~target =
+let resolve_boot ~target ~gcroots_dir =
   let attr = target.attr in
+  let root name = Filename.concat gcroots_dir name in
   let kernel_dir =
-    build_path ~label:"kernel build output"
+    build_path ~out_link:(root "kernel") ~label:"kernel build output"
       (attr ^ ".config.system.build.kernel")
   in
   let kernel_file =
@@ -190,7 +198,7 @@ let resolve_boot ~target =
       (attr ^ ".config.system.boot.loader.kernelFile")
   in
   let initrd_output =
-    build_path ~label:"initial ramdisk build output"
+    build_path ~out_link:(root "initrd") ~label:"initial ramdisk build output"
       (attr ^ ".config.system.build.initialRamdisk")
   in
   let initrd =
@@ -205,10 +213,12 @@ let resolve_boot ~target =
        Expected initrd file: %s"
       initrd_output initrd;
   let toplevel =
-    build_path ~label:"NixOS toplevel build output"
+    build_path ~out_link:(root "toplevel") ~label:"NixOS toplevel build output"
       (attr ^ ".config.system.build.toplevel")
   in
-  let registration = resolve_registration ~target ~toplevel in
+  let registration =
+    resolve_registration ~target ~toplevel ~out_link:(root "closure-info")
+  in
   let openssh = eval_raw ~label:"OpenSSH package" (attr ^ ".pkgs.openssh") in
   let systemd =
     eval_raw ~label:"systemd package" (attr ^ ".config.systemd.package")
