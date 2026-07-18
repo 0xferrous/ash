@@ -332,6 +332,8 @@ or, if `XDG_STATE_HOME` is unset:
 
 If `--name` is not passed, `ash` generates a name from the current directory basename and timestamp, such as `ash-20260708193000`. Passing the same `--name` reuses the same state directory and persistent image. For state paths, names preserve letters, digits, `.`, `_`, and `-`; other characters are replaced with `-`.
 
+Ash keeps its manifests, configuration, workspace, persistent image, and other managed files directly under `~/.local/state/ash/<name>/` (or the equivalent `XDG_STATE_HOME` path). The generated manifest sets virtle's own `state_dir` to the nested `virtle_state/` directory, so virtle runtime files and control sockets live under `~/.local/state/ash/<name>/virtle_state/`.
+
 Plain `ash spawn` starts `virtle launch` under a transient user systemd unit:
 
 ```sh

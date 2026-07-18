@@ -157,6 +157,9 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   assert_equal "selected spaces" "ash" (String.concat "," spaces);
   let doc = parse_toml manifest in
   assert_equal "host_name" "agent" (find_string doc [ "host_name" ]);
+  assert_equal "virtle state directory"
+    (Filename.concat state "ash/unit-test/virtle_state")
+    (find_string doc [ "state_dir" ]);
   assert_int "default memory" 4096 (find_int doc [ "machine"; "memory" ]);
   assert_int "default vcpu" 2 (find_int doc [ "machine"; "vcpu" ]);
   assert_equal "kernel serial" "print" (find_string doc [ "kernel"; "serial" ]);
@@ -786,6 +789,9 @@ spaces = ["rust", "go"]
   let open Yojson.Safe.Util in
   assert_equal "inspect name" name (json |> member "name" |> to_string);
   assert_equal "inspect status" "stopped" (json |> member "status" |> to_string);
+  assert_equal "inspect control socket"
+    (Filename.concat state_dir "virtle_state/virtle.sock")
+    (json |> member "runtime" |> member "controlSocket" |> to_string);
   assert_equal "inspect flake" "github:example/vms#agent"
     (json |> member "ash" |> member "config" |> member "spawn" |> member "flake"
    |> to_string);

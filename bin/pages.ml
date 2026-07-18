@@ -88,7 +88,9 @@ let spawn =
         `S "MANIFEST GENERATION";
         `P
           "spawn writes ash-state.toml and virtle.toml before launching \
-           virtle. Both files live in the VM state directory.";
+           virtle. Both files live in the VM state directory. Virtle's own \
+           runtime state and control sockets use its nested virtle_state \
+           directory.";
         `P
           "For an existing named VM, spawn first builds new spawn inputs from \
            the current command line and defaults.";

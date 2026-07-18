@@ -111,6 +111,8 @@ let state_base_dir () =
   Filename.concat base "ash"
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
+let virtle_state_dir name = Filename.concat (state_dir name) "virtle_state"
+let virtle_state_dir_for_path path = Filename.concat path "virtle_state"
 let gcroots_dir ~name = Filename.concat (state_dir name) "gcroots"
 let manifest_path ~name = Filename.concat (state_dir name) "virtle.toml"
 let ash_config_path ~name = Filename.concat (state_dir name) "ash-state.toml"
@@ -349,6 +351,12 @@ type vm_info = {
 
 let control_socket_path dir = Filename.concat dir "virtle.sock"
 
+let vm_control_socket_path path =
+  let nested = control_socket_path (virtle_state_dir_for_path path) in
+  let legacy = control_socket_path path in
+  if Sys.file_exists nested || not (Sys.file_exists legacy) then nested
+  else legacy
+
 let socket_accepts_connection path =
   if not (Sys.file_exists path) then false
   else
@@ -509,7 +517,7 @@ let list_vms () =
         try
           if Sys.is_directory path && Sys.file_exists manifest then
             let stat = Unix.stat path in
-            let control_socket = control_socket_path path in
+            let control_socket = vm_control_socket_path path in
             let status, cid =
               if socket_accepts_connection control_socket then
                 (Running, control_socket_status_cid control_socket)
@@ -536,7 +544,7 @@ let ssh_stats vm =
   match vm.status with
   | Stopped -> (None, None)
   | Running -> (
-      match control_socket_ssh_stats (control_socket_path vm.path) with
+      match control_socket_ssh_stats (vm_control_socket_path vm.path) with
       | Some (connections, ptys) -> (Some connections, Some ptys)
       | None -> (None, None))
 
@@ -621,7 +629,10 @@ let select_attach_vm name =
       let path = manifest_path ~name in
       if not (Sys.file_exists path) then
         Log.fatal "no VM named %S (expected %s)" name path;
-      if not (socket_accepts_connection (control_socket_path (state_dir name)))
+      if
+        not
+          (socket_accepts_connection
+             (control_socket_path (virtle_state_dir name)))
       then Log.fatal "VM %S is not running" name;
       (name, path)
   | None -> (
@@ -1051,7 +1062,7 @@ let guest_mounts_from_control_socket path =
   | _ -> `Null
 
 let inspect_runtime_json (vm : vm_info) =
-  let socket_path = control_socket_path vm.path in
+  let socket_path = vm_control_socket_path vm.path in
   match vm.status with
   | Stopped ->
       `Assoc
@@ -1783,6 +1794,7 @@ let render_resolved_manifest inputs =
   let config = inputs.config in
   let spaces = inputs.spaces in
   let state_dir = state_dir inputs.name in
+  let virtle_state_dir = virtle_state_dir inputs.name in
   let memory = 4096 in
   let vcpu = 2 in
   let user = Option.value inputs.user ~default:inputs.target.host_name in
@@ -1864,7 +1876,7 @@ let render_resolved_manifest inputs =
       [
         ("host_name", Otoml.string target.host_name);
         ("working_dir", Otoml.string ".");
-        ("state_dir", Otoml.string state_dir);
+        ("state_dir", Otoml.string virtle_state_dir);
         ( "machine",
           Otoml.table
             [
@@ -2333,7 +2345,7 @@ let stop ?name ~force () =
     Log.fatal
       "VM %S is running, but not as an ash background unit; refusing to stop it"
       vm.name;
-  control_socket_ssh_stats (control_socket_path vm.path)
+  control_socket_ssh_stats (vm_control_socket_path vm.path)
   |> confirm_stop_with_active_ssh ~name:vm.name ~force;
   let code = Systemd_run.stop_user_unit ~name:vm.name in
   exit code
