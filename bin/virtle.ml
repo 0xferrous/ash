@@ -1829,6 +1829,13 @@ let render_resolved_manifest inputs =
   in
   let workspace_host_dir = Filename.concat state_dir "workspace" in
   let hotmounts_host_dir = hotmounts_dir ~name:inputs.name in
+  let ro_store_socket =
+    match inputs.ro_store_socket with
+    | Some socket -> socket
+    | None ->
+        Ash_config.global_nix_store_virtiofs_socket config
+        |> Option.value ~default:"ro-store.sock"
+  in
   Util.ensure_dir workspace_host_dir;
   Util.ensure_dir hotmounts_host_dir;
   let workspace_mount =
@@ -1840,8 +1847,7 @@ let render_resolved_manifest inputs =
       virtiofs_mount ~cache:"never" ~tag:"hotmounts" ~source:hotmounts_host_dir
         ~read_only:false ~socket:"hotmounts.sock" ~bin:inputs.virtiofsd ();
       virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true
-        ~socket:(Option.value inputs.ro_store_socket ~default:"ro-store.sock")
-        ~bin:inputs.virtiofsd ();
+        ~socket:ro_store_socket ~bin:inputs.virtiofsd ();
       image_mount ~source:(Filename.concat state_dir "persist.img");
     ]
     @ (if inputs.mount_cwd then

@@ -27,8 +27,10 @@ nix run github:0xferrous/ash -- --help
 
 Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
 `~/.config/ash/config.toml`. See [`example_config.toml`](./example_config.toml)
-for the space mount format. Select a space with a repeatable `--space`/`-s`
-option:
+for the global and space mount formats. Set
+`global.nix_store_virtiofs_socket` to reuse a host-wide virtiofsd serving
+`/nix/store`; `--ro-store-socket` overrides it. Select a space with a repeatable
+`--space`/`-s` option:
 
 ```sh
 ash spawn --name work -s ash -f ../my-nix#agent

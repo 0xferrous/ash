@@ -20,10 +20,16 @@ let load path : config =
   | Error message -> Log.fatal "failed to parse config: %s\n\n%s" path message
 
 let load_for_spaces path spaces =
-  if spaces = [] then Otoml.table [] else load path
+  if spaces <> [] || Sys.file_exists (Util.expand_home path) then load path
+  else Otoml.table []
 
 let strings path config =
   Otoml.find_opt config (Otoml.get_array Otoml.get_string) path
+
+let global_nix_store_virtiofs_socket config =
+  Otoml.find_opt config Otoml.get_string
+    [ "global"; "nix_store_virtiofs_socket" ]
+  |> Option.map (fun path -> Util.expand_home path |> Util.absolute_path)
 
 let space_exists config space = Otoml.path_exists config [ "spaces"; space ]
 

@@ -416,6 +416,32 @@ rw_mounts = [%S]
     (Ash_config.path_tag "base" shared "/mnt/shared")
     shared_mount.tag
 
+let test_global_nix_store_virtiofs_socket () =
+  let root = temp_dir "ash-test-global-store-socket" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  Util.ensure_dir home;
+  let socket = Filename.concat root "nix-store.sock" in
+  let config_path = Filename.concat root "config.toml" in
+  write_file config_path
+    (Printf.sprintf "[global]\nnix_store_virtiofs_socket = %S\n" socket);
+  let config = Ash_config.load_for_spaces config_path [] in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"global-store-socket" ()
+  in
+  assert_string_contains "global nix store virtiofs socket" manifest
+    (Printf.sprintf "socket = %S" socket);
+  let override = Filename.concat root "override.sock" in
+  let _, overridden_manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"global-store-override"
+      ~ro_store_socket:override ()
+  in
+  assert_string_contains "command-line store socket precedence"
+    overridden_manifest
+    (Printf.sprintf "socket = %S" override)
+
 let test_ro_store_socket_override () =
   let root = temp_dir "ash-test" in
   let home = Filename.concat root "home" in
@@ -924,6 +950,7 @@ let () =
   run "space extension evaluation" test_space_extension_evaluation;
   run "space mount deduplication after parsing"
     test_space_mount_deduplication_after_parsing;
+  run "global nix store virtiofs socket" test_global_nix_store_virtiofs_socket;
   run "ro-store socket override" test_ro_store_socket_override;
   run "kitty selects kitten ssh wrapper" test_kitty_selects_kitten_ssh_wrapper;
   run "qga params use valid json" test_qga_params_use_valid_json;

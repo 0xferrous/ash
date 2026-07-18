@@ -1,6 +1,10 @@
 # Copy this file to $XDG_CONFIG_HOME/ash/config.toml. If XDG_CONFIG_HOME is
 # unset, use ~/.config/ash/config.toml. You can also pass `ash spawn --config PATH`.
 
+[global]
+# Reuse a host-wide virtiofsd serving /nix/store. --ro-store-socket overrides this.
+# nix_store_virtiofs_socket = "/run/ash/nix-store.sock"
+
 [spaces.common]
 ro_mounts = [
   "~/.config/git:~/.config/git",
