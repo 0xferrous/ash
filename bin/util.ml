@@ -156,8 +156,15 @@ let command_output ?(debug = true) command =
     Log.debug "command=%S exit_code=%d stdout=%S stderr=%S" command status
       stdout_file stderr_file;
   let output = In_channel.with_open_text stdout_file In_channel.input_all in
+  let stderr = In_channel.with_open_text stderr_file In_channel.input_all in
   let output = String.trim output in
-  if status = 0 then output else failwith ("command failed: " ^ command)
+  let stderr = String.trim stderr in
+  if status = 0 then output
+  else
+    failwith
+      (Printf.sprintf "command failed (exit %d): %s%s%s" status command
+         (if output = "" then "" else "\nstdout:\n" ^ output)
+         (if stderr = "" then "" else "\nstderr:\n" ^ stderr))
 
 let slug s =
   let b = Buffer.create (String.length s) in

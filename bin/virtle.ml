@@ -735,8 +735,11 @@ let execute_nix_registration ~virtle ~path registration =
       ~registration
   in
   let output =
-    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
-      ~params:(Qga.params action) ()
+    try
+      virtle_rpc ~virtle ~path ~method_name:"guest-exec"
+        ~params:(Qga.params action) ()
+    with Failure message ->
+      Log.fatal "failed to run Nix store registration guest-exec: %s" message
   in
   match (Qga.result action output).exit_code with
   | Some 0 -> Log.info "loaded Nix store registration"
