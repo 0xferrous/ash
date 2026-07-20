@@ -231,19 +231,21 @@ let test_no_spaces_selected_by_default () =
     (string_field shares_rw "source");
   assert_bool "shares rw mount writable" false
     (bool_field shares_rw "read_only");
-  assert_string_contains "shares rw squashes guest uids" manifest
-    "--translate-uid=squash-guest:0:";
-  assert_string_contains "shares rw squashes host uid" manifest
-    "--translate-uid=squash-host:";
-  assert_string_contains "shares rw squashes guest gids" manifest
-    "--translate-gid=squash-guest:0:";
-  assert_string_contains "shares rw squashes host gid" manifest
-    "--translate-gid=squash-host:";
-  if
-    not
-      (Sys.file_exists
-         (Filename.concat state "ash/no-spaces/shares/rw/guest-store-upper"))
-  then fail "guest store upper dir should exist";
+  assert_bool "shares rw configures uid ownership" true
+    (Virtle.contains_substring manifest "--uid-map="
+    || Virtle.contains_substring manifest "--translate-uid=");
+  assert_bool "shares rw configures gid ownership" true
+    (Virtle.contains_substring manifest "--gid-map="
+    || Virtle.contains_substring manifest "--translate-gid=");
+  assert_string_contains "ro store preserves host ownership" manifest
+    "--sandbox=none";
+  let guest_store_upper =
+    Filename.concat state "ash/no-spaces/shares/rw/guest-store-upper"
+  in
+  if not (Sys.file_exists guest_store_upper) then
+    fail "guest store upper dir should exist";
+  assert_int "guest store upper mode" 0o1777
+    ((Unix.stat guest_store_upper).st_perm land 0o7777);
   if
     not
       (Sys.file_exists
@@ -627,6 +629,13 @@ let test_virtiofs_cache_options () =
     (List.mem "--cache=never" (args mutable_mount));
   assert_bool "immutable mount keeps default cache" false
     (List.exists (String.starts_with ~prefix:"--cache=") (args default_mount))
+
+let test_virtiofs_idmap_args () =
+  assert_equal "virtiofs subordinate id mappings"
+    "--uid-map=:0:1000:1:,--uid-map=:1:100000:65535:,--gid-map=:0:200000:65536:"
+    (String.concat ","
+       (Virtle.virtiofs_idmap_args ~uid:1000 ~subuid_start:100000
+          ~subgid_start:200000))
 
 let test_inspect_infers_fixed_mount_targets () =
   let fields tag =
@@ -1078,6 +1087,7 @@ let () =
   run "qga mountpoint inherits parent owner"
     test_qga_mountpoint_inherits_parent_owner;
   run "virtiofs cache options" test_virtiofs_cache_options;
+  run "virtiofs subordinate id mappings" test_virtiofs_idmap_args;
   run "inspect infers fixed mount targets"
     test_inspect_infers_fixed_mount_targets;
   run "bindfs disables kernel metadata caches"

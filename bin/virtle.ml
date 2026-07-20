@@ -225,15 +225,127 @@ let shares_ro_dir ~name = Filename.concat (shares_dir ~name) "ro"
 let shares_rw_dir ~name = Filename.concat (shares_dir ~name) "rw"
 let shares_guest_dir = "/run/ash/shares"
 
-let shares_rw_virtiofs_extra_args () =
-  let uid = string_of_int (Unix.getuid ()) in
-  let gid = string_of_int (Unix.getgid ()) in
+type subordinate_id_range = { start : int; count : int }
+
+let subordinate_id_range ~user ~id path =
+  try
+    In_channel.with_open_text path (fun channel ->
+        In_channel.input_lines channel
+        |> List.find_map (fun line ->
+            match String.split_on_char ':' line with
+            | [ owner; start; count ]
+              when owner = user || owner = string_of_int id -> (
+                match (int_of_string_opt start, int_of_string_opt count) with
+                | Some start, Some count -> Some { start; count }
+                | _ -> None)
+            | _ -> None))
+  with Sys_error _ -> None
+
+let virtiofs_idmap_args ~uid ~subuid_start ~subgid_start =
   [
-    "--translate-uid=squash-guest:0:" ^ uid ^ ":65536";
-    "--translate-uid=squash-host:" ^ uid ^ ":0:1";
-    "--translate-gid=squash-guest:0:" ^ gid ^ ":65536";
-    "--translate-gid=squash-host:" ^ gid ^ ":0:1";
+    Printf.sprintf "--uid-map=:0:%d:1:" uid;
+    Printf.sprintf "--uid-map=:1:%d:65535:" subuid_start;
+    Printf.sprintf "--gid-map=:0:%d:65536:" subgid_start;
   ]
+
+let virtiofs_squash_args ~uid ~gid =
+  [
+    Printf.sprintf "--translate-uid=squash-guest:0:%d:65536" uid;
+    Printf.sprintf "--translate-uid=squash-host:%d:0:1" uid;
+    Printf.sprintf "--translate-gid=squash-guest:0:%d:65536" gid;
+    Printf.sprintf "--translate-gid=squash-host:%d:0:1" gid;
+  ]
+
+type shares_rw_identity =
+  | Idmapped of { uid : int; subuid_start : int; subgid_start : int }
+  | Squashed of { uid : int; gid : int }
+
+let shares_rw_identity () =
+  let uid = Unix.getuid () in
+  let gid = Unix.getgid () in
+  let user =
+    try (Unix.getpwuid uid).pw_name with Not_found -> string_of_int uid
+  in
+  match
+    ( subordinate_id_range ~user ~id:uid "/etc/subuid",
+      subordinate_id_range ~user ~id:uid "/etc/subgid" )
+  with
+  | Some subuid, Some subgid when subuid.count >= 65535 && subgid.count >= 65536
+    ->
+      Log.debug
+        "using subordinate UID/GID ranges for shares-rw virtiofs: uid=%d:%d:%d \
+         gid=%d:%d:%d"
+        uid subuid.start subuid.count gid subgid.start subgid.count;
+      Idmapped { uid; subuid_start = subuid.start; subgid_start = subgid.start }
+  | _ ->
+      Log.warn
+        "no sufficiently large subordinate UID/GID ranges for %s; shares-rw \
+         virtiofs will squash guest identities"
+        user;
+      Squashed { uid; gid }
+
+let shares_rw_virtiofs_extra_args = function
+  | Idmapped { uid; subuid_start; subgid_start } ->
+      virtiofs_idmap_args ~uid ~subuid_start ~subgid_start
+  | Squashed { uid; gid } -> virtiofs_squash_args ~uid ~gid
+
+let prepare_guest_store_dirs identity shares_rw_host_dir =
+  let state = Filename.concat shares_rw_host_dir "guest-store-state" in
+  let upper = Filename.concat shares_rw_host_dir "guest-store-upper" in
+  let work = Filename.concat shares_rw_host_dir "guest-store-work" in
+  match identity with
+  | Squashed _ ->
+      Util.ensure_dir state;
+      Util.ensure_dir upper;
+      Unix.chmod upper 0o1777;
+      Util.ensure_dir work
+  | Idmapped { uid; subuid_start; subgid_start } ->
+      let unshare =
+        find_exe
+          ~hint:
+            "install util-linux unshare and configure newuidmap/newgidmap \
+             wrappers."
+          None "unshare"
+      in
+      let shell = find_exe None "sh" in
+      let script =
+        {sh|set -eu
+state=$1
+upper=$2
+work=$3
+mkdir -p "$state" "$upper" "$work"
+chown 0:0 "$state" "$upper" "$work"
+chmod 0755 "$state" "$work"
+chmod 1777 "$upper"
+|sh}
+      in
+      let args =
+        [
+          "--map-users";
+          Printf.sprintf "0:%d:1" uid;
+          "--map-users";
+          Printf.sprintf "1:%d:65535" subuid_start;
+          "--map-groups";
+          Printf.sprintf "0:%d:65536" subgid_start;
+          "--setuid";
+          "0";
+          "--setgid";
+          "0";
+          shell;
+          "-c";
+          script;
+          "ash-prepare-guest-store";
+          state;
+          upper;
+          work;
+        ]
+      in
+      if Util.run_foreground unshare args <> 0 then
+        Log.fatal
+          "failed to prepare id-mapped guest store directories under %s\n\n\
+           Remove this VM state and create a fresh VM; existing directories \
+           may use the previous squashed ownership mapping."
+          shares_rw_host_dir
 
 let hotmount_slug ~host_dir ~guest_path =
   let digest = Digest.to_hex (Digest.string (host_dir ^ "\000" ^ guest_path)) in
@@ -1931,8 +2043,9 @@ let render_resolved_manifest inputs =
   Util.ensure_dir workspace_host_dir;
   Util.ensure_dir hotmounts_host_dir;
   Util.ensure_dir shares_ro_host_dir;
-  Util.ensure_dir (Filename.concat shares_rw_host_dir "guest-store-upper");
-  Util.ensure_dir (Filename.concat shares_rw_host_dir "guest-store-work");
+  Util.ensure_dir shares_rw_host_dir;
+  let shares_rw_identity = shares_rw_identity () in
+  prepare_guest_store_dirs shares_rw_identity shares_rw_host_dir;
   let workspace_mount =
     workspace_mount ~workspace_guest_dir ~workspace_host_dir
   in
@@ -1944,7 +2057,7 @@ let render_resolved_manifest inputs =
       virtiofs_mount ~cache:"never" ~tag:"shares-ro" ~source:shares_ro_host_dir
         ~read_only:true ~socket:"shares-ro.sock" ~bin:inputs.virtiofsd ();
       virtiofs_mount ~cache:"never"
-        ~extra_args:(shares_rw_virtiofs_extra_args ())
+        ~extra_args:(shares_rw_virtiofs_extra_args shares_rw_identity)
         ~tag:"shares-rw" ~source:shares_rw_host_dir ~read_only:false
         ~socket:"shares-rw.sock" ~bin:inputs.virtiofsd ();
       (* The host Nix store is root-owned. virtiofsd's default namespace sandbox

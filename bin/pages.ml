@@ -199,7 +199,10 @@ let spawn =
            The rw share provides guest-store-state, guest-store-upper, and \
            guest-store-work for host-backed OverlayFS upper layers. Configure \
            the local-overlay store's writable state to use guest-store-state \
-           so its metadata is reset with the upper layer.";
+           so its metadata is reset with the upper layer. When subordinate \
+           host UID/GID ranges are available, Ash maps guest identities \
+           one-to-one so dedicated build users keep distinct ownership; \
+           otherwise it falls back to squashing identities to the host user.";
         `P
           "When --mount-cwd is used, ash adds workspace_cwd for the current \
            host directory. The current agent guest config mounts this tag at \
