@@ -148,13 +148,15 @@ let string_array_of_doc doc path =
       Log.fatal "ash-state.toml is missing string array field %s"
         (String.concat "." path)
 
-let virtiofs_section ?cache ~socket ~bin () =
+let virtiofs_section ?cache ?(extra_args = []) ~socket ~bin () =
   let args =
     [
       "--socket-path={{.Socket}}";
       "--shared-dir={{.MountSource}}";
       "--tag={{.MountTag}}";
+      "--xattr";
     ]
+    @ extra_args
     @ match cache with None -> [] | Some cache -> [ "--cache=" ^ cache ]
   in
   Otoml.table
@@ -164,14 +166,15 @@ let virtiofs_section ?cache ~socket ~bin () =
       ("args", string_array args);
     ]
 
-let virtiofs_mount ?target ?cache ~tag ~source ~read_only ~socket ~bin () =
+let virtiofs_mount ?target ?cache ?extra_args ~tag ~source ~read_only ~socket
+    ~bin () =
   let fields =
     [
       ("type", Otoml.string "virtiofs");
       ("tag", Otoml.string tag);
       ("source", Otoml.string source);
       ("read_only", Otoml.boolean read_only);
-      ("virtiofs", virtiofs_section ?cache ~socket ~bin ());
+      ("virtiofs", virtiofs_section ?cache ?extra_args ~socket ~bin ());
     ]
   in
   let fields =
@@ -213,6 +216,20 @@ let workspace_mount ~workspace_guest_dir ~workspace_host_dir =
 let hotmounts_dir ~name = Filename.concat (state_dir name) "hotmounts"
 let hotmounts_guest_dir = "/run/ash/hotmounts"
 let hotmount_metadata_dir ~name = Filename.concat (hotmounts_dir ~name) ".ash"
+let shares_dir ~name = Filename.concat (state_dir name) "shares"
+let shares_ro_dir ~name = Filename.concat (shares_dir ~name) "ro"
+let shares_rw_dir ~name = Filename.concat (shares_dir ~name) "rw"
+let shares_guest_dir = "/run/ash/shares"
+
+let shares_rw_virtiofs_extra_args () =
+  let uid = string_of_int (Unix.getuid ()) in
+  let gid = string_of_int (Unix.getgid ()) in
+  [
+    "--translate-uid=squash-guest:0:" ^ uid ^ ":65536";
+    "--translate-uid=squash-host:" ^ uid ^ ":0:1";
+    "--translate-gid=squash-guest:0:" ^ gid ^ ":65536";
+    "--translate-gid=squash-host:" ^ gid ^ ":0:1";
+  ]
 
 let hotmount_slug ~host_dir ~guest_path =
   let digest = Digest.to_hex (Digest.string (host_dir ^ "\000" ^ guest_path)) in
@@ -466,15 +483,18 @@ let rec path_size ?(exclude_entry = fun _ -> false) path =
 let first_word value =
   String.trim value |> String.split_on_char ' ' |> List.find_opt (( <> ) "")
 
-let state_path_size path = path_size ~exclude_entry:(( = ) "hotmounts") path
+let ignored_state_entry = function "hotmounts" | "shares" -> true | _ -> false
+let state_path_size path = path_size ~exclude_entry:ignored_state_entry path
 
 let disk_usage path =
   let hotmounts = Filename.concat path "hotmounts" in
+  let shares = Filename.concat path "shares" in
   try
     let output =
       Util.command_output
-        ("du -sk --exclude=" ^ Util.shell_quote hotmounts ^ " -- "
-       ^ Util.shell_quote path ^ " 2>/dev/null")
+        ("du -sk --exclude=" ^ Util.shell_quote hotmounts ^ " --exclude="
+       ^ Util.shell_quote shares ^ " -- " ^ Util.shell_quote path
+       ^ " 2>/dev/null")
     in
     let output =
       String.map (function '\t' | '\n' | '\r' -> ' ' | c -> c) output
@@ -721,7 +741,12 @@ let execute_nix_registration ~virtle ~path registration =
   match (Qga.result action output).exit_code with
   | Some 0 -> Log.info "loaded Nix store registration"
   | Some 42 -> ()
-  | _ -> Log.fatal "failed to load Nix store registration: %s" output
+  | _ ->
+      let captured = Qga.captured_output output in
+      Log.fatal "failed to load Nix store registration: %s%s" output
+        (match captured with
+        | None -> ""
+        | Some decoded -> "\ndecoded guest output:\n" ^ decoded)
 
 let execute_space_mounts ~virtle ~path mounts =
   List.iter
@@ -1193,6 +1218,8 @@ let configured_mount_target fields =
   | None -> (
       match inspect_table_string fields "tag" with
       | Some "hotmounts" -> Some hotmounts_guest_dir
+      | Some "shares-ro" -> Some (Filename.concat shares_guest_dir "ro")
+      | Some "shares-rw" -> Some (Filename.concat shares_guest_dir "rw")
       | Some "ro-store" -> Some "/nix/store"
       | Some "workspace_cwd" -> Some "/mnt/cwd"
       | _ -> None)
@@ -1836,8 +1863,13 @@ let render_resolved_manifest inputs =
         Ash_config.global_nix_store_virtiofs_socket config
         |> Option.value ~default:"ro-store.sock"
   in
+  let shares_ro_host_dir = shares_ro_dir ~name:inputs.name in
+  let shares_rw_host_dir = shares_rw_dir ~name:inputs.name in
   Util.ensure_dir workspace_host_dir;
   Util.ensure_dir hotmounts_host_dir;
+  Util.ensure_dir shares_ro_host_dir;
+  Util.ensure_dir (Filename.concat shares_rw_host_dir "guest-store-upper");
+  Util.ensure_dir (Filename.concat shares_rw_host_dir "guest-store-work");
   let workspace_mount =
     workspace_mount ~workspace_guest_dir ~workspace_host_dir
   in
@@ -1846,6 +1878,12 @@ let render_resolved_manifest inputs =
       space_mount ~bin:inputs.virtiofsd workspace_mount;
       virtiofs_mount ~cache:"never" ~tag:"hotmounts" ~source:hotmounts_host_dir
         ~read_only:false ~socket:"hotmounts.sock" ~bin:inputs.virtiofsd ();
+      virtiofs_mount ~cache:"never" ~tag:"shares-ro" ~source:shares_ro_host_dir
+        ~read_only:true ~socket:"shares-ro.sock" ~bin:inputs.virtiofsd ();
+      virtiofs_mount ~cache:"never"
+        ~extra_args:(shares_rw_virtiofs_extra_args ())
+        ~tag:"shares-rw" ~source:shares_rw_host_dir ~read_only:false
+        ~socket:"shares-rw.sock" ~bin:inputs.virtiofsd ();
       virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true
         ~socket:ro_store_socket ~bin:inputs.virtiofsd ();
       image_mount ~source:(Filename.concat state_dir "persist.img");

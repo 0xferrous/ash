@@ -216,7 +216,37 @@ let test_no_spaces_selected_by_default () =
   assert_equal "no selected spaces" "" (String.concat "," spaces);
   let doc = parse_toml manifest in
   let mounts = table_array doc "mounts" in
-  assert_int "fixed mount count without spaces" 4 (List.length mounts);
+  assert_int "fixed mount count without spaces" 6 (List.length mounts);
+  let shares_ro = find_table_by_string mounts "tag" "shares-ro" in
+  assert_equal "shares ro source"
+    (Filename.concat state "ash/no-spaces/shares/ro")
+    (string_field shares_ro "source");
+  assert_bool "shares ro mount read-only" true
+    (bool_field shares_ro "read_only");
+  let shares_rw = find_table_by_string mounts "tag" "shares-rw" in
+  assert_equal "shares rw source"
+    (Filename.concat state "ash/no-spaces/shares/rw")
+    (string_field shares_rw "source");
+  assert_bool "shares rw mount writable" false
+    (bool_field shares_rw "read_only");
+  assert_string_contains "shares rw squashes guest uids" manifest
+    "--translate-uid=squash-guest:0:";
+  assert_string_contains "shares rw squashes host uid" manifest
+    "--translate-uid=squash-host:";
+  assert_string_contains "shares rw squashes guest gids" manifest
+    "--translate-gid=squash-guest:0:";
+  assert_string_contains "shares rw squashes host gid" manifest
+    "--translate-gid=squash-host:";
+  if
+    not
+      (Sys.file_exists
+         (Filename.concat state "ash/no-spaces/shares/rw/guest-store-upper"))
+  then fail "guest store upper dir should exist";
+  if
+    not
+      (Sys.file_exists
+         (Filename.concat state "ash/no-spaces/shares/rw/guest-store-work"))
+  then fail "guest store work dir should exist";
   assert_equal "default ssh user" "agent" (find_string doc [ "ssh"; "user" ])
 
 let assert_mount_parse_ok label ~host_home ~guest_user ~read_only spec
@@ -501,7 +531,12 @@ let test_qga_int_field_finds_nested_values () =
 let test_qga_output_data_decodes_base64 () =
   let text = {|{"result":{"outData":"MiA2Cg=="}}|} in
   assert_equal "qga decoded output" "2 6\n"
-    (Option.value (Qga.output_data text) ~default:"")
+    (Option.value (Qga.output_data text) ~default:"");
+  let err_text = {|{"result":{"errData":"ZXJyb3IK"}}|} in
+  assert_equal "qga decoded error output" "error\n"
+    (Option.value (Qga.error_data err_text) ~default:"");
+  assert_equal "qga captured output falls back to stderr" "error\n"
+    (Option.value (Qga.captured_output err_text) ~default:"")
 
 let test_qga_load_nix_registration_action () =
   let registration = "/nix/store/closure-info/registration" in
@@ -594,6 +629,12 @@ let test_inspect_infers_fixed_mount_targets () =
   assert_bool "hotmount target" true
     (Virtle.configured_mount_target (fields "hotmounts")
     = Some "/run/ash/hotmounts");
+  assert_bool "shares ro target" true
+    (Virtle.configured_mount_target (fields "shares-ro")
+    = Some "/run/ash/shares/ro");
+  assert_bool "shares rw target" true
+    (Virtle.configured_mount_target (fields "shares-rw")
+    = Some "/run/ash/shares/rw");
   assert_bool "ro-store target" true
     (Virtle.configured_mount_target (fields "ro-store") = Some "/nix/store");
   assert_bool "workspace cwd target" true
@@ -926,14 +967,17 @@ let test_nix_json_string_array_parser () =
 let test_state_sizes_ignore_hotmounts () =
   let root = temp_dir "ash-test-size" in
   let hotmounts = Filename.concat root "hotmounts" in
+  let shares = Filename.concat root "shares" in
   let workspace = Filename.concat root "workspace" in
   mkdir_p hotmounts;
+  mkdir_p shares;
   mkdir_p workspace;
   write_file (Filename.concat hotmounts "big") (String.make (1024 * 1024) 'x');
+  write_file (Filename.concat shares "big") (String.make (1024 * 1024) 'x');
   write_file (Filename.concat workspace "small") "x";
-  assert_bool "disk usage ignores hotmounts" true
+  assert_bool "disk usage ignores hotmounts and shares" true
     (Virtle.disk_usage root < 524288L);
-  assert_bool "apparent size ignores hotmounts" true
+  assert_bool "apparent size ignores hotmounts and shares" true
     (Virtle.state_path_size root < 524288L)
 
 let run name test =

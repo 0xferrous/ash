@@ -38,6 +38,16 @@ let decode_base64 text =
 let output_data text =
   Option.bind (string_field ~field:"outData" text) decode_base64
 
+let error_data text =
+  Option.bind (string_field ~field:"errData" text) decode_base64
+
+let captured_output text =
+  match (output_data text, error_data text) with
+  | None, None -> None
+  | Some out, None -> Some out
+  | None, Some err -> Some err
+  | Some out, Some err -> Some (out ^ err)
+
 let result action output =
   {
     action = action.name;

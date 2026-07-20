@@ -178,9 +178,10 @@ let spawn =
         `S "ASSUMED MOUNTS";
         `P
           "Every generated virtle.toml includes ash's fixed mounts: workspace, \
-           hotmounts, a read-only ro-store mount for /nix/store, and a \
-           persistent ext4 disk image at persist.img. The manifest sets KVM \
-           acceleration on, so the host is expected to provide /dev/kvm.";
+           hotmounts, read-only and read-write shares under /run/ash/shares, a \
+           read-only ro-store mount for /nix/store, and a persistent ext4 disk \
+           image at persist.img. The manifest sets KVM acceleration on, so the \
+           host is expected to provide /dev/kvm.";
         `P
           "The workspace mount exposes a directory inside ash VM state to the \
            guest through virtiofs. It acts as a host/guest directory portal \
@@ -190,6 +191,12 @@ let spawn =
           "The hotmounts mount is reserved for later ash mount operations, so \
            new host directories can be staged and mounted into a running guest \
            without regenerating the manifest.";
+        `P
+          "The shares mounts expose VM-state directories at /run/ash/shares/ro \
+           and /run/ash/shares/rw. The rw share also provides \
+           guest-store-upper and guest-store-work for the agent NixOS \
+           /nix/store overlay upper layer, mounted with overlayfs userxattr so \
+           metadata is stored as user.overlay.* xattrs on virtiofs.";
         `P
           "When --mount-cwd is used, ash adds workspace_cwd for the current \
            host directory. The current agent guest config mounts this tag at \
