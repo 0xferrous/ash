@@ -193,7 +193,7 @@ It also exposes these mount devices to the guest:
 
 - `workspace` — writable virtiofs share for `<state_dir>/workspace`, intended for `/home/<ssh-user>/workspace`
 - `hotmounts` — writable virtiofs share for `<state_dir>/hotmounts`, used by `ash mount` for QGA-driven hot mounts into a running VM.
-- `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock`; set `global.nix_store_virtiofs_socket` in the ash config or pass `--ro-store-socket PATH` to point this mount at an existing virtiofs daemon socket instead. The command-line option takes precedence.
+- `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock` with its user-namespace sandbox disabled so root ownership from the host store remains root ownership in the guest. The share is still exported readonly. Without this ownership preservation, an unprivileged virtiofsd exposes root-owned store paths as `nobody:nogroup`, and OpenSSH rejects included system configuration as unsafe. Set `global.nix_store_virtiofs_socket` in the ash config or pass `--ro-store-socket PATH` to use an existing host-wide daemon instead; the command-line option takes precedence.
 - `persist` — writable ext4 image labeled `persist`
 - `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
 

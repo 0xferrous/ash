@@ -1947,8 +1947,15 @@ let render_resolved_manifest inputs =
         ~extra_args:(shares_rw_virtiofs_extra_args ())
         ~tag:"shares-rw" ~source:shares_rw_host_dir ~read_only:false
         ~socket:"shares-rw.sock" ~bin:inputs.virtiofsd ();
-      virtiofs_mount ~tag:"ro-store" ~source:"/nix/store" ~read_only:true
-        ~socket:ro_store_socket ~bin:inputs.virtiofsd ();
+      (* The host Nix store is root-owned. virtiofsd's default namespace sandbox
+         maps an unprivileged launcher to namespace root, leaving host uid/gid 0
+         unmapped and exposing store paths to the guest as nobody:nogroup.
+         OpenSSH rejects root-owned system configuration with that translated
+         ownership, so preserve the host ownership metadata for this readonly
+         share by avoiding the user namespace. *)
+      virtiofs_mount ~extra_args:[ "--sandbox=none" ] ~tag:"ro-store"
+        ~source:"/nix/store" ~read_only:true ~socket:ro_store_socket
+        ~bin:inputs.virtiofsd ();
       image_mount ~source:(Filename.concat state_dir "persist.img");
     ]
     @ (if inputs.mount_cwd then
