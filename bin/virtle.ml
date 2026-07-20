@@ -69,6 +69,10 @@ let find_bindfs () =
 let find_ssh explicit_path =
   find_exe ~hint:"pass a valid --ssh PATH." explicit_path "ssh"
 
+let find_scp () =
+  find_exe ~hint:"install OpenSSH scp into PATH so ash can copy VM files." None
+    "scp"
+
 let find_kitten () =
   find_exe ~hint:"install kitty into PATH so `kitten ssh` is available." None
     "kitten"
@@ -1779,6 +1783,62 @@ let install_ssh_key ~virtle ~path ~name ~user =
   match (Qga.result action output).exit_code with
   | Some 0 -> identity
   | _ -> Log.fatal "SSH autoprovision failed: %s" output
+
+type copy_source = Host | Guest
+
+let copy_source_name = function Host -> "host" | Guest -> "guest"
+
+let scp_args ~wrapper ~identity ~host_name ~recursive ~source ~destination =
+  [
+    "-S";
+    wrapper;
+    "-i";
+    identity;
+    "-o";
+    "IdentitiesOnly=yes";
+    "-o";
+    "HostName=" ^ host_name;
+  ]
+  @ (if recursive then [ "-r" ] else [])
+  @ [ "--"; source; destination ]
+
+let copy ?virtle ~name ~recursive ~verbose ~from_path ~to_path ~source () =
+  let virtle = find_virtle virtle in
+  let scp = find_scp () in
+  let name, path = select_attach_vm (Some name) in
+  let status = rpc_status ~virtle ~path () in
+  let cid =
+    match Qga.int_field ~field:"cid" status with
+    | Some cid when cid > 0 -> cid
+    | _ -> Log.fatal "could not read VM cid from virtle status: %s" status
+  in
+  let doc = load_manifest_doc path in
+  let user = manifest_string doc [ "ssh"; "user" ] in
+  let identity = install_ssh_key ~virtle ~path ~name ~user in
+  let wrapper = space_mount_ssh_wrapper_path ~name in
+  if not (Sys.file_exists wrapper) then
+    Log.fatal "missing SSH wrapper %s; run `ash regenerate %s`" wrapper name;
+  (* scp treats a colon as remote syntax only when it appears before any slash.
+     Use a slash-free alias in the operand, then let ssh resolve it to the
+     virtle vsock address through HostName. *)
+  let host_name = "vsock/" ^ string_of_int cid in
+  let remote_alias = "ash-vm-" ^ string_of_int cid in
+  let guest_path path = user ^ "@" ^ remote_alias ^ ":" ^ path in
+  let source_path, destination_path =
+    match source with
+    | Host -> (from_path, guest_path to_path)
+    | Guest -> (guest_path from_path, to_path)
+  in
+  let code =
+    Util.run_foreground scp
+      (scp_args ~wrapper ~identity ~host_name ~recursive ~source:source_path
+         ~destination:destination_path)
+  in
+  if code = 0 && verbose then
+    Printf.printf "%s:%s -> %s:%s\n%!" (copy_source_name source) from_path
+      (copy_source_name (match source with Host -> Guest | Guest -> Host))
+      to_path;
+  exit code
 
 let attach_running ?virtle ~name ~path ~kitty ~verbose () =
   let virtle = find_virtle virtle in

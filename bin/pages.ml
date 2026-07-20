@@ -18,7 +18,7 @@ let main =
         `P
           "ash coordinates NixOS agent VMs through virtle. It reads its space \
            config, evaluates a NixOS flake host, writes a virtle manifest, and \
-           manages spawn, attach, mount, stop, and cleanup flows.";
+           manages spawn, attach, copy, mount, stop, and cleanup flows.";
         `S "STATE";
         `P
           "Named VMs keep ash state under XDG_STATE_HOME/ash/NAME/ when \
@@ -32,8 +32,8 @@ let main =
         `S "REQUIREMENTS";
         `P
           "ash assumes host tools are available as needed: nix, virtle, \
-           virtiofsd, bindfs, ssh, systemd-ssh-proxy, systemd-run, systemctl, \
-           journalctl, ssh-keygen, /bin/sh, mountpoint, and du.";
+           virtiofsd, bindfs, ssh, scp, systemd-ssh-proxy, systemd-run, \
+           systemctl, journalctl, ssh-keygen, /bin/sh, mountpoint, and du.";
         `P
           "Some paths can be resolved or overridden: virtle comes from \
            --virtle, ASH_VIRTLE, or PATH; ssh and systemd-ssh-proxy default to \
@@ -444,6 +444,40 @@ let mount =
       ];
   }
 
+let cp =
+  {
+    file = "ash-cp";
+    command = Some "cp";
+    summary = "copy files between the host and a running VM";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Copies a file between the host and a running ash VM. The default \
+           direction is host to guest; use --from guest for guest to host.";
+        `S "DIRECTORIES";
+        `P
+          "Pass -r or --recursive to copy a directory and its contents. \
+           Without it, directory sources are rejected by scp.";
+        `S "VM SELECTION";
+        `P
+          "NAME selects the running VM. The transfer uses that VM's SSH user \
+           and vsock CID.";
+        `S "SSH";
+        `P
+          "ash creates or reuses the VM's autoprovisioned SSH identity, \
+           installs it through virtle guest-exec, and transfers through \
+           OpenSSH scp over the generated SSH wrapper.";
+        `P
+          "-v or --verbose prints the completed host/guest source and \
+           destination after a successful transfer.";
+        `S Manpage.s_examples;
+        `Pre "ash cp work ./notes.txt ~/workspace/notes.txt";
+        `Pre "ash cp -r work ./src ~/workspace/src";
+        `Pre "ash cp --from guest work ~/workspace/result.txt ./result.txt";
+      ];
+  }
+
 let umount =
   {
     file = "ash-umount";
@@ -641,6 +675,7 @@ let all =
     attach;
     resume;
     mount;
+    cp;
     umount;
     mount_space;
     umount_space;

@@ -73,6 +73,15 @@ Start and attach immediately, keeping the VM after SSH exits:
 ash spawn --name work -f ../my-nix#agent --attach --keep
 ```
 
+Copy files between the host and a running VM:
+
+```sh
+ash cp work ./input.txt ~/workspace/input.txt
+ash cp --from guest work ~/workspace/output.txt ./output.txt
+```
+
+Use `-r` to copy directories and `-v` to print a successful transfer.
+
 Mount a host directory into a running VM:
 
 ```sh

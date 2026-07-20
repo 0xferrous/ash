@@ -68,6 +68,10 @@ let mount opts mode name spec =
     ~mode:(Virtle.hotmount_mode_of_string mode)
     ~name ~spec ()
 
+let copy global recursive verbose source name from_path to_path =
+  Log.set_debug global.debug;
+  Virtle.copy ~name ~recursive ~verbose ~source ~from_path ~to_path ()
+
 let umount opts name guest_path =
   Log.set_debug opts.global.debug;
   Virtle.hotunmount ?virtle:opts.virtle ~name ~guest_path ()
@@ -343,6 +347,51 @@ let mount_cmd =
       const mount $ virtle_opts_arg $ mount_mode_arg $ mount_name_arg
       $ mount_spec_arg)
 
+let copy_recursive_flag =
+  Arg.(
+    value & flag
+    & info [ "recursive"; "r" ] ~doc:"Copy directories recursively.")
+
+let copy_verbose_flag =
+  Arg.(
+    value & flag
+    & info [ "verbose"; "v" ]
+        ~doc:"Print the completed host/guest copy operation.")
+
+let copy_source_arg =
+  Arg.(
+    value
+    & opt (enum [ ("host", Virtle.Host); ("guest", Virtle.Guest) ]) Virtle.Host
+    & info [ "from" ] ~doc:"Copy from host or guest." ~docv:"host|guest")
+
+let copy_name_arg =
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let copy_from_path_arg =
+  Arg.(
+    required
+    & pos 1 (some string) None
+    & info [] ~doc:"Source path." ~docv:"FROM_PATH")
+
+let copy_to_path_arg =
+  Arg.(
+    required
+    & pos 2 (some string) None
+    & info [] ~doc:"Destination path." ~docv:"TO_PATH")
+
+let cp_man = Pages.cp.man
+
+let cp_cmd =
+  Cmd.v
+    (Cmd.info "cp" ~doc:"copy files between the host and a running VM"
+       ~man:cp_man)
+    Term.(
+      const copy $ global_opts_arg $ copy_recursive_flag $ copy_verbose_flag
+      $ copy_source_arg $ copy_name_arg $ copy_from_path_arg $ copy_to_path_arg)
+
 let umount_guest_path_arg =
   Arg.(
     required
@@ -448,6 +497,7 @@ let main_cmd =
       attach_cmd;
       resume_cmd;
       mount_cmd;
+      cp_cmd;
       umount_cmd;
       mount_space_cmd;
       umount_space_cmd;

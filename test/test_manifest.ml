@@ -964,6 +964,17 @@ let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
 
+let test_scp_args () =
+  let args =
+    Virtle.scp_args ~wrapper:"/state/ssh-wrapper" ~identity:"/state/id"
+      ~host_name:"vsock/7" ~recursive:true ~source:"src dir"
+      ~destination:"user@ash-vm-7:~/dst dir"
+  in
+  assert_equal "scp args"
+    "-S,/state/ssh-wrapper,-i,/state/id,-o,IdentitiesOnly=yes,-o,HostName=vsock/7,-r,--,src \
+     dir,user@ash-vm-7:~/dst dir"
+    (String.concat "," args)
+
 let test_state_sizes_ignore_hotmounts () =
   let root = temp_dir "ash-test-size" in
   let hotmounts = Filename.concat root "hotmounts" in
@@ -1033,4 +1044,5 @@ let () =
   run "nix storage flake refs absolutize relative paths"
     test_nix_storage_flake_ref_absolutizes_relative_paths;
   run "nix json string array parser" test_nix_json_string_array_parser;
+  run "scp arguments" test_scp_args;
   run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts
