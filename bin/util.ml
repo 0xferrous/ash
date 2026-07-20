@@ -178,12 +178,24 @@ let name_slug s =
     s;
   Buffer.contents b
 
-let rec remove_tree path =
+let rec remove_tree ?(force = false) path =
   if Sys.file_exists path then
-    let stat = Unix.lstat path in
-    match stat.st_kind with
-    | Unix.S_DIR ->
-        Sys.readdir path
-        |> Array.iter (fun entry -> remove_tree (Filename.concat path entry));
-        Unix.rmdir path
-    | _ -> Unix.unlink path
+    if force then (
+      (* Overlay/virtiofs cleanup can leave directories without owner execute
+         bits (for example overlayfs work dirs). Make the tree traversable
+         before rm -rf; ignore chmod failures so rm still gets a chance. *)
+      let command =
+        "chmod -R u+rwX -- " ^ shell_quote path
+        ^ " 2>/dev/null || true; rm -rf -- " ^ shell_quote path
+      in
+      let status = Sys.command command in
+      if status <> 0 && Sys.file_exists path then
+        failwith ("failed to remove tree: " ^ path))
+    else
+      let stat = Unix.lstat path in
+      match stat.st_kind with
+      | Unix.S_DIR ->
+          Sys.readdir path
+          |> Array.iter (fun entry -> remove_tree (Filename.concat path entry));
+          Unix.rmdir path
+      | _ -> Unix.unlink path

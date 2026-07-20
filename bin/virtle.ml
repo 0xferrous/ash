@@ -610,7 +610,7 @@ let rm_vms () =
         |> List.iter (fun idx ->
             let vm = vms.(idx) in
             Log.info "deleting VM state %s (%s)" vm.name vm.path;
-            Util.remove_tree vm.path)
+            Util.remove_tree ~force:true vm.path)
 
 let attach_picker vms =
   let items = Array.map attach_item vms in
@@ -2222,7 +2222,7 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
         Fun.protect
           ~finally:(fun () ->
             Log.info "removing ephemeral VM state %s" dir;
-            Util.remove_tree dir)
+            Util.remove_tree ~force:true dir)
           (fun () -> Util.run_foreground inputs.virtle args)
       in
       exit code
