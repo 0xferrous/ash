@@ -121,6 +121,14 @@ ash ls
 ash rm
 ```
 
+Reset a stopped VM's Nix store metadata and writable overlay:
+
+```sh
+ash stop work
+ash rebuild-db work
+ash attach --spawn work
+```
+
 ## More detail
 
 Use command help:

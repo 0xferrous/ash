@@ -62,6 +62,10 @@ let regenerate opts name =
   Log.set_debug opts.global.debug;
   Virtle.regenerate ?virtle:opts.virtle ~name ()
 
+let rebuild_db opts name =
+  Log.set_debug opts.global.debug;
+  Virtle.rebuild_db ?virtle:opts.virtle ~name ()
+
 let mount opts mode name spec =
   Log.set_debug opts.global.debug;
   Virtle.hotmount ?virtle:opts.virtle
@@ -315,6 +319,20 @@ let regenerate_cmd =
        ~man:regenerate_man)
     Term.(const regenerate $ virtle_opts_arg $ regenerate_name_arg)
 
+let rebuild_db_name_arg =
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let rebuild_db_man = Pages.rebuild_db.man
+
+let rebuild_db_cmd =
+  Cmd.v
+    (Cmd.info "rebuild-db" ~doc:"rebuild a VM's Nix store database"
+       ~man:rebuild_db_man)
+    Term.(const rebuild_db $ virtle_opts_arg $ rebuild_db_name_arg)
+
 let mount_name_arg =
   Arg.(
     required
@@ -504,6 +522,7 @@ let main_cmd =
       stop_cmd;
       logs_cmd;
       regenerate_cmd;
+      rebuild_db_cmd;
       inspect_cmd;
       ls_cmd;
       rm_cmd;

@@ -2469,6 +2469,11 @@ let stop ?name ~force () =
   let code = Systemd_run.stop_user_unit ~name:vm.name in
   exit code
 
+let remove_nix_store_shares ~name =
+  let path = shares_dir ~name in
+  Log.debug "removing Nix store shares for VM %s: %s" name path;
+  Util.remove_tree ~force:true path
+
 let regenerate ?virtle ~name () =
   let name = Util.name_slug name in
   let saved = load_ash_config ~name in
@@ -2489,3 +2494,16 @@ let regenerate ?virtle ~name () =
     (String.length manifest) (spaces_log inputs.spaces);
   Printf.printf "regenerated %s\n" manifest_path;
   Printf.printf "regenerated %s\n" ssh_wrapper_path
+
+let rebuild_db ?virtle ~name () =
+  let name = Util.name_slug name in
+  let config_path = ash_config_path ~name in
+  if not (Sys.file_exists config_path) then
+    Log.fatal "no VM named %S (expected %s)" name config_path;
+  if socket_accepts_connection (control_socket_path (virtle_state_dir name))
+  then
+    Log.fatal
+      "VM %S is running; stop it before rebuilding its Nix store database" name;
+  remove_nix_store_shares ~name;
+  regenerate ?virtle ~name ();
+  Printf.printf "rebuilt Nix store database for %s\n" name

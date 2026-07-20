@@ -406,6 +406,42 @@ let regenerate =
       ];
   }
 
+let rebuild_db =
+  {
+    file = "ash-rebuild-db";
+    command = Some "rebuild-db";
+    summary = "rebuild a VM's Nix store database";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Deletes the named VM's read-only and read-write Nix store shares, \
+           then regenerates them from the VM's saved ash-state.toml and \
+           current NixOS closure.";
+        `S "WHAT IT RESETS";
+        `P
+          "rebuild-db removes shares/ro, including the synthetic lower-store \
+           metadata database, and shares/rw, including the writable store \
+           database and guest OverlayFS upper and work directories. \
+           Guest-installed or modified Nix store paths in that writable \
+           overlay are discarded.";
+        `S "SAFETY";
+        `P
+          "The VM must be stopped. Persistent disk, workspace, SSH keys, \
+           hotmounts, and other VM state are preserved.";
+        `S "REGENERATION";
+        `P
+          "After removing the shares, ash resolves the saved flake again and \
+           regenerates the lower-store database, writable store directories, \
+           virtle.toml, and SSH helper scripts. The next normal spawn starts \
+           with the rebuilt store.";
+        `S Manpage.s_examples;
+        `Pre "ash stop work";
+        `Pre "ash rebuild-db work";
+        `Pre "ash attach --spawn work";
+      ];
+  }
+
 let mount =
   {
     file = "ash-mount";
@@ -685,6 +721,7 @@ let all =
     stop;
     logs;
     regenerate;
+    rebuild_db;
     inspect;
     ls;
     rm;

@@ -1014,6 +1014,26 @@ let test_scp_args () =
      dir,user@ash-vm-7:~/dst dir"
     (String.concat "," args)
 
+let test_remove_nix_store_shares () =
+  let root = temp_dir "ash-test-rebuild-db" in
+  let previous = Sys.getenv_opt "XDG_STATE_HOME" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "XDG_STATE_HOME" (Option.value previous ~default:""))
+    (fun () ->
+      Unix.putenv "XDG_STATE_HOME" root;
+      let name = "work" in
+      let shares = Virtle.shares_dir ~name in
+      let preserved = Filename.concat (Virtle.state_dir name) "workspace/keep" in
+      write_file (Filename.concat shares "ro/guest-store-state/db.sqlite") "db";
+      write_file
+        (Filename.concat shares "rw/guest-store-upper/store-path")
+        "path";
+      write_file preserved "keep";
+      Virtle.remove_nix_store_shares ~name;
+      assert_bool "Nix store shares removed" false (Sys.file_exists shares);
+      assert_bool "other VM state preserved" true (Sys.file_exists preserved))
+
 let test_state_sizes_ignore_hotmounts () =
   let root = temp_dir "ash-test-size" in
   let hotmounts = Filename.concat root "hotmounts" in
@@ -1086,4 +1106,5 @@ let () =
   run "prepare lower store" test_prepare_lower_store;
   run "nix json string array parser" test_nix_json_string_array_parser;
   run "scp arguments" test_scp_args;
+  run "remove Nix store shares" test_remove_nix_store_shares;
   run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts
