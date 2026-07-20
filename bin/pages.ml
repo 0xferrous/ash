@@ -193,10 +193,13 @@ let spawn =
            without regenerating the manifest.";
         `P
           "The shares mounts expose VM-state directories at /run/ash/shares/ro \
-           and /run/ash/shares/rw. The rw share also provides \
-           guest-store-upper and guest-store-work for the agent NixOS \
-           /nix/store overlay upper layer, mounted with overlayfs userxattr so \
-           metadata is stored as user.overlay.* xattrs on virtiofs.";
+           and /run/ash/shares/rw. Before launch, Ash loads the resolved NixOS \
+           closure registration into shares/ro/guest-store-state so a guest \
+           local-overlay store can use it as readonly lower-store metadata. \
+           The rw share provides guest-store-state, guest-store-upper, and \
+           guest-store-work for host-backed OverlayFS upper layers. Configure \
+           the local-overlay store's writable state to use guest-store-state \
+           so its metadata is reset with the upper layer.";
         `P
           "When --mount-cwd is used, ash adds workspace_cwd for the current \
            host directory. The current agent guest config mounts this tag at \

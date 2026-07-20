@@ -5,6 +5,7 @@ type boot = {
   initrd : string;
   kernel_params : string list;
   registration : string;
+  nix_store : string;
   ssh : string;
   systemd_ssh_proxy : string;
 }
@@ -31,6 +32,44 @@ let nix_exe =
            Hint: install Nix or run ash in an environment with nix in PATH.")
 
 let nix_command args = Util.shell_quote (Lazy.force nix_exe) ^ " " ^ args
+
+let uri_encode value =
+  let is_unreserved = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' | '.' | '_' | '~' -> true
+    | _ -> false
+  in
+  let buffer = Buffer.create (String.length value) in
+  String.iter
+    (fun char ->
+      if is_unreserved char then Buffer.add_char buffer char
+      else Buffer.add_string buffer (Printf.sprintf "%%%02X" (Char.code char)))
+    value;
+  Buffer.contents buffer
+
+let local_store_uri ~real ~state =
+  Printf.sprintf "local?real=%s&state=%s" (uri_encode real) (uri_encode state)
+
+let prepare_lower_store ~nix_store ~registration ~state =
+  let temporary = Printf.sprintf "%s.tmp-%d" state (Unix.getpid ()) in
+  Util.remove_tree ~force:true temporary;
+  Util.ensure_dir temporary;
+  let store = local_store_uri ~real:"/nix/store" ~state:temporary in
+  let command =
+    Printf.sprintf "%s --store %s --load-db < %s"
+      (Util.shell_quote nix_store)
+      (Util.shell_quote store)
+      (Util.shell_quote registration)
+  in
+  try
+    ignore (Util.command_output command);
+    Util.remove_tree ~force:true state;
+    Unix.rename temporary state;
+    Log.debug "prepared lower Nix store metadata in %s from %s" state
+      registration
+  with exn ->
+    Util.remove_tree ~force:true temporary;
+    Log.fatal "failed to prepare lower Nix store metadata in %s: %s" state
+      (Printexc.to_string exn)
 
 let run_nix ~label ~attr args =
   try Util.command_output (nix_command args)
@@ -219,6 +258,7 @@ let resolve_boot ~target ~gcroots_dir =
   let registration =
     resolve_registration ~target ~toplevel ~out_link:(root "closure-info")
   in
+  let nix = eval_raw ~label:"Nix package" (attr ^ ".config.nix.package") in
   let openssh = eval_raw ~label:"OpenSSH package" (attr ^ ".pkgs.openssh") in
   let systemd =
     eval_raw ~label:"systemd package" (attr ^ ".config.systemd.package")
@@ -241,6 +281,7 @@ let resolve_boot ~target ~gcroots_dir =
     initrd;
     kernel_params;
     registration;
+    nix_store = Filename.concat nix "bin/nix-store";
     ssh = Filename.concat openssh "bin/ssh";
     systemd_ssh_proxy = Filename.concat systemd "lib/systemd/systemd-ssh-proxy";
   }

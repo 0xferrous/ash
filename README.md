@@ -29,8 +29,14 @@ Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
 `~/.config/ash/config.toml`. See [`example_config.toml`](./example_config.toml)
 for the global and space mount formats. Set
 `global.nix_store_virtiofs_socket` to reuse a host-wide virtiofsd serving
-`/nix/store`; `--ro-store-socket` overrides it. Select a space with a repeatable
-`--space`/`-s` option:
+`/nix/store`; `--ro-store-socket` overrides it. For each VM, Ash also creates
+a lower-store metadata database under `shares/ro/guest-store-state` from the
+resolved NixOS closure registration. Guests can pair that database with the
+read-only store mount when using Nix's `local-overlay` store. The writable
+store's `state` should point at `shares/rw/guest-store-state`, beside
+`guest-store-upper`; keeping its database in the persistent image while
+resetting Ash's shares leaves stale valid-path records. Select a space
+with a repeatable `--space`/`-s` option:
 
 ```sh
 ash spawn --name work -s ash -f ../my-nix#agent

@@ -2152,6 +2152,11 @@ let render_manifest (inputs : manifest_inputs) =
   let gcroots_dir = gcroots_dir ~name:inputs.name in
   Util.ensure_dir gcroots_dir;
   let boot = Nix.resolve_boot ~target ~gcroots_dir in
+  let lower_store_state =
+    Filename.concat (shares_ro_dir ~name:inputs.name) "guest-store-state"
+  in
+  Nix.prepare_lower_store ~nix_store:boot.nix_store
+    ~registration:boot.registration ~state:lower_store_state;
   let ssh = Option.value inputs.ssh ~default:boot.ssh in
   let systemd_ssh_proxy =
     Option.value inputs.systemd_ssh_proxy ~default:boot.systemd_ssh_proxy

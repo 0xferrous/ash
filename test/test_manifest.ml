@@ -101,6 +101,7 @@ let test_boot : Nix.boot =
     initrd = "/nix/store/initrd/initrd";
     kernel_params = [ "init=/nix/store/system/init"; "root=fstab" ];
     registration = "/nix/store/closure-info/registration";
+    nix_store = "/nix/store/nix/bin/nix-store";
     ssh = "/nix/store/openssh/bin/ssh";
     systemd_ssh_proxy = "/nix/store/systemd/lib/systemd/systemd-ssh-proxy";
   }
@@ -965,6 +966,39 @@ let test_nix_storage_flake_ref_absolutizes_relative_paths () =
   assert_equal "github flake unchanged" "github:owner/repo#agent"
     (Nix.storage_flake_ref "github:owner/repo#agent")
 
+let test_nix_local_store_uri () =
+  assert_equal "local store URI encodes paths"
+    "local?real=%2Fnix%2Fstore&state=%2Fstate%2Fwith%20spaces"
+    (Nix.local_store_uri ~real:"/nix/store" ~state:"/state/with spaces")
+
+let test_prepare_lower_store () =
+  let root = temp_dir "ash-test-lower-store" in
+  let bin = Filename.concat root "bin" in
+  let registration = Filename.concat root "registration" in
+  let state = Filename.concat root "state with spaces" in
+  let args_log = Filename.concat root "args" in
+  let stdin_log = Filename.concat root "stdin" in
+  mkdir_p bin;
+  write_file registration "registration-data\n";
+  let nix_store = Filename.concat bin "nix-store" in
+  write_file nix_store
+    "#!/bin/sh\n\
+     printf '%s\\n' \"$@\" > \"$ASH_TEST_NIX_STORE_ARGS\"\n\
+     cat > \"$ASH_TEST_NIX_STORE_STDIN\"\n";
+  Unix.chmod nix_store 0o755;
+  Unix.putenv "ASH_TEST_NIX_STORE_ARGS" args_log;
+  Unix.putenv "ASH_TEST_NIX_STORE_STDIN" stdin_log;
+  Nix.prepare_lower_store ~nix_store ~registration ~state;
+  assert_bool "lower store state created" true (Sys.is_directory state);
+  assert_equal "lower store registration input" "registration-data\n"
+    (In_channel.with_open_text stdin_log In_channel.input_all);
+  let args = In_channel.with_open_text args_log In_channel.input_all in
+  assert_string_contains "lower store load-db argument" args "--load-db";
+  assert_string_contains "lower store URI uses host store" args
+    "local?real=%2Fnix%2Fstore&state=";
+  assert_string_contains "lower store URI encodes state path" args
+    "%2Fstate%20with%20spaces.tmp-"
+
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
@@ -1048,6 +1082,8 @@ let () =
     test_spawn_reuses_saved_flake_when_omitted;
   run "nix storage flake refs absolutize relative paths"
     test_nix_storage_flake_ref_absolutizes_relative_paths;
+  run "nix local store URI" test_nix_local_store_uri;
+  run "prepare lower store" test_prepare_lower_store;
   run "nix json string array parser" test_nix_json_string_array_parser;
   run "scp arguments" test_scp_args;
   run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts
