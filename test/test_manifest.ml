@@ -546,6 +546,10 @@ let test_qga_load_nix_registration_action () =
   in
   let script = List.nth action.args 1 in
   assert_string_contains "registration import" script "nix-store --load-db";
+  assert_string_contains "local overlay marker skips registration" script
+    "/etc/ash/local-overlay-store";
+  assert_string_contains "local overlay config skips registration" script
+    "store*=*local-overlay://*) exit 42";
   assert_string_contains "registration marker" script
     "/run/ash/nix-registration";
   assert_string_contains "marker written after import" script

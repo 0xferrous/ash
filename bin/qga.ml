@@ -89,6 +89,21 @@ set -eu
 PATH=/run/current-system/sw/bin:/bin
 
 registration=$1
+
+# A local-overlay store gets the selected system closure from Ash's readonly
+# lower-store database. Importing it again only duplicates metadata in the upper
+# database and can exceed short guest-exec timeouts during early boot.
+if [ -e /etc/ash/local-overlay-store ]; then
+  exit 42
+fi
+if [ -r /etc/nix/nix.conf ]; then
+  while IFS= read -r line; do
+    case "$line" in
+      store*=*local-overlay://*) exit 42 ;;
+    esac
+  done < /etc/nix/nix.conf
+fi
+
 marker_dir=/run/ash/nix-registration
 marker=$marker_dir/$(basename "$(dirname "$registration")")
 
