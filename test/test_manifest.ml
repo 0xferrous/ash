@@ -161,7 +161,8 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     (Filename.concat state "ash/unit-test/virtle_state")
     (find_string doc [ "state_dir" ]);
   assert_int "default memory" 4096 (find_int doc [ "machine"; "memory" ]);
-  assert_int "default vcpu" 2 (find_int doc [ "machine"; "vcpu" ]);
+  assert_int "default vcpu" (int_of_string (Util.command_output "nproc"))
+    (find_int doc [ "machine"; "vcpu" ]);
   assert_equal "kernel serial" "print" (find_string doc [ "kernel"; "serial" ]);
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
