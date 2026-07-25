@@ -140,9 +140,10 @@ let spawn =
            Extended spaces are evaluated recursively before the extending \
            space. Unknown spaces and inheritance cycles are errors.";
         `P
-          "The [global] table may set nix_store_virtiofs_socket to an existing \
-           host-wide virtiofsd socket serving /nix/store. --ro-store-socket \
-           takes precedence over this config value.";
+          "The [global] table may set memory to the VM memory in MiB; the \
+           default is 4096. It may also set nix_store_virtiofs_socket to an \
+           existing host-wide virtiofsd socket serving /nix/store. \
+           --ro-store-socket takes precedence over the socket config value.";
         `P
           "Each mount is HOST_PATH or HOST_PATH:GUEST_PATH. Host ~ resolves \
            against the host user's home; guest ~ resolves against the guest \

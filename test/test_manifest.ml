@@ -162,7 +162,8 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     (Filename.concat state "ash/unit-test/virtle_state")
     (find_string doc [ "state_dir" ]);
   assert_int "default memory" 4096 (find_int doc [ "machine"; "memory" ]);
-  assert_int "default vcpu" (int_of_string (Util.command_output "nproc"))
+  assert_int "default vcpu"
+    (int_of_string (Util.command_output "nproc"))
     (find_int doc [ "machine"; "vcpu" ]);
   assert_equal "kernel serial" "print" (find_string doc [ "kernel"; "serial" ]);
   assert_equal "workspace guest_dir" "/home/agent/workspace"
@@ -201,6 +202,23 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   assert_bool "read-only mount" true (bool_field read_only "read_only");
   let absolute_mount = find_table_by_string mounts "target" absolute in
   assert_equal "absolute source" absolute (string_field absolute_mount "source")
+
+let test_global_memory_config () =
+  let root = temp_dir "ash-test-global-memory" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config = parse_toml {|[global]
+memory = 8192
+|} in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"custom-memory" ()
+  in
+  let doc = parse_toml manifest in
+  assert_int "configured memory" 8192 (find_int doc [ "machine"; "memory" ])
 
 let test_no_spaces_selected_by_default () =
   let root = temp_dir "ash-test-no-spaces" in
@@ -1033,7 +1051,9 @@ let test_remove_nix_store_shares () =
       Unix.putenv "XDG_STATE_HOME" root;
       let name = "work" in
       let shares = Virtle.shares_dir ~name in
-      let preserved = Filename.concat (Virtle.state_dir name) "workspace/keep" in
+      let preserved =
+        Filename.concat (Virtle.state_dir name) "workspace/keep"
+      in
       write_file (Filename.concat shares "ro/guest-store-state/db.sqlite") "db";
       write_file
         (Filename.concat shares "rw/guest-store-upper/store-path")
@@ -1066,6 +1086,7 @@ let run name test =
 
 let () =
   run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
+  run "global memory config" test_global_memory_config;
   run "no spaces selected by default" test_no_spaces_selected_by_default;
   run "XDG config path" test_xdg_config_path;
   run "space mount spec parsing" test_space_mount_spec_parsing;

@@ -31,6 +31,10 @@ let global_nix_store_virtiofs_socket config =
     [ "global"; "nix_store_virtiofs_socket" ]
   |> Option.map (fun path -> Util.expand_home path |> Util.absolute_path)
 
+let global_memory config =
+  Otoml.find_opt config Otoml.get_integer [ "global"; "memory" ]
+  |> Option.value ~default:4096
+
 let space_exists config space = Otoml.path_exists config [ "spaces"; space ]
 
 let space_extends config space =
