@@ -115,6 +115,14 @@ let state_base_dir () =
   Filename.concat base "ash"
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
+
+let network_mac name =
+  let hash =
+    Digest.string ("ash-network\000" ^ Util.name_slug name) |> Digest.to_hex
+  in
+  Printf.sprintf "02:%s:%s:%s:%s:%s" (String.sub hash 0 2) (String.sub hash 2 2)
+    (String.sub hash 4 2) (String.sub hash 6 2) (String.sub hash 8 2)
+
 let virtle_state_dir name = Filename.concat (state_dir name) "virtle_state"
 let virtle_state_dir_for_path path = Filename.concat path "virtle_state"
 let gcroots_dir ~name = Filename.concat (state_dir name) "gcroots"
@@ -532,22 +540,27 @@ let control_socket_status_cid path =
     (control_socket_rpc path ~method_name:"status" ~params:(`Assoc []))
     (Qga.int_field ~field:"cid")
 
-let parse_ssh_stats output =
+let parse_vm_stats output =
   match String.split_on_char ' ' (String.trim output) with
-  | [ connections; ptys ] -> (
+  | [ ip; connections; ptys ] -> (
       match (int_of_string_opt connections, int_of_string_opt ptys) with
       | Some connections, Some ptys when connections >= 0 && ptys >= 0 ->
-          Some (connections, ptys)
+          Some ((if ip = "-" then None else Some ip), connections, ptys)
       | _ -> None)
   | _ -> None
 
-let control_socket_ssh_stats path =
-  let action = Qga.ssh_stats_action in
+let control_socket_vm_stats path ~mac =
+  let action = Qga.vm_stats_action ~mac in
   let params = Yojson.Safe.from_string (Qga.params action) in
   match control_socket_rpc path ~method_name:"guest-exec" ~params with
   | Some response when Qga.int_field ~field:"exitCode" response = Some 0 ->
-      Option.bind (Qga.output_data response) parse_ssh_stats
+      Option.bind (Qga.output_data response) parse_vm_stats
   | _ -> None
+
+let control_socket_ssh_stats path ~mac =
+  match control_socket_vm_stats path ~mac with
+  | Some (_, connections, ptys) -> Some (connections, ptys)
+  | None -> None
 
 let active_ssh_warning ~name = function
   | Some (connections, ptys) when connections > 0 ->
@@ -672,27 +685,35 @@ let status_string = function Running -> "running" | Stopped -> "stopped"
 let cid_string = function Some cid -> string_of_int cid | None -> "-"
 let count_string = function Some count -> string_of_int count | None -> "-"
 
-let ssh_stats vm =
+let vm_stats vm =
   match vm.status with
-  | Stopped -> (None, None)
+  | Stopped -> (None, None, None)
   | Running -> (
       match
-        control_socket_ssh_stats
+        control_socket_vm_stats
           (control_socket_path (virtle_state_dir_for_path vm.path))
+          ~mac:(network_mac vm.name)
       with
-      | Some (connections, ptys) -> (Some connections, Some ptys)
-      | None -> (None, None))
+      | Some (ip, connections, ptys) -> (ip, Some connections, Some ptys)
+      | None -> (None, None, None))
+
+let ssh_stats vm =
+  let _, connections, ptys = vm_stats vm in
+  (connections, ptys)
+
+let ip_string = function Some ip -> ip | None -> "-"
 
 let print_vm_list () =
   let vms = list_vms () in
-  Printf.printf "%-32s %-8s %5s %4s %4s %10s %10s  %-19s %s\n" "NAME" "STATUS"
-    "CID" "SSH" "PTY" "DISK" "VIRTUAL" "MODIFIED" "PATH";
+  Printf.printf "%-32s %-8s %-15s %5s %4s %4s %10s %10s  %-19s %s\n" "NAME"
+    "STATUS" "IP" "CID" "SSH" "PTY" "DISK" "VIRTUAL" "MODIFIED" "PATH";
   List.iter
     (fun vm ->
-      let connections, ptys = ssh_stats vm in
-      Printf.printf "%-32s %-8s %5s %4s %4s %10s %10s  %-19s %s\n" vm.name
-        (status_string vm.status) (cid_string vm.cid) (count_string connections)
-        (count_string ptys) (human_size vm.disk_bytes)
+      let ip, connections, ptys = vm_stats vm in
+      Printf.printf "%-32s %-8s %-15s %5s %4s %4s %10s %10s  %-19s %s\n" vm.name
+        (status_string vm.status) (ip_string ip) (cid_string vm.cid)
+        (count_string connections) (count_string ptys)
+        (human_size vm.disk_bytes)
         (human_size vm.apparent_bytes)
         (format_time vm.modified) vm.path)
     vms
@@ -1213,14 +1234,19 @@ let inspect_runtime_json (vm : vm_info) =
           ("running", `Bool false);
           ("controlSocket", `String socket_path);
           ("cid", `Null);
+          ("ip", `Null);
           ("sshConnections", `Null);
           ("sshPtys", `Null);
           ("status", `Null);
           ("guestMountInfo", `Null);
         ]
   | Running ->
-      let connections, ptys = ssh_stats vm in
+      let ip, connections, ptys = vm_stats vm in
       let option_int = function Some value -> `Int value | None -> `Null in
+      let option_string = function
+        | Some value -> `String value
+        | None -> `Null
+      in
       let status =
         match
           control_socket_rpc socket_path ~method_name:"status"
@@ -1234,6 +1260,7 @@ let inspect_runtime_json (vm : vm_info) =
           ("running", `Bool true);
           ("controlSocket", `String socket_path);
           ("cid", option_int vm.cid);
+          ("ip", option_string ip);
           ("sshConnections", option_int connections);
           ("sshPtys", option_int ptys);
           ("status", status);
@@ -1384,9 +1411,10 @@ let print_write_file fields =
 let inspect_vm_human ~name =
   let vm = find_inspect_vm ~name in
   let name = vm.name in
-  let connections, ptys = ssh_stats vm in
+  let ip, connections, ptys = vm_stats vm in
   Printf.printf "%s\n" vm.name;
   inspect_print_field "Status" (status_string vm.status);
+  inspect_optional_field "IP" ip;
   inspect_optional_field "CID" (Option.map string_of_int vm.cid);
   inspect_optional_field "SSH connections"
     (Option.map string_of_int connections);
@@ -1998,6 +2026,9 @@ let render_resolved_manifest inputs =
   let virtle_state_dir = virtle_state_dir inputs.name in
   let memory = Ash_config.global_memory config in
   let vcpu = Util.command_output "nproc" |> int_of_string in
+  let network_bridge = Ash_config.global_network_bridge config in
+  let qemu_bridge_helper = Ash_config.global_qemu_bridge_helper config in
+  let network_mac = network_mac inputs.name in
   let user = Option.value inputs.user ~default:inputs.target.host_name in
   let target = inputs.target in
   let boot = inputs.boot in
@@ -2103,6 +2134,21 @@ let render_resolved_manifest inputs =
         ("host_name", Otoml.string target.host_name);
         ("working_dir", Otoml.string ".");
         ("state_dir", Otoml.string virtle_state_dir);
+        ( "qemu",
+          Otoml.table
+            [
+              ( "exec",
+                string_array
+                  [
+                    "qemu-system-{{.HostArch}}";
+                    "-netdev";
+                    Printf.sprintf "bridge,id=ashnet0,br=%s,helper=%s"
+                      network_bridge qemu_bridge_helper;
+                    "-device";
+                    Printf.sprintf "virtio-net-pci,netdev=ashnet0,mac=%s"
+                      network_mac;
+                  ] );
+            ] );
         ( "machine",
           Otoml.table
             [
@@ -2137,6 +2183,7 @@ let render_resolved_manifest inputs =
               ("host_dir", Otoml.string workspace_host_dir);
               ("mount_cwd", Otoml.boolean inputs.mount_cwd);
             ] );
+        ("networks", Otoml.array []);
         ("mounts", Otoml.TomlTableArray mounts);
       ]
   in
@@ -2578,6 +2625,7 @@ let stop ?name ~force () =
       vm.name;
   control_socket_ssh_stats
     (control_socket_path (virtle_state_dir_for_path vm.path))
+    ~mac:(network_mac vm.name)
   |> confirm_stop_with_active_ssh ~name:vm.name ~force;
   let code = Systemd_run.stop_user_unit ~name:vm.name in
   exit code

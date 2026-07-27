@@ -165,6 +165,17 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   assert_int "default vcpu"
     (int_of_string (Util.command_output "nproc"))
     (find_int doc [ "machine"; "vcpu" ]);
+  assert_equal "default networks disabled" ""
+    (String.concat "," (find_strings doc [ "networks" ]));
+  let qemu_exec = find_strings doc [ "qemu"; "exec" ] in
+  assert_equal "QEMU architecture template" "qemu-system-{{.HostArch}}"
+    (List.hd qemu_exec);
+  assert_string_contains "Ash bridge backend" (List.nth qemu_exec 2)
+    "bridge,id=ashnet0,br=ash0";
+  assert_string_contains "QEMU bridge helper" (List.nth qemu_exec 2)
+    "helper=/run/wrappers/bin/qemu-bridge-helper";
+  assert_string_contains "stable VM MAC" (List.nth qemu_exec 4)
+    ("mac=" ^ Virtle.network_mac "unit-test");
   assert_equal "kernel serial" "print" (find_string doc [ "kernel"; "serial" ]);
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
@@ -219,6 +230,31 @@ memory = 8192
   in
   let doc = parse_toml manifest in
   assert_int "configured memory" 8192 (find_int doc [ "machine"; "memory" ])
+
+let test_global_network_config () =
+  let root = temp_dir "ash-test-global-network" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config =
+    parse_toml
+      {|[global]
+network_bridge = "vmbridge0"
+qemu_bridge_helper = "/custom/qemu-bridge-helper"
+|}
+  in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"custom-network" ()
+  in
+  let doc = parse_toml manifest in
+  let qemu_exec = find_strings doc [ "qemu"; "exec" ] in
+  assert_string_contains "configured bridge" (List.nth qemu_exec 2)
+    "br=vmbridge0";
+  assert_string_contains "configured bridge helper" (List.nth qemu_exec 2)
+    "helper=/custom/qemu-bridge-helper"
 
 let test_no_spaces_selected_by_default () =
   let root = temp_dir "ash-test-no-spaces" in
@@ -577,16 +613,26 @@ let test_qga_load_nix_registration_action () =
     "nix-store --load-db < \"$registration\"\ntouch \"$marker\"";
   assert_equal "registration argument" registration (List.nth action.args 3)
 
-let test_qga_ssh_stats_action () =
-  let script = List.nth Qga.ssh_stats_action.args 1 in
-  assert_string_contains "ssh stats vsock" script "ss --vsock";
-  assert_string_contains "ssh stats port" script "/:22$/";
-  assert_string_contains "ssh stats ptys" script "^pts\\//";
-  match Virtle.parse_ssh_stats "2 6\n" with
-  | Some (connections, ptys) ->
+let test_qga_vm_stats_action () =
+  let mac = "02:12:34:56:78:9a" in
+  let action = Qga.vm_stats_action ~mac in
+  let script = List.nth action.args 1 in
+  assert_string_contains "VM stats interface lookup" script
+    "/sys/class/net/*/address";
+  assert_string_contains "VM stats IPv4 lookup" script "ip -o -4 address show";
+  assert_string_contains "VM stats vsock" script "ss --vsock";
+  assert_string_contains "VM stats port" script "/:22$/";
+  assert_string_contains "VM stats ptys" script "^pts\\//";
+  assert_equal "VM stats MAC argument" mac (List.nth action.args 3);
+  (match Virtle.parse_vm_stats "192.168.127.101 2 6\n" with
+  | Some (Some ip, connections, ptys) ->
+      assert_equal "VM IP" "192.168.127.101" ip;
       assert_int "ssh connections" 2 connections;
       assert_int "ssh ptys" 6 ptys
-  | None -> fail "ssh stats output should parse"
+  | _ -> fail "VM stats output should parse");
+  match Virtle.parse_vm_stats "- 0 0\n" with
+  | Some (None, 0, 0) -> ()
+  | _ -> fail "missing VM IP should parse"
 
 let test_active_ssh_warning () =
   let warning = Virtle.active_ssh_warning ~name:"work" (Some (2, 6)) in
@@ -1087,6 +1133,7 @@ let run name test =
 let () =
   run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
   run "global memory config" test_global_memory_config;
+  run "global network config" test_global_network_config;
   run "no spaces selected by default" test_no_spaces_selected_by_default;
   run "XDG config path" test_xdg_config_path;
   run "space mount spec parsing" test_space_mount_spec_parsing;
@@ -1101,7 +1148,7 @@ let () =
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
   run "qga output data decodes base64" test_qga_output_data_decodes_base64;
   run "qga loads Nix registration" test_qga_load_nix_registration_action;
-  run "qga ssh stats action" test_qga_ssh_stats_action;
+  run "qga VM stats action" test_qga_vm_stats_action;
   run "stop warns about active ssh" test_active_ssh_warning;
   run "qga unmount removes empty mountpoint"
     test_qga_unmount_removes_empty_mountpoint;

@@ -35,6 +35,14 @@ let global_memory config =
   Otoml.find_opt config Otoml.get_integer [ "global"; "memory" ]
   |> Option.value ~default:4096
 
+let global_network_bridge config =
+  Otoml.find_opt config Otoml.get_string [ "global"; "network_bridge" ]
+  |> Option.value ~default:"ash0"
+
+let global_qemu_bridge_helper config =
+  Otoml.find_opt config Otoml.get_string [ "global"; "qemu_bridge_helper" ]
+  |> Option.value ~default:"/run/wrappers/bin/qemu-bridge-helper"
+
 let space_exists config space = Otoml.path_exists config [ "spaces"; space ]
 
 let space_extends config space =

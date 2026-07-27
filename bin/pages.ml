@@ -333,13 +333,16 @@ let ls =
            XDG_STATE_HOME is set, or ~/.local/state/ash otherwise.";
         `S "OUTPUT";
         `P
-          "Shows VM name, status, vsock CID when running, active SSH \
-           connection and PTY counts, host disk usage, apparent virtual size, \
-           last modification time, and state path.";
+          "Shows VM name, status, private IPv4 address and vsock CID when \
+           running, active SSH connection and PTY counts, host disk usage, \
+           apparent virtual size, last modification time, and state path.";
         `P
-          "SSH counts established AF_VSOCK connections to guest port 22. PTY \
+          "IP is the first global IPv4 address on the guest interface whose \
+           MAC matches the stable address generated for the VM name. SSH \
+           counts established AF_VSOCK connections to guest port 22. PTY \
            counts active SSH pseudo-terminals registered by the guest. A dash \
-           means the VM is stopped or the QGA query failed.";
+           means the VM is stopped, has no address yet, or the QGA query \
+           failed.";
         `P
           "DISK is host storage currently used. VIRTUAL is apparent size, \
            including sparse files such as persist.img. Both exclude ash's \

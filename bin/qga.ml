@@ -55,22 +55,41 @@ let result action output =
     exit_code = int_field ~field:"exitCode" output;
   }
 
-let ssh_stats_action =
+let vm_stats_action ~mac =
   let script =
     {sh|
 PATH=/run/current-system/sw/bin:/bin
+
+mac=$1
+interface=
+for address_file in /sys/class/net/*/address; do
+  [ -r "$address_file" ] || continue
+  read -r interface_mac < "$address_file" || continue
+  if [ "$interface_mac" = "$mac" ]; then
+    interface=${address_file%/address}
+    interface=${interface##*/}
+    break
+  fi
+done
+
+ip_address=-
+if [ -n "$interface" ]; then
+  ip_address=$(LC_ALL=C ip -o -4 address show dev "$interface" scope global |
+    awk 'NR == 1 { split($4, parts, "/"); print parts[1] }')
+  [ -n "$ip_address" ] || ip_address=-
+fi
 
 connections=$(LC_ALL=C ss --vsock -H -n state established |
   awk '$1 == "v_str" && $4 ~ /:22$/ { n++ } END { print n + 0 }')
 ptys=$(who |
   awk '$2 ~ /^pts\// && $NF == "(UNKNOWN)" { n++ } END { print n + 0 }')
-printf '%s %s\n' "$connections" "$ptys"
+printf '%s %s %s\n' "$ip_address" "$connections" "$ptys"
 |sh}
   in
   {
     path = "/run/current-system/sw/bin/sh";
-    args = [ "-c"; script; "ash-ssh-stats" ];
-    name = "ash-ssh-stats";
+    args = [ "-c"; script; "ash-vm-stats"; mac ];
+    name = "ash-vm-stats";
   }
 
 let shell_action ?(args = []) ~name script =

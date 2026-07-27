@@ -5,6 +5,10 @@
 # VM memory in MiB. Defaults to 4096.
 # memory = 8192
 
+# Private host bridge used for VM networking. Defaults shown below.
+# network_bridge = "ash0"
+# qemu_bridge_helper = "/run/wrappers/bin/qemu-bridge-helper"
+
 # Reuse a host-wide virtiofsd serving /nix/store. --ro-store-socket overrides this.
 # nix_store_virtiofs_socket = "/run/ash/nix-store.sock"
 

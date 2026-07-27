@@ -28,7 +28,11 @@ nix run github:0xferrous/ash -- --help
 Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
 `~/.config/ash/config.toml`. See [`example_config.toml`](./example_config.toml)
 for the global and space mount formats. Set
-`global.memory` to configure VM memory in MiB; it defaults to 4096. Set
+`global.memory` to configure VM memory in MiB; it defaults to 4096. VMs attach
+to the private host bridge `ash0` through
+`/run/wrappers/bin/qemu-bridge-helper`; override these with
+`global.network_bridge` and `global.qemu_bridge_helper`. The host must create
+the bridge and authorize it in `/etc/qemu/bridge.conf`. Set
 `global.nix_store_virtiofs_socket` to reuse a host-wide virtiofsd serving
 `/nix/store`; `--ro-store-socket` overrides it. For each VM, Ash also creates
 a lower-store metadata database under `shares/ro/guest-store-state` from the
