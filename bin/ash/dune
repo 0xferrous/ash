@@ -1,9 +1,4 @@
 (library
- (name ash_lib)
- (modules ash_config log nix qga systemd_run tui util virtle)
- (libraries unix base64 otoml yojson))
-
-(library
  (name ash_pages)
  (wrapped false)
  (modules pages)
@@ -13,7 +8,7 @@
  (public_name ash)
  (name main)
  (modules main)
- (libraries ash_lib ash_pages cmdliner))
+ (libraries ash ash_pages cmdliner))
 
 (executable
  (public_name ash-docs-html)

@@ -1,6 +1,6 @@
 # Run the test suite
 test:
-	nix develop -c dune exec test/test_manifest.exe
+	nix develop -c dune exec test/ash/test_manifest.exe
 
 # Format OCaml sources
 fmt:

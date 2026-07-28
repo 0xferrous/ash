@@ -1,4 +1,4 @@
-open Ash_lib
+open Ash
 
 let fail msg = failwith msg
 

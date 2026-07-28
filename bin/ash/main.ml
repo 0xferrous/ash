@@ -1,5 +1,5 @@
 open Cmdliner
-open Ash_lib
+open Ash
 
 let version = "0.1.0"
 

@@ -1,3 +1,0 @@
-(test
- (name test_manifest)
- (libraries ash_lib unix otoml yojson))
