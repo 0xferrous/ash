@@ -701,6 +701,22 @@ let test_virtiofs_idmap_args () =
        (Virtle.virtiofs_idmap_args ~uid:1000 ~subuid_start:100000
           ~subgid_start:200000))
 
+let test_virtiofs_idmap_fallback () =
+  let root = temp_dir "ash-test-idmap-fallback" in
+  let identity =
+    Virtle.Idmapped { uid = 1000; subuid_start = 100000; subgid_start = 200000 }
+  in
+  let result =
+    Virtle.prepare_guest_store_dirs ~run_foreground:(fun _ _ -> 1) identity root
+  in
+  (match result with
+  | Virtle.Squashed _ -> ()
+  | Virtle.Idmapped _ -> fail "failed id mapping should fall back to squash");
+  let upper = Filename.concat root "guest-store-upper" in
+  assert_bool "fallback guest store upper exists" true (Sys.is_directory upper);
+  assert_int "fallback guest store upper mode" 0o1777
+    ((Unix.stat upper).st_perm land 0o7777)
+
 let test_inspect_infers_fixed_mount_targets () =
   let fields tag =
     [ ("type", Otoml.TomlString "virtiofs"); ("tag", Otoml.TomlString tag) ]
@@ -1156,6 +1172,7 @@ let () =
     test_qga_mountpoint_inherits_parent_owner;
   run "virtiofs cache options" test_virtiofs_cache_options;
   run "virtiofs subordinate id mappings" test_virtiofs_idmap_args;
+  run "virtiofs idmap fallback" test_virtiofs_idmap_fallback;
   run "inspect infers fixed mount targets"
     test_inspect_infers_fixed_mount_targets;
   run "bindfs disables kernel metadata caches"

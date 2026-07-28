@@ -297,24 +297,23 @@ let shares_rw_virtiofs_extra_args = function
       virtiofs_idmap_args ~uid ~subuid_start ~subgid_start
   | Squashed { uid; gid } -> virtiofs_squash_args ~uid ~gid
 
-let prepare_guest_store_dirs identity shares_rw_host_dir =
+let prepare_guest_store_dirs ?(run_foreground = Util.run_foreground) identity
+    shares_rw_host_dir =
   let state = Filename.concat shares_rw_host_dir "guest-store-state" in
   let upper = Filename.concat shares_rw_host_dir "guest-store-upper" in
   let work = Filename.concat shares_rw_host_dir "guest-store-work" in
+  let prepare_squashed () =
+    Util.ensure_dir state;
+    Util.ensure_dir upper;
+    Unix.chmod upper 0o1777;
+    Util.ensure_dir work
+  in
   match identity with
   | Squashed _ ->
-      Util.ensure_dir state;
-      Util.ensure_dir upper;
-      Unix.chmod upper 0o1777;
-      Util.ensure_dir work
+      prepare_squashed ();
+      identity
   | Idmapped { uid; subuid_start; subgid_start } ->
-      let unshare =
-        find_exe
-          ~hint:
-            "install util-linux unshare and configure newuidmap/newgidmap \
-             wrappers."
-          None "unshare"
-      in
+      let unshare = find_exe None "unshare" in
       let shell = find_exe None "sh" in
       let script =
         {sh|set -eu
@@ -348,12 +347,16 @@ chmod 1777 "$upper"
           work;
         ]
       in
-      if Util.run_foreground unshare args <> 0 then
-        Log.fatal
-          "failed to prepare id-mapped guest store directories under %s\n\n\
-           Remove this VM state and create a fresh VM; existing directories \
-           may use the previous squashed ownership mapping."
-          shares_rw_host_dir
+      if run_foreground unshare args = 0 then identity
+      else
+        let fallback =
+          Squashed { uid = Unix.getuid (); gid = Unix.getgid () }
+        in
+        Log.warn
+          "could not create an id-mapped user namespace; shares-rw virtiofs \
+           will squash guest identities";
+        prepare_squashed ();
+        fallback
 
 let hotmount_slug ~host_dir ~guest_path =
   let digest = Digest.to_hex (Digest.string (host_dir ^ "\000" ^ guest_path)) in
@@ -2075,8 +2078,9 @@ let render_resolved_manifest inputs =
   Util.ensure_dir hotmounts_host_dir;
   Util.ensure_dir shares_ro_host_dir;
   Util.ensure_dir shares_rw_host_dir;
-  let shares_rw_identity = shares_rw_identity () in
-  prepare_guest_store_dirs shares_rw_identity shares_rw_host_dir;
+  let shares_rw_identity =
+    prepare_guest_store_dirs (shares_rw_identity ()) shares_rw_host_dir
+  in
   let workspace_mount =
     workspace_mount ~workspace_guest_dir ~workspace_host_dir
   in
