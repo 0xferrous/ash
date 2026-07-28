@@ -12,14 +12,17 @@
 # Reuse a host-wide virtiofsd serving /nix/store. --ro-store-socket overrides this.
 # nix_store_virtiofs_socket = "/run/ash/nix-store.sock"
 
-# Host capability Portal. Use "vsock" to make it reachable from VMs.
+# Host capability Portal. Managed mode starts one vsock host per VM.
 [portal]
 enabled = true
-global = true
-# transport = "unix" # or "vsock"
-# socket_path = "/run/user/1000/agent-portal/portal.sock"
+global = false
+# In global mode, set transport = "vsock", start agent-portal-host yourself,
+# and use these client destination values:
+# transport = "vsock"
 # vsock_cid = 2
 # vsock_port = 4050
+# socket_path is used only by standalone Unix-socket operation.
+# socket_path = "/run/user/1000/agent-portal/portal.sock"
 # prompt_command = "rofi -dmenu -p 'agent-portal'"
 
 [portal.policy.defaults]

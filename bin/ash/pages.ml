@@ -33,7 +33,8 @@ let main =
         `P
           "ash assumes host tools are available as needed: nix, virtle, \
            virtiofsd, bindfs, ssh, scp, systemd-ssh-proxy, systemd-run, \
-           systemctl, journalctl, ssh-keygen, /bin/sh, mountpoint, and du.";
+           systemctl, journalctl, ssh-keygen, agent-portal-host, /bin/sh, \
+           mountpoint, and du.";
         `P
           "Some paths can be resolved or overridden: virtle comes from \
            --virtle, ASH_VIRTLE, or PATH; ssh and systemd-ssh-proxy default to \
@@ -106,6 +107,21 @@ let spawn =
         `P
           "After inputs are built, spawn overwrites ash-state.toml with the \
            new inputs and renders virtle.toml from those same new inputs.";
+        `S "PORTAL";
+        `P
+          "When the config contains an enabled [portal] section with \
+           global=false, spawn adds a dedicated agent-portal-host vsock \
+           process to the virtle manifest. Virtle starts and stops it with the \
+           VM, deriving a unique unprivileged Portal port from the allocated \
+           guest CID.";
+        `P
+          "With portal.global=true, Ash requires transport=vsock and uses the \
+           configured vsock_cid and vsock_port without starting the host. The \
+           user must run agent-portal-host separately.";
+        `P
+          "Both modes install /etc/profile.d/ash-agent-portal.sh through QEMU \
+           Guest Agent so login shells export AGENT_PORTAL_VSOCK. The guest \
+           must already contain the Portal wrappers.";
         `P
           "Use ash regenerate NAME to re-render virtle.toml later from saved \
            ash-state.toml without launching the VM. Regeneration updates the \

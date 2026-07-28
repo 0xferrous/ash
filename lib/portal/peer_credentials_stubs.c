@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -93,6 +94,24 @@ CAMLprim value agent_portal_vsock_connect(value cid_value, value port_value) {
     fail_errno("connect(AF_VSOCK)", error);
   }
   CAMLreturn(Val_int(fd));
+#else
+  caml_failwith("AF_VSOCK is unavailable on this platform");
+#endif
+}
+
+CAMLprim value agent_portal_vsock_local_cid(value unit_value) {
+  CAMLparam1(unit_value);
+#ifdef __linux__
+  int fd = open("/dev/vsock", O_RDONLY | O_CLOEXEC);
+  if (fd == -1) fail_errno("open(/dev/vsock)", errno);
+  unsigned int cid;
+  if (ioctl(fd, IOCTL_VM_SOCKETS_GET_LOCAL_CID, &cid) == -1) {
+    int error = errno;
+    close(fd);
+    fail_errno("ioctl(IOCTL_VM_SOCKETS_GET_LOCAL_CID)", error);
+  }
+  close(fd);
+  CAMLreturn(Val_int(cid));
 #else
   caml_failwith("AF_VSOCK is unavailable on this platform");
 #endif

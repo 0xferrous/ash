@@ -52,6 +52,16 @@ let bool_field table key =
   | Otoml.TomlBoolean value -> value
   | _ -> fail ("field is not bool: " ^ key)
 
+let strings_field table key =
+  match table_field table key with
+  | Otoml.TomlArray values ->
+      List.map
+        (function
+          | Otoml.TomlString value -> value
+          | _ -> fail ("field contains a non-string: " ^ key))
+        values
+  | _ -> fail ("field is not a string array: " ^ key)
+
 let table_array doc key =
   match Otoml.find_opt doc Otoml.get_value [ key ] with
   | Some (Otoml.TomlTableArray values) ->
@@ -110,10 +120,12 @@ let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
 let render ?(spaces = []) ?user ?(print_serial = false) ?(mount_cwd = false)
-    ?ro_store_socket ?(kitty = false) ~config ~flake ~name () =
+    ?ro_store_socket ?(kitty = false) ?(config_path = "/tmp/config.toml")
+    ~config ~flake ~name () =
   Virtle.render_resolved_manifest
     {
       config;
+      config_path;
       flake;
       target = test_target;
       boot = test_boot;
@@ -125,6 +137,7 @@ let render ?(spaces = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       ro_store_socket;
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
+      portal_host = Some "/bin/agent-portal-host";
       kitty;
       virtiofsd = "/bin/virtiofsd";
       virtle = "/bin/virtle";
@@ -503,6 +516,75 @@ rw_mounts = [%S]
   assert_equal "deduplication keeps first defining space tag"
     (Ash_config.path_tag "base" shared "/mnt/shared")
     shared_mount.tag
+
+let test_managed_portal_manifest () =
+  let config =
+    parse_toml {|[portal]
+enabled = true
+global = false
+vsock_cid = 2
+|}
+  in
+  let _, manifest =
+    render ~config ~config_path:"/tmp/ash-portal-config.toml"
+      ~flake:"../my-nix#agent" ~name:"managed-portal" ()
+  in
+  let doc = parse_toml manifest in
+  let runs = table_array doc "run" in
+  assert_int "managed portal run count" 1 (List.length runs);
+  let exec = strings_field (List.hd runs) "exec" in
+  assert_equal "managed portal executable" "/bin/agent-portal-host"
+    (List.hd exec);
+  assert_bool "managed portal config argument" true
+    (List.mem "/tmp/ash-portal-config.toml" exec);
+  assert_bool "managed portal CID port option" true
+    (List.mem "--vsock-port-for-cid" exec);
+  assert_bool "managed portal CID port template" true (List.mem "{{.CID}}" exec);
+  let files = table_array doc "write_files" in
+  assert_int "managed portal profile count" 1 (List.length files);
+  let profile = List.hd files in
+  assert_equal "managed portal profile path"
+    "/etc/profile.d/ash-agent-portal.sh"
+    (string_field profile "guest_path");
+  let text = string_field profile "text" in
+  assert_string_contains "managed portal exports endpoint" text
+    "AGENT_PORTAL_VSOCK=managed:2"
+
+let test_global_portal_manifest () =
+  let config =
+    parse_toml
+      {|[portal]
+enabled = true
+global = true
+transport = "vsock"
+vsock_cid = 2
+vsock_port = 44050
+|}
+  in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"global-portal" ()
+  in
+  let doc = parse_toml manifest in
+  assert_int "global portal has no managed run" 0
+    (List.length (table_array doc "run"));
+  let files = table_array doc "write_files" in
+  assert_int "global portal profile count" 1 (List.length files);
+  assert_string_contains "global portal endpoint"
+    (string_field (List.hd files) "text")
+    "AGENT_PORTAL_VSOCK=2:44050"
+
+let test_disabled_portal_manifest () =
+  let config = parse_toml "[portal]\nenabled = false\n" in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"disabled-portal" ()
+  in
+  let doc = parse_toml manifest in
+  assert_int "disabled portal run count" 0 (List.length (table_array doc "run"));
+  let files = table_array doc "write_files" in
+  assert_int "disabled portal cleanup file count" 1 (List.length files);
+  assert_string_contains "disabled portal clears stale endpoint"
+    (string_field (List.hd files) "text")
+    "unset AGENT_PORTAL_VSOCK AGENT_PORTAL_SOCKET"
 
 let test_global_nix_store_virtiofs_socket () =
   let root = temp_dir "ash-test-global-store-socket" in
@@ -1157,6 +1239,9 @@ let () =
   run "space extension evaluation" test_space_extension_evaluation;
   run "space mount deduplication after parsing"
     test_space_mount_deduplication_after_parsing;
+  run "managed portal manifest" test_managed_portal_manifest;
+  run "global portal manifest" test_global_portal_manifest;
+  run "disabled portal manifest" test_disabled_portal_manifest;
   run "global nix store virtiofs socket" test_global_nix_store_virtiofs_socket;
   run "ro-store socket override" test_ro_store_socket_override;
   run "kitty selects kitten ssh wrapper" test_kitty_selects_kitten_ssh_wrapper;

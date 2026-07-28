@@ -55,9 +55,9 @@ agent-portal-cli ping --socket /tmp/portal.sock
 agent-portal-cli ping --vsock 2:4050
 ```
 
-To serve guests over vsock, set `transport = "vsock"` or start the host with
-`--vsock-port PORT`. The host binds `VMADDR_CID_ANY`; clients default to host
-CID 2.
+To serve guests over vsock directly, set `transport = "vsock"` or start the
+host with `--vsock-port PORT`. The host binds `VMADDR_CID_ANY`; clients default
+to host CID 2. Ash can also manage this automatically as described below.
 
 ## Configuration lookup
 
@@ -196,8 +196,41 @@ therefore skips host binaries located in its own executable directory when
 searching `PATH`. Explicit `AGENT_PORTAL_HOST_GH` and
 `AGENT_PORTAL_HOST_WL_PASTE` paths take precedence.
 
-## Current Ash integration boundary
+## Ash integration
 
-Portal can communicate across a VM boundary over vsock, but Ash does not yet
-start the host service or inject the selected endpoint into guests
-automatically. Configure the host and guest wrappers explicitly for now.
+Ash integrates Portal when the Ash config contains an enabled `[portal]`
+section.
+
+With `global = false` (the default managed mode), each VM gets a dedicated
+Portal process. Ash adds `agent-portal-host` to the generated virtle `run`
+processes, derives a unique unprivileged host port as `65536 + guest CID`, and
+lets virtle stop the process with the VM. The generated guest profile exports
+`AGENT_PORTAL_VSOCK=managed:2`; the client asks AF_VSOCK for its local CID and
+derives the matching port. `transport`, `socket_path`, and `vsock_port` are
+ignored for the managed endpoint.
+
+```toml
+[portal]
+enabled = true
+global = false
+```
+
+With `global = true`, the Portal is user-managed. Ash does not start it, but it
+writes the configured endpoint into the guest profile. Global VM integration
+requires `transport = "vsock"`:
+
+```toml
+[portal]
+enabled = true
+global = true
+transport = "vsock"
+vsock_cid = 2
+vsock_port = 4050
+```
+
+Start `agent-portal-host` separately in global mode. Managed mode resolves the
+host executable beside `ash`, from `ASH_AGENT_PORTAL_HOST`, or from `PATH`.
+The guest image must include the Portal wrappers and run QEMU Guest Agent so
+virtle can install `/etc/profile.d/ash-agent-portal.sh` before SSH readiness.
+Setting `portal.enabled = false` rewrites that generated profile to clear stale
+Portal environment variables on the next boot.

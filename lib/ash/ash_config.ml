@@ -43,6 +43,11 @@ let global_qemu_bridge_helper config =
   Otoml.find_opt config Otoml.get_string [ "global"; "qemu_bridge_helper" ]
   |> Option.value ~default:"/run/wrappers/bin/qemu-bridge-helper"
 
+let portal config =
+  if Otoml.path_exists config [ "portal" ] then
+    Some (Agent_portal.Config.of_document config)
+  else None
+
 let space_exists config space = Otoml.path_exists config [ "spaces"; space ]
 
 let space_extends config space =

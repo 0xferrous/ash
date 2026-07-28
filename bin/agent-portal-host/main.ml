@@ -1,22 +1,27 @@
 open Cmdliner
 
-let run config socket vsock_port log_file =
+let run config socket vsock_port vsock_port_for_cid log_file =
   try
     let portal = Agent_portal.Config.load ?path:config () in
     let endpoint =
-      match (socket, vsock_port) with
-      | Some _, Some _ ->
-          invalid_arg "--socket and --vsock-port are mutually exclusive"
-      | Some path, None -> Agent_portal.Transport.Unix path
-      | None, Some port ->
+      match (socket, vsock_port, vsock_port_for_cid) with
+      | Some path, None, None -> Agent_portal.Transport.Unix path
+      | None, Some port, None ->
           Agent_portal.Transport.vsock ~cid:portal.vsock_cid ~port
-      | None, None -> (
+      | None, None, Some cid ->
+          let port = Agent_portal.Transport.managed_port_for_cid cid in
+          Agent_portal.Transport.vsock ~cid:portal.vsock_cid ~port
+      | None, None, None -> (
           match portal.transport with
           | Agent_portal.Config.Unix ->
               Agent_portal.Transport.Unix portal.socket_path
           | Agent_portal.Config.Vsock ->
               Agent_portal.Transport.vsock ~cid:portal.vsock_cid
                 ~port:portal.vsock_port)
+      | _ ->
+          invalid_arg
+            "--socket, --vsock-port, and --vsock-port-for-cid are mutually \
+             exclusive"
     in
     let log_path =
       Agent_portal.Logging.init ?path:log_file portal.socket_path
@@ -48,6 +53,16 @@ let vsock_port =
     & opt (some int) None
     & info [ "vsock-port" ] ~doc:"Listen on the AF_VSOCK port." ~docv:"PORT")
 
+let vsock_port_for_cid =
+  Arg.(
+    value
+    & opt (some int) None
+    & info [ "vsock-port-for-cid" ]
+        ~doc:
+          "Listen on the managed AF_VSOCK port derived from CID. Intended for \
+           Ash-managed Portal processes."
+        ~docv:"CID")
+
 let log_file =
   Arg.(
     value
@@ -59,6 +74,7 @@ let command =
   Cmd.v
     (Cmd.info "agent-portal-host"
        ~doc:"mediate guest access to selected host capabilities")
-    Term.(const run $ config $ socket $ vsock_port $ log_file)
+    Term.(
+      const run $ config $ socket $ vsock_port $ vsock_port_for_cid $ log_file)
 
 let () = exit (Cmd.eval' command)

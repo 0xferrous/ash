@@ -148,7 +148,9 @@ let test_transport () =
   in
   check "2:4050" 2 4050;
   check "vsock:7:44050" 7 44050;
-  check "vsock://9:1234" 9 1234
+  check "vsock://9:1234" 9 1234;
+  assert_true "managed port avoids privileged range"
+    (Portal.Transport.managed_port_for_cid 3 = 65539)
 
 let test_gh_policy () =
   assert_true "gh pr view is read"

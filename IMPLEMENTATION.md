@@ -88,6 +88,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
 - `systemd-ssh-proxy` — host SSH proxy used for vsock SSH connections. Defaults to the selected NixOS config's `config.systemd.package`; override with `--systemd-ssh-proxy PATH`.
 - `systemd-run` — starts background VMs as transient user units for `ash spawn`, `ash spawn --attach --keep`, and `ash attach --spawn --keep`.
+- `agent-portal-host` — required when `[portal]` is enabled with `global = false`; resolved beside `ash`, from `ASH_AGENT_PORTAL_HOST`, or from `PATH`.
 - `systemctl` — checks/stops ash-owned background units for `ash stop`.
 - `journalctl` — reads logs from ash-owned background units for `ash logs`.
 - `ssh-keygen` — creates ash's SSH autoprovisioning key when needed.
@@ -176,7 +177,7 @@ nixosConfigurations.<HOST>.config.services.getty.autologinUser
 nixosConfigurations.<HOST>.config.users.users.<USER>.name
 ```
 
-Then it reads `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. The optional `global.nix_store_virtiofs_socket` setting selects an existing host-wide virtiofsd socket serving `/nix/store`; `--ro-store-socket` takes precedence. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
+Then it reads `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. The optional `global.nix_store_virtiofs_socket` setting selects an existing host-wide virtiofsd socket serving `/nix/store`; `--ro-store-socket` takes precedence. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
 
 Space selection is explicit:
 
@@ -400,9 +401,22 @@ The `gh` policy table in `lib/portal/gh_policy.ml` is generated from
 `data/gh-policy.json`; `tools/gh-policy-gen.py` refreshes the report, JSON, and
 OCaml source from the installed GitHub CLI command tree.
 
-See [`PORTAL.md`](./PORTAL.md) for configuration and wrapper contracts. Portal
-can cross the VM boundary over vsock, but Ash does not yet start it or inject
-its endpoint automatically.
+See [`PORTAL.md`](./PORTAL.md) for configuration and wrapper contracts. When
+`[portal]` is explicitly enabled, Ash integrates it with generated VM
+manifests. Managed mode (`global = false`) adds a per-VM
+`agent-portal-host --vsock-port-for-cid {{.CID}}` virtle `run` process. The
+managed port is `65536 + guest CID`, which stays out of the privileged range
+and remains unique among running VMs; virtle owns the process lifecycle.
+Global mode requires `transport = "vsock"` and uses the configured
+CID and port without starting a host process.
+
+Both modes add `/etc/profile.d/ash-agent-portal.sh` through virtle
+`write_files`. Managed mode exports `AGENT_PORTAL_VSOCK=managed:<host-cid>`;
+the client obtains its local CID from AF_VSOCK and derives the same managed
+port. Global mode exports the configured endpoint.
+QEMU Guest Agent is therefore required, and the guest must already contain the
+Portal wrappers. Managed host resolution checks beside the `ash` executable,
+then `ASH_AGENT_PORTAL_HOST`, then `PATH`.
 
 ## Build
 

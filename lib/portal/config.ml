@@ -143,75 +143,75 @@ let container_policies document defaults =
         entries
   | Some _ -> invalid_arg "portal.policy.containers must be a table"
 
-let load ?path () =
+let of_document document =
   let fallback = defaults () in
+  let p name = [ "portal"; name ] in
+  let nested section name = [ "portal"; section; name ] in
+  let policy_defaults =
+    policy_table document [ "portal"; "policy"; "defaults" ] fallback.defaults
+  in
+  {
+    enabled = get document Otoml.get_boolean (p "enabled") fallback.enabled;
+    global = get document Otoml.get_boolean (p "global") fallback.global;
+    transport =
+      get document Otoml.get_string (p "transport") "unix" |> transport;
+    socket_path =
+      get document Otoml.get_string (p "socket_path") fallback.socket_path
+      |> expand_home;
+    vsock_cid =
+      get document Otoml.get_integer (p "vsock_cid") fallback.vsock_cid
+      |> uint32 "portal.vsock_cid";
+    vsock_port =
+      get document Otoml.get_integer (p "vsock_port") fallback.vsock_port
+      |> positive_uint32 "portal.vsock_port";
+    prompt_command =
+      Otoml.find_opt document Otoml.get_string (p "prompt_command");
+    request_timeout_ms =
+      get document Otoml.get_integer
+        (nested "timeouts" "request_ms")
+        fallback.request_timeout_ms;
+    prompt_timeout_ms =
+      get document Otoml.get_integer
+        (nested "timeouts" "prompt_ms")
+        fallback.prompt_timeout_ms;
+    max_inflight =
+      get document Otoml.get_integer
+        (nested "limits" "max_inflight")
+        fallback.max_inflight;
+    prompt_queue =
+      get document Otoml.get_integer
+        (nested "limits" "prompt_queue")
+        fallback.prompt_queue;
+    rate_per_minute =
+      get document Otoml.get_integer
+        (nested "limits" "rate_per_minute")
+        fallback.rate_per_minute;
+    rate_burst =
+      get document Otoml.get_integer
+        (nested "limits" "rate_burst")
+        fallback.rate_burst;
+    max_clipboard_bytes =
+      get document Otoml.get_integer
+        (nested "limits" "max_clipboard_bytes")
+        fallback.max_clipboard_bytes;
+    allowed_mime =
+      get document
+        (Otoml.get_array Otoml.get_string)
+        (nested "clipboard" "allowed_mime")
+        fallback.allowed_mime;
+    defaults = policy_defaults;
+    containers = container_policies document policy_defaults;
+  }
+
+let load ?path () =
   let path = Option.value path ~default:(default_path ()) |> expand_home in
-  if not (Sys.file_exists path) then fallback
+  if not (Sys.file_exists path) then defaults ()
   else
-    let document =
-      match Otoml.Parser.from_file_result path with
-      | Ok document -> document
-      | Error message ->
-          failwith
-            (Printf.sprintf "failed to parse portal config %s: %s" path message)
-    in
-    let p name = [ "portal"; name ] in
-    let nested section name = [ "portal"; section; name ] in
-    let policy_defaults =
-      policy_table document [ "portal"; "policy"; "defaults" ] fallback.defaults
-    in
-    {
-      enabled = get document Otoml.get_boolean (p "enabled") fallback.enabled;
-      global = get document Otoml.get_boolean (p "global") fallback.global;
-      transport =
-        get document Otoml.get_string (p "transport") "unix" |> transport;
-      socket_path =
-        get document Otoml.get_string (p "socket_path") fallback.socket_path
-        |> expand_home;
-      vsock_cid =
-        get document Otoml.get_integer (p "vsock_cid") fallback.vsock_cid
-        |> uint32 "portal.vsock_cid";
-      vsock_port =
-        get document Otoml.get_integer (p "vsock_port") fallback.vsock_port
-        |> positive_uint32 "portal.vsock_port";
-      prompt_command =
-        Otoml.find_opt document Otoml.get_string (p "prompt_command");
-      request_timeout_ms =
-        get document Otoml.get_integer
-          (nested "timeouts" "request_ms")
-          fallback.request_timeout_ms;
-      prompt_timeout_ms =
-        get document Otoml.get_integer
-          (nested "timeouts" "prompt_ms")
-          fallback.prompt_timeout_ms;
-      max_inflight =
-        get document Otoml.get_integer
-          (nested "limits" "max_inflight")
-          fallback.max_inflight;
-      prompt_queue =
-        get document Otoml.get_integer
-          (nested "limits" "prompt_queue")
-          fallback.prompt_queue;
-      rate_per_minute =
-        get document Otoml.get_integer
-          (nested "limits" "rate_per_minute")
-          fallback.rate_per_minute;
-      rate_burst =
-        get document Otoml.get_integer
-          (nested "limits" "rate_burst")
-          fallback.rate_burst;
-      max_clipboard_bytes =
-        get document Otoml.get_integer
-          (nested "limits" "max_clipboard_bytes")
-          fallback.max_clipboard_bytes;
-      allowed_mime =
-        get document
-          (Otoml.get_array Otoml.get_string)
-          (nested "clipboard" "allowed_mime")
-          fallback.allowed_mime;
-      defaults = policy_defaults;
-      containers = container_policies document policy_defaults;
-    }
+    match Otoml.Parser.from_file_result path with
+    | Ok document -> of_document document
+    | Error message ->
+        failwith
+          (Printf.sprintf "failed to parse portal config %s: %s" path message)
 
 let policy_for_container config container_id =
   match

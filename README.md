@@ -152,8 +152,9 @@ implementation. Its code is isolated under `lib/portal/`,
 on the Ash VM implementation.
 
 See [PORTAL.md](./PORTAL.md) for configuration, security behavior, and wrapper
-compatibility. The Portal host and clients support vsock, but Ash does not yet
-start the service or inject its endpoint into VMs automatically.
+compatibility. With an enabled `[portal]` section, Ash either manages a
+per-VM vsock Portal process or injects the endpoint of a user-managed global
+Portal into the guest.
 
 ## Source layout
 
