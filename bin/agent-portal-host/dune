@@ -1,0 +1,4 @@
+(executable
+ (public_name agent-portal-host)
+ (name main)
+ (libraries agent_portal cmdliner))

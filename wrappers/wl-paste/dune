@@ -1,0 +1,4 @@
+(executable
+ (public_name wl-paste)
+ (name main)
+ (libraries agent_portal))

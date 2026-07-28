@@ -360,9 +360,48 @@ Host-side virtiofs mounts require `virtiofsd`. `ash` resolves `virtiofsd` from `
 
 `ash` currently emits `kvm = true` in the generated manifest, so the host is expected to provide usable KVM acceleration, typically via `/dev/kvm` on Linux.
 
+## Source organization
+
+The repository uses separate wrapped OCaml libraries and thin executable entry
+points:
+
+```text
+lib/ash/                 `Ash` VM-management library
+bin/ash/                 Ash CLI and command-page generator
+lib/portal/              `Agent_portal` library
+bin/agent-portal-host/   Portal host entry point
+bin/agent-portal-cli/    Portal client entry point
+wrappers/wl-paste/       Wayland clipboard compatibility wrapper
+test/ash/                Ash tests
+test/portal/             Portal tests
+```
+
+`Agent_portal` does not depend on `Ash`. The Portal host, client, and wrappers
+therefore remain usable independently from VM orchestration.
+
+## Agent Portal implementation
+
+Portal uses protocol-versioned MessagePack requests over a Unix socket. It
+keeps Agent-box's method and response representation so the OCaml and Rust
+implementations can communicate with each other. The supported methods are
+`ping`, `clipboard.read_image`, and approval-gated `exec`.
+
+The host authenticates local callers with `SO_PEERCRED`, attempts Podman
+container attribution from cgroups, applies default or per-container policy,
+and enforces concurrency, rate, prompt, timeout, and clipboard-size limits.
+The socket directory and socket use modes `0700` and `0600`. Host command
+resolution skips the package's own executable directory to avoid recursively
+calling the installed wrappers.
+
+See [`PORTAL.md`](./PORTAL.md) for configuration and wrapper contracts. Portal
+is currently standalone: Ash does not yet transport its Unix socket across the
+VM boundary.
+
 ## Build
 
 ```sh
 nix build
 ./result/bin/ash --help
+./result/bin/agent-portal-host --help
+./result/bin/agent-portal-cli --help
 ```

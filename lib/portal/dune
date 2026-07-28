@@ -1,0 +1,6 @@
+(library
+ (name agent_portal)
+ (libraries unix threads otoml msgpck)
+ (foreign_stubs
+  (language c)
+  (names peer_credentials_stubs)))

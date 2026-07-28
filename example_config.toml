@@ -12,6 +12,16 @@
 # Reuse a host-wide virtiofsd serving /nix/store. --ro-store-socket overrides this.
 # nix_store_virtiofs_socket = "/run/ash/nix-store.sock"
 
+# Standalone host capability Portal. Ash does not yet mount this socket into VMs.
+[portal]
+enabled = true
+global = true
+# socket_path = "/run/user/1000/agent-portal/portal.sock"
+# prompt_command = "rofi -dmenu -p 'agent-portal'"
+
+[portal.policy.defaults]
+clipboard_read_image = "allow"
+
 [spaces.common]
 ro_mounts = [
   "~/.config/git:~/.config/git",

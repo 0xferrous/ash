@@ -34,6 +34,7 @@
           propagatedBuildInputs = [
             ocamlPackages.base64
             ocamlPackages.cmdliner
+            ocamlPackages.msgpck
             ocamlPackages.otoml
             ocamlPackages.yojson
           ];
@@ -69,6 +70,7 @@
             ocamlPackages.ocaml
             ocamlPackages.dune_3
             ocamlPackages.ocamlformat
+            ocamlPackages.msgpck
             ocamlPackages.otoml
             ocamlPackages.utop
           ];

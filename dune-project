@@ -20,5 +20,6 @@
   dune
   base64
   cmdliner
+  msgpck
   otoml
   yojson))

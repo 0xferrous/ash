@@ -7,6 +7,7 @@ Most documentation lives in the command help and generated command pages:
 
 - <https://0xf.rs/ash/>
 - [Implementation notes](./IMPLEMENTATION.md)
+- [Agent Portal and wrappers](./PORTAL.md)
 
 ## Install / run
 
@@ -132,6 +133,37 @@ Reset a stopped VM's Nix store metadata and writable overlay:
 ash stop work
 ash rebuild-db work
 ash attach --spawn work
+```
+
+## Agent Portal
+
+The repository also builds a standalone OCaml implementation of the Agent-box
+Portal protocol:
+
+- `agent-portal-host` — host-side capability broker
+- `agent-portal-cli` — diagnostic and direct API client
+- `wl-paste` — transparent image-clipboard wrapper
+
+Portal uses MessagePack over a permission-restricted Unix socket and remains
+wire-compatible with the Rust Agent-box implementation. Its code is isolated
+under `lib/portal/`, `bin/agent-portal-*`, and `wrappers/`; it does not depend
+on the Ash VM implementation.
+
+See [PORTAL.md](./PORTAL.md) for configuration, security behavior, and wrapper
+compatibility. Ash does not yet mount or transport the Portal socket into its
+VMs automatically.
+
+## Source layout
+
+```text
+lib/ash/                 Ash VM-management library
+bin/ash/                 ash and ash-docs-html entry points
+lib/portal/              Agent_portal protocol, client, and host library
+bin/agent-portal-host/   host daemon entry point
+bin/agent-portal-cli/    diagnostic CLI entry point
+wrappers/                transparent compatibility executables
+test/ash/                Ash tests
+test/portal/             Portal tests
 ```
 
 ## More detail
