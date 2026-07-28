@@ -124,9 +124,11 @@ let spawn =
            configured vsock_cid and vsock_port without starting the host. The \
            user must run agent-portal-host separately.";
         `P
-          "Both modes install /etc/profile.d/ash-agent-portal.sh through QEMU \
-           Guest Agent so login shells export AGENT_PORTAL_VSOCK. The guest \
-           must already contain the Portal wrappers.";
+          "Both modes install /etc/profile.d/ash-agent-portal.sh for POSIX \
+           shells and \
+           ~/.local/share/nushell/vendor/autoload/ash-agent-portal.nu for \
+           Nushell through QEMU Guest Agent. The guest must already contain \
+           the Portal wrappers.";
         `P
           "Use ash regenerate NAME to re-render virtle.toml later from saved \
            ash-state.toml without launching the VM. Regeneration updates the \

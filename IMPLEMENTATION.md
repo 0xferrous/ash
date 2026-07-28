@@ -413,7 +413,8 @@ and remains unique among running VMs; virtle owns the process lifecycle.
 Global mode requires `transport = "vsock"` and uses the configured
 CID and port without starting a host process.
 
-Both modes add `/etc/profile.d/ash-agent-portal.sh` through virtle
+Both modes add `/etc/profile.d/ash-agent-portal.sh` and the guest user's
+`~/.local/share/nushell/vendor/autoload/ash-agent-portal.nu` through virtle
 `write_files`. Managed mode exports `AGENT_PORTAL_VSOCK=managed:<host-cid>`;
 the client obtains its local CID from AF_VSOCK and derives the same managed
 port. Global mode exports the configured endpoint.

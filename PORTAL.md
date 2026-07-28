@@ -231,6 +231,8 @@ vsock_port = 4050
 Start `agent-portal-host` separately in global mode. Managed mode resolves the
 host executable beside `ash`, from `ASH_AGENT_PORTAL_HOST`, or from `PATH`.
 The guest image must include the Portal wrappers and run QEMU Guest Agent so
-virtle can install `/etc/profile.d/ash-agent-portal.sh` before SSH readiness.
-Setting `portal.enabled = false` rewrites that generated profile to clear stale
+virtle can install shell startup files before SSH readiness. Ash writes
+`/etc/profile.d/ash-agent-portal.sh` for POSIX shells and
+`~/.local/share/nushell/vendor/autoload/ash-agent-portal.nu` for Nushell.
+Setting `portal.enabled = false` rewrites both generated files to clear stale
 Portal environment variables on the next boot.

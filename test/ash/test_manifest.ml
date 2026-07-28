@@ -541,14 +541,23 @@ vsock_cid = 2
     (List.mem "--vsock-port-for-cid" exec);
   assert_bool "managed portal CID port template" true (List.mem "{{.CID}}" exec);
   let files = table_array doc "write_files" in
-  assert_int "managed portal profile count" 1 (List.length files);
+  assert_int "managed portal environment file count" 2 (List.length files);
   let profile = List.hd files in
   assert_equal "managed portal profile path"
     "/etc/profile.d/ash-agent-portal.sh"
     (string_field profile "guest_path");
   let text = string_field profile "text" in
   assert_string_contains "managed portal exports endpoint" text
-    "AGENT_PORTAL_VSOCK=managed:2"
+    "AGENT_PORTAL_VSOCK=managed:2";
+  let nushell = List.nth files 1 in
+  assert_equal "managed portal Nushell path"
+    "/home/agent/.local/share/nushell/vendor/autoload/ash-agent-portal.nu"
+    (string_field nushell "guest_path");
+  assert_equal "managed portal Nushell owner" "agent:users"
+    (string_field nushell "chown");
+  assert_string_contains "managed portal sets Nushell endpoint"
+    (string_field nushell "text")
+    {|$env.AGENT_PORTAL_VSOCK = "managed:2"|}
 
 let test_global_portal_manifest () =
   let config =
@@ -568,10 +577,13 @@ vsock_port = 44050
   assert_int "global portal has no managed run" 0
     (List.length (table_array doc "run"));
   let files = table_array doc "write_files" in
-  assert_int "global portal profile count" 1 (List.length files);
+  assert_int "global portal environment file count" 2 (List.length files);
   assert_string_contains "global portal endpoint"
     (string_field (List.hd files) "text")
-    "AGENT_PORTAL_VSOCK=2:44050"
+    "AGENT_PORTAL_VSOCK=2:44050";
+  assert_string_contains "global portal Nushell endpoint"
+    (string_field (List.nth files 1) "text")
+    {|$env.AGENT_PORTAL_VSOCK = "2:44050"|}
 
 let test_disabled_portal_manifest () =
   let config = parse_toml "[portal]\nenabled = false\n" in
@@ -581,10 +593,13 @@ let test_disabled_portal_manifest () =
   let doc = parse_toml manifest in
   assert_int "disabled portal run count" 0 (List.length (table_array doc "run"));
   let files = table_array doc "write_files" in
-  assert_int "disabled portal cleanup file count" 1 (List.length files);
+  assert_int "disabled portal cleanup file count" 2 (List.length files);
   assert_string_contains "disabled portal clears stale endpoint"
     (string_field (List.hd files) "text")
-    "unset AGENT_PORTAL_VSOCK AGENT_PORTAL_SOCKET"
+    "unset AGENT_PORTAL_VSOCK AGENT_PORTAL_SOCKET";
+  assert_string_contains "disabled portal clears stale Nushell endpoint"
+    (string_field (List.nth files 1) "text")
+    "hide-env --ignore-errors AGENT_PORTAL_VSOCK AGENT_PORTAL_SOCKET"
 
 let test_global_nix_store_virtiofs_socket () =
   let root = temp_dir "ash-test-global-store-socket" in
