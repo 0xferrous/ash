@@ -9,7 +9,7 @@ let print_exec result =
   flush stderr;
   result.exit_code
 
-let run socket config reason out command =
+let run socket config reason out require_approval command =
   try
     let client = Client.create ?socket ?config () in
     match command with
@@ -32,6 +32,8 @@ let run socket config reason out command =
         | None ->
             Printf.printf "received %d bytes (%s)\n" (String.length bytes) mime);
         0
+    | `Gh arguments ->
+        Client.gh_exec client arguments reason require_approval |> print_exec
     | `Exec (arguments, cwd, environment) -> (
         match
           Client.request client
@@ -69,6 +71,12 @@ let out =
     & opt (some string) None
     & info [ "out" ] ~doc:"Write clipboard bytes to PATH." ~docv:"PATH")
 
+let approval =
+  Arg.(
+    value & flag
+    & info [ "require-approval" ]
+        ~doc:"Require host approval for this gh.exec request.")
+
 let arguments = Arg.(value & pos_all string [] & info [] ~docv:"ARG")
 let cwd = Arg.(value & opt (some string) None & info [ "cwd" ] ~docv:"PATH")
 
@@ -86,7 +94,8 @@ let environment_pairs values =
     values
 
 let common make term =
-  Term.(const run $ socket $ config $ reason $ out $ (const make $ term))
+  Term.(
+    const run $ socket $ config $ reason $ out $ approval $ (const make $ term))
 
 let ping = Cmd.v (Cmd.info "ping") (common (fun () -> `Ping) Term.(const ()))
 
@@ -94,6 +103,8 @@ let clipboard =
   Cmd.v
     (Cmd.info "clipboard-read-image")
     (common (fun () -> `Clipboard) Term.(const ()))
+
+let gh = Cmd.v (Cmd.info "gh-exec") (common (fun argv -> `Gh argv) arguments)
 
 let exec_arguments =
   Term.(
@@ -109,6 +120,6 @@ let exec =
 let command =
   Cmd.group
     (Cmd.info "agent-portal-cli" ~doc:"call the agent host portal")
-    [ ping; clipboard; exec ]
+    [ ping; clipboard; gh; exec ]
 
 let () = exit (Cmd.eval' command)

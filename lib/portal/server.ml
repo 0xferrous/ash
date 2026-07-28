@@ -161,6 +161,14 @@ let clipboard_image config =
     failwith "clipboard image exceeds configured size limit";
   (mime, image.stdout)
 
+let gh_should_prompt policy operation require_approval =
+  require_approval
+  ||
+  match policy.Config.gh_exec with
+  | Config.Ask_for_all -> true
+  | Config.Ask_for_none | Config.Deny_all -> false
+  | Config.Ask_for_writes -> operation <> Gh_policy.Read
+
 let send socket response =
   Wire.write socket (Protocol.response_to_msgpack response)
 
@@ -214,6 +222,47 @@ let handle state socket =
                 with exn ->
                   Protocol.error request.id "clipboard_failed"
                     (Printexc.to_string exn)))
+        | Protocol.Gh_exec { argv; reason; require_approval } -> (
+            let operation = Gh_policy.classify argv in
+            Logging.info "gh.exec id=%Ld policy=%s operation=%s argv=%S"
+              request.id
+              (match policy.gh_exec with
+              | Config.Ask_for_writes -> "ask_for_writes"
+              | Config.Ask_for_all -> "ask_for_all"
+              | Config.Ask_for_none -> "ask_for_none"
+              | Config.Deny_all -> "deny_all")
+              (match operation with
+              | Gh_policy.Read -> "read"
+              | Gh_policy.Write -> "write"
+              | Gh_policy.Read_write -> "read_write"
+              | Gh_policy.Unknown -> "unknown")
+              (String.concat " " argv);
+            if policy.gh_exec = Config.Deny_all then
+              Protocol.error request.id "denied" "gh.exec denied by policy"
+            else
+              let allowed =
+                if gh_should_prompt policy operation require_approval then
+                  prompt state caller reason
+                else Ok true
+              in
+              match allowed with
+              | Error message ->
+                  Protocol.error request.id "prompt_failed" message
+              | Ok false ->
+                  Protocol.error request.id "denied" "request denied by policy"
+              | Ok true -> (
+                  try
+                    let gh =
+                      Process.find_host_binary
+                        ~override_env:"AGENT_PORTAL_HOST_GH" "gh"
+                    in
+                    Protocol.ok request.id
+                      (Protocol.Gh_exec_result
+                         (Process.run
+                            ~timeout_ms:state.config.request_timeout_ms gh argv))
+                  with exn ->
+                    Protocol.error request.id "gh_exec_failed"
+                      (Printexc.to_string exn)))
         | Protocol.Exec { argv; reason; cwd; env } -> (
             match prompt state caller reason with
             | Error message -> Protocol.error request.id "prompt_failed" message

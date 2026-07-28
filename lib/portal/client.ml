@@ -38,3 +38,10 @@ let clipboard_read_image client reason =
   match request client (Protocol.Clipboard_read_image { reason }) with
   | Protocol.Clipboard_image { mime; bytes } -> (mime, bytes)
   | _ -> raise (Portal_error "unexpected clipboard response")
+
+let gh_exec client argv reason require_approval =
+  match
+    request client (Protocol.Gh_exec { argv; reason; require_approval })
+  with
+  | Protocol.Gh_exec_result result -> result
+  | _ -> raise (Portal_error "unexpected gh.exec response")

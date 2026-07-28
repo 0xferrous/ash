@@ -371,6 +371,7 @@ bin/ash/                 Ash CLI and command-page generator
 lib/portal/              `Agent_portal` library
 bin/agent-portal-host/   Portal host entry point
 bin/agent-portal-cli/    Portal client entry point
+wrappers/gh/             GitHub CLI compatibility wrapper
 wrappers/wl-paste/       Wayland clipboard compatibility wrapper
 test/ash/                Ash tests
 test/portal/             Portal tests
@@ -384,7 +385,7 @@ therefore remain usable independently from VM orchestration.
 Portal uses protocol-versioned MessagePack requests over a Unix socket. It
 keeps Agent-box's method and response representation so the OCaml and Rust
 implementations can communicate with each other. The supported methods are
-`ping`, `clipboard.read_image`, and approval-gated `exec`.
+`ping`, `clipboard.read_image`, `gh.exec`, and approval-gated `exec`.
 
 The host authenticates local callers with `SO_PEERCRED`, attempts Podman
 container attribution from cgroups, applies default or per-container policy,
@@ -392,6 +393,10 @@ and enforces concurrency, rate, prompt, timeout, and clipboard-size limits.
 The socket directory and socket use modes `0700` and `0600`. Host command
 resolution skips the package's own executable directory to avoid recursively
 calling the installed wrappers.
+
+The `gh` policy table in `lib/portal/gh_policy.ml` is generated from
+`data/gh-policy.json`; `tools/gh-policy-gen.py` refreshes the report, JSON, and
+OCaml source from the installed GitHub CLI command tree.
 
 See [`PORTAL.md`](./PORTAL.md) for configuration and wrapper contracts. Portal
 is currently standalone: Ash does not yet transport its Unix socket across the

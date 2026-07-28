@@ -1,0 +1,4 @@
+(executable
+ (public_name gh)
+ (name main)
+ (libraries agent_portal))

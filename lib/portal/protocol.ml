@@ -3,6 +3,11 @@ exception Decode_error of string
 type request_method =
   | Ping
   | Clipboard_read_image of { reason : string option }
+  | Gh_exec of {
+      argv : string list;
+      reason : string option;
+      require_approval : bool;
+    }
   | Exec of {
       argv : string list;
       reason : string option;
@@ -16,6 +21,7 @@ type exec_result = { exit_code : int; stdout : string; stderr : string }
 type response_result =
   | Pong of { now_unix_ms : int64 }
   | Clipboard_image of { mime : string; bytes : string }
+  | Gh_exec_result of exec_result
   | Exec_result of exec_result
 
 type portal_error = { code : string; message : string }
@@ -98,6 +104,14 @@ let request_to_msgpack request =
     | Ping -> ("ping", None)
     | Clipboard_read_image { reason } ->
         ("clipboard.read_image", Some [ ("reason", nil_or string reason) ])
+    | Gh_exec { argv; reason; require_approval } ->
+        ( "gh.exec",
+          Some
+            [
+              ("argv", strings argv);
+              ("reason", nil_or string reason);
+              ("require_approval", Msgpck.Bool require_approval);
+            ] )
     | Exec { argv; reason; cwd; env } ->
         let environment values =
           map (List.map (fun (name, value) -> (name, string value)) values)
@@ -133,6 +147,16 @@ let request_of_msgpack value =
     | "ping" -> Ping
     | "clipboard.read_image" ->
         Clipboard_read_image { reason = optional_string "reason" }
+    | "gh.exec" ->
+        Gh_exec
+          {
+            argv = argv ();
+            reason = optional_string "reason";
+            require_approval =
+              field "require_approval" params
+              |> Option.map as_bool
+              |> Option.value ~default:false;
+          }
     | "exec" ->
         let env =
           match field "env" params with
@@ -176,6 +200,8 @@ let result_to_msgpack = function
           ("type", string "ClipboardImage");
           ("data", map [ ("mime", string mime); ("bytes", Msgpck.Bytes bytes) ]);
         ]
+  | Gh_exec_result result ->
+      map [ ("type", string "GhExec"); ("data", exec_result_to_msgpack result) ]
   | Exec_result result ->
       map [ ("type", string "Exec"); ("data", exec_result_to_msgpack result) ]
 
@@ -222,6 +248,7 @@ let response_of_msgpack value =
                   mime = required "mime" data |> as_string;
                   bytes = required "bytes" data |> as_bytes;
                 }
+          | "GhExec" -> Gh_exec_result (exec_result_of_msgpack data)
           | "Exec" -> Exec_result (exec_result_of_msgpack data)
           | name -> raise (Decode_error ("unknown response type: " ^ name)))
   in

@@ -21,6 +21,7 @@ global = true
 
 [portal.policy.defaults]
 clipboard_read_image = "allow"
+gh_exec = "ask_for_writes"
 
 [spaces.common]
 ro_mounts = [

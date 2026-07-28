@@ -1,8 +1,8 @@
-# Agent Portal and wl-paste wrapper
+# Agent Portal and wrappers
 
 Ash includes an OCaml rewrite of the Agent-box host Portal and its transparent
-image-clipboard wrapper. Portal is an independent library and set of
-executables; it does not depend on the Ash VM implementation.
+wrappers. Portal is an independent library and set of executables; it does not
+depend on the Ash VM implementation.
 
 ## Components
 
@@ -11,6 +11,7 @@ executables; it does not depend on the Ash VM implementation.
 | `Agent_portal` | `lib/portal/` | Protocol, configuration, client, policy, and host server |
 | `agent-portal-host` | `bin/agent-portal-host/` | Host-side Unix-socket service |
 | `agent-portal-cli` | `bin/agent-portal-cli/` | Direct client and diagnostic tool |
+| `gh` | `wrappers/gh/` | Transparent GitHub CLI wrapper |
 | `wl-paste` | `wrappers/wl-paste/` | Transparent image clipboard wrapper |
 
 The protocol is version 1 MessagePack over a Unix domain socket and is
@@ -29,6 +30,7 @@ prompt_command = "rofi -dmenu -p 'agent-portal'"
 
 [portal.policy.defaults]
 clipboard_read_image = "allow"
+gh_exec = "ask_for_writes"
 ```
 
 Start the host:
@@ -86,12 +88,24 @@ allowed_mime = ["image/png", "image/jpeg", "image/webp"]
 
 [portal.policy.defaults]
 clipboard_read_image = "allow"
+gh_exec = "ask_for_writes"
 
 [portal.policy.containers."3f7a1d5c2b8e"]
 clipboard_read_image = "deny"
+gh_exec = "ask_for_all"
 ```
 
 Clipboard decisions are `allow`, `ask`, or `deny`.
+
+GitHub execution policies are:
+
+- `ask_for_writes` — allow classified reads; ask for writes and unknown commands
+- `ask_for_all` — ask for every invocation
+- `ask_for_none` — allow every invocation without prompting
+- `deny_all` — reject every invocation
+
+The aliases `allow`, `ask`, and `deny` map to `ask_for_none`,
+`ask_for_writes`, and `deny_all`.
 
 ## Host behavior
 
@@ -110,7 +124,31 @@ The host:
 Prompt commands follow the dmenu convention: choices are written to stdin and
 the selected line is read from stdout.
 
-## `wl-paste` wrapper
+## Wrappers
+
+### `gh`
+
+The `gh` wrapper forwards its complete argument vector to `gh.exec`. It does
+not use a shell and does not prompt inside the guest. The host classifies the
+leaf command as read, write, read/write, or unknown, applies policy, invokes the
+real host `gh`, and returns stdout, stderr, and the exit status.
+
+The command policy is generated from recursive `gh --help` traversal:
+
+- `data/gh-policy.json`
+- `data/gh-policy-report.md`
+- `lib/portal/gh_policy.ml`
+
+Refresh all three with:
+
+```sh
+python3 tools/gh-policy-gen.py
+```
+
+Set `AGENT_PORTAL_HOST_GH` to an absolute executable path when host binary
+discovery is ambiguous.
+
+### `wl-paste`
 
 The `wl-paste` wrapper implements the image flow used by agent tools:
 
@@ -136,9 +174,10 @@ The wrapper is intentionally not a complete replacement for every
 
 ## Binary recursion avoidance
 
-The installed package contains a wrapper named `wl-paste`. The host therefore
-skips host binaries located in its own executable directory when searching
-`PATH`. An explicit `AGENT_PORTAL_HOST_WL_PASTE` path takes precedence.
+The installed package contains wrappers named `gh` and `wl-paste`. The host
+therefore skips host binaries located in its own executable directory when
+searching `PATH`. Explicit `AGENT_PORTAL_HOST_GH` and
+`AGENT_PORTAL_HOST_WL_PASTE` paths take precedence.
 
 ## Current Ash integration boundary
 

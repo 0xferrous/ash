@@ -18,12 +18,20 @@ let test_protocol_roundtrip () =
       {
         version = 1;
         id = 42L;
-        method_ = Clipboard_read_image { reason = Some "paste image" };
+        method_ =
+          Gh_exec
+            {
+              argv = [ "pr"; "view"; "123" ];
+              reason = Some "inspect PR";
+              require_approval = false;
+            };
       }
   in
   match (roundtrip_request request).method_ with
-  | Portal.Protocol.Clipboard_read_image { reason } ->
-      assert_true "clipboard reason roundtrip" (reason = Some "paste image")
+  | Portal.Protocol.Gh_exec { argv; reason; require_approval } ->
+      assert_true "gh argv roundtrip" (argv = [ "pr"; "view"; "123" ]);
+      assert_true "gh reason roundtrip" (reason = Some "inspect PR");
+      assert_true "gh approval roundtrip" (not require_approval)
   | _ -> fail "wrong request variant after roundtrip"
 
 let test_rust_u128_timestamp () =
@@ -68,9 +76,11 @@ socket_path = "/tmp/test-portal.sock"
 
 [portal.policy.defaults]
 clipboard_read_image = "ask"
+gh_exec = "ask_for_all"
 
 [portal.policy.containers."abc123"]
 clipboard_read_image = "deny"
+gh_exec = "deny_all"
 |};
   close_out oc;
   let config = Portal.Config.load ~path () in
@@ -78,6 +88,7 @@ clipboard_read_image = "deny"
   let policy = Portal.Config.policy_for_container config (Some "abc123") in
   assert_true "container clipboard policy"
     (policy.clipboard_read_image = Portal.Config.Deny);
+  assert_true "container gh policy" (policy.gh_exec = Portal.Config.Deny_all);
   Unix.unlink path;
   Unix.rmdir directory
 
@@ -98,7 +109,11 @@ let test_host_roundtrip () =
     {
       (Portal.Config.defaults ()) with
       socket_path;
-      defaults = { clipboard_read_image = Portal.Config.Deny };
+      defaults =
+        {
+          clipboard_read_image = Portal.Config.Deny;
+          gh_exec = Portal.Config.Deny_all;
+        };
     }
   in
   match Unix.fork () with
@@ -117,6 +132,12 @@ let test_host_roundtrip () =
           | Portal.Protocol.Pong _ -> ()
           | _ -> fail "ping returned wrong response")
 
+let test_gh_policy () =
+  assert_true "gh pr view is read"
+    (Portal.Gh_policy.classify [ "pr"; "view"; "123" ] = Portal.Gh_policy.Read);
+  assert_true "gh pr merge is write"
+    (Portal.Gh_policy.classify [ "pr"; "merge"; "123" ] = Portal.Gh_policy.Write)
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -126,4 +147,5 @@ let () =
   run "protocol roundtrip" test_protocol_roundtrip;
   run "Rust u128 timestamp compatibility" test_rust_u128_timestamp;
   run "portal config" test_config;
-  run "host roundtrip" test_host_roundtrip
+  run "host roundtrip" test_host_roundtrip;
+  run "gh policy" test_gh_policy

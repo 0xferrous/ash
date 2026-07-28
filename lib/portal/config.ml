@@ -1,5 +1,6 @@
 type decision = Allow | Ask | Deny
-type method_policy = { clipboard_read_image : decision }
+type gh_policy = Ask_for_writes | Ask_for_all | Ask_for_none | Deny_all
+type method_policy = { clipboard_read_image : decision; gh_exec : gh_policy }
 
 type t = {
   enabled : bool;
@@ -34,7 +35,7 @@ let expand_home path =
 let default_socket_path () =
   Printf.sprintf "/run/user/%d/agent-portal/portal.sock" (Unix.getuid ())
 
-let default_policy = { clipboard_read_image = Allow }
+let default_policy = { clipboard_read_image = Allow; gh_exec = Ask_for_writes }
 
 let defaults () =
   {
@@ -71,6 +72,13 @@ let decision = function
   | "deny" -> Deny
   | value -> invalid_arg ("invalid portal policy decision: " ^ value)
 
+let gh_policy = function
+  | "ask_for_writes" | "ask" -> Ask_for_writes
+  | "ask_for_all" -> Ask_for_all
+  | "ask_for_none" | "allow" -> Ask_for_none
+  | "deny_all" | "deny" -> Deny_all
+  | value -> invalid_arg ("invalid gh.exec policy: " ^ value)
+
 let method_policy table fallback =
   let document = Otoml.TomlTable table in
   {
@@ -81,6 +89,14 @@ let method_policy table fallback =
         | Ask -> "ask"
         | Deny -> "deny")
       |> decision;
+    gh_exec =
+      get document Otoml.get_string [ "gh_exec" ]
+        (match fallback.gh_exec with
+        | Ask_for_writes -> "ask_for_writes"
+        | Ask_for_all -> "ask_for_all"
+        | Ask_for_none -> "ask_for_none"
+        | Deny_all -> "deny_all")
+      |> gh_policy;
   }
 
 let policy_table document path fallback =
