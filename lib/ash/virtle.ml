@@ -1,6 +1,7 @@
 type manifest_inputs = {
   config_path : string;
   flake : string;
+  override_inputs : (string * string) list;
   name : string;
   spaces : string list;
   user : string option;
@@ -2301,6 +2302,11 @@ let ash_config (inputs : manifest_inputs) =
     [
       ("config_path", Otoml.string inputs.config_path);
       ("flake", Otoml.string inputs.flake);
+      ( "override_inputs",
+        string_array
+          (List.map
+             (fun (name, flake) -> name ^ "=" ^ flake)
+             inputs.override_inputs) );
       ("name", Otoml.string inputs.name);
       ("spaces", string_array inputs.spaces);
       ("print_serial", Otoml.boolean inputs.print_serial);
@@ -2358,6 +2364,23 @@ let load_ash_config ~name =
   {
     config_path = string_of_doc doc [ "spawn"; "config_path" ];
     flake = string_of_doc doc [ "spawn"; "flake" ];
+    override_inputs =
+      Option.value
+        (Otoml.find_opt doc
+           (Otoml.get_array Otoml.get_string)
+           [ "spawn"; "override_inputs" ])
+        ~default:[]
+      |> List.map (fun value ->
+          match String.index_opt value '=' with
+          | Some index when index > 0 && index < String.length value - 1 ->
+              ( String.sub value 0 index,
+                String.sub value (index + 1) (String.length value - index - 1)
+              )
+          | _ ->
+              Log.fatal
+                "invalid override input in ash-state.toml: %S (expected \
+                 NAME=FLAKE)"
+                value);
     name = string_of_doc doc [ "spawn"; "name" ];
     spaces = string_array_of_doc doc [ "spawn"; "spaces" ];
     user = Otoml.find_opt doc Otoml.get_string [ "spawn"; "user" ];
@@ -2387,6 +2410,14 @@ let resolve_spawn_flake ~name = function
         saved.flake)
       else Log.fatal "spawn requires --flake for a new VM"
 
+let resolve_spawn_override_inputs ~name override_inputs =
+  if override_inputs <> [] then override_inputs
+  else if has_saved_ash_config ~name then (
+    let saved = load_ash_config ~name in
+    Log.debug "using saved override inputs for existing VM %s" name;
+    saved.override_inputs)
+  else []
+
 let resolve_spawn_spaces ~name spaces =
   if spaces <> [] then spaces
   else if has_saved_ash_config ~name then (
@@ -2408,13 +2439,17 @@ let render_manifest (inputs : manifest_inputs) =
   let user =
     match inputs.user with
     | Some user ->
-        Nix.validate_user ~target ~user;
+        Nix.validate_user ~override_inputs:inputs.override_inputs ~target ~user;
         user
-    | None -> Nix.resolve_ssh_user ~target
+    | None ->
+        Nix.resolve_ssh_user ~override_inputs:inputs.override_inputs ~target
   in
   let gcroots_dir = gcroots_dir ~name:inputs.name in
   Util.ensure_dir gcroots_dir;
-  let boot = Nix.resolve_boot ~target ~gcroots_dir in
+  let boot =
+    Nix.resolve_boot ~override_inputs:inputs.override_inputs ~target
+      ~gcroots_dir
+  in
   let lower_store_state =
     Filename.concat (shares_ro_dir ~name:inputs.name) "guest-store-state"
   in
@@ -2463,10 +2498,15 @@ let write_manifest_for_inputs inputs =
   (inputs, path)
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ~config_path ?flake ~spaces ~print_serial ~mount_cwd ~kitty () =
+    ~config_path ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd ~kitty
+    () =
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
   let flake = Nix.storage_flake_ref (resolve_spawn_flake ~name flake) in
+  let override_inputs =
+    resolve_spawn_override_inputs ~name override_inputs
+    |> List.map (fun (input, flake) -> (input, Nix.storage_flake_ref flake))
+  in
   let spaces = resolve_spawn_spaces ~name spaces in
   let virtle = find_virtle virtle in
   if kitty then ignore (find_kitten ());
@@ -2482,6 +2522,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     {
       config_path;
       flake;
+      override_inputs;
       name;
       spaces;
       user;
@@ -2569,11 +2610,12 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
   | None -> Util.exec inputs.virtle args
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ~config_path ?flake ~spaces ~print_serial ~mount_cwd ~ephemeral ~attach
-    ~keep ~kitty ~verbose () =
+    ~config_path ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd
+    ~ephemeral ~attach ~keep ~kitty ~verbose () =
   let inputs, path =
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-      ~config_path ?flake ~spaces ~print_serial ~mount_cwd ~kitty ()
+      ~config_path ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd
+      ~kitty ()
   in
   if attach && keep then
     launch_background_and_attach ~resume:None inputs path ~verbose

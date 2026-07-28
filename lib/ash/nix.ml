@@ -33,6 +33,17 @@ let nix_exe =
 
 let nix_command args = Util.shell_quote (Lazy.force nix_exe) ^ " " ^ args
 
+let override_input_args override_inputs =
+  override_inputs
+  |> List.concat_map (fun (name, flake) ->
+      [ "--override-input"; Util.shell_quote name; Util.shell_quote flake ])
+  |> String.concat " "
+
+let subcommand_args command override_inputs args =
+  String.concat " "
+    (List.filter (( <> ) "")
+       [ command; override_input_args override_inputs; args ])
+
 let uri_encode value =
   let is_unreserved = function
     | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' | '.' | '_' | '~' -> true
@@ -77,25 +88,28 @@ let run_nix ~label ~attr args =
     Log.fatal "failed to resolve %s\n\nNix attr: %s\nError: %s" label attr
       message
 
-let eval_raw ~label attr =
-  run_nix ~label ~attr ("eval --raw " ^ Util.shell_quote attr)
+let eval_raw ?(override_inputs = []) ~label attr =
+  run_nix ~label ~attr
+    (subcommand_args "eval" override_inputs ("--raw " ^ Util.shell_quote attr))
 
-let eval_json ~label attr =
-  run_nix ~label ~attr ("eval --json " ^ Util.shell_quote attr)
+let eval_json ?(override_inputs = []) ~label attr =
+  run_nix ~label ~attr
+    (subcommand_args "eval" override_inputs ("--json " ^ Util.shell_quote attr))
 
 let build_link_args = function
   | None -> "--no-link"
   | Some path -> "--out-link " ^ Util.shell_quote path
 
-let build_path ?out_link ~label attr =
+let build_path ?out_link ?(override_inputs = []) ~label attr =
   run_nix ~label ~attr
-    ("build " ^ build_link_args out_link ^ " --print-out-paths "
-   ^ Util.shell_quote attr)
+    (subcommand_args "build" override_inputs
+       (build_link_args out_link ^ " --print-out-paths " ^ Util.shell_quote attr))
 
-let build_expr_path ?out_link ~label expr =
+let build_expr_path ?out_link ?(override_inputs = []) ~label expr =
   run_nix ~label ~attr:expr
-    ("build --impure " ^ build_link_args out_link ^ " --print-out-paths --expr "
-   ^ Util.shell_quote expr)
+    (subcommand_args "build" override_inputs
+       ("--impure " ^ build_link_args out_link ^ " --print-out-paths --expr "
+      ^ Util.shell_quote expr))
 
 let nix_string value = Yojson.Safe.to_string (`String value)
 
@@ -109,7 +123,7 @@ let split_flake_ref value =
       in
       (base, Some fragment)
 
-let resolve_registration ~target ~toplevel ~out_link =
+let resolve_registration ~override_inputs ~target ~toplevel ~out_link =
   let flake, _ = split_flake_ref target.attr in
   let expr =
     Printf.sprintf
@@ -121,7 +135,8 @@ let resolve_registration ~target ~toplevel ~out_link =
       (nix_string toplevel)
   in
   let output =
-    build_expr_path ~out_link ~label:"Nix store registration closure" expr
+    build_expr_path ~out_link ~override_inputs
+      ~label:"Nix store registration closure" expr
   in
   let registration = Filename.concat output "registration" in
   if not (Sys.file_exists registration) then
@@ -205,19 +220,19 @@ let attr_segment segment =
   Buffer.add_char b '"';
   Buffer.contents b
 
-let rec resolve_ssh_user ~target =
+let rec resolve_ssh_user ~override_inputs ~target =
   let attr = target.attr ^ ".config.services.getty.autologinUser" in
-  let user = eval_raw ~label:"guest SSH user" attr in
+  let user = eval_raw ~override_inputs ~label:"guest SSH user" attr in
   if user = "" then
     Log.fatal "guest SSH user resolved to an empty value\n\nNix attr: %s" attr;
-  validate_user ~target ~user;
+  validate_user ~override_inputs ~target ~user;
   user
 
-and validate_user ~target ~user =
+and validate_user ~override_inputs ~target ~user =
   let attr =
     target.attr ^ ".config.users.users." ^ attr_segment user ^ ".name"
   in
-  let resolved = eval_raw ~label:("guest user " ^ user) attr in
+  let resolved = eval_raw ~override_inputs ~label:("guest user " ^ user) attr in
   if resolved <> user then
     Log.fatal
       "guest user validation failed\n\n\
@@ -225,19 +240,21 @@ and validate_user ~target ~user =
        NixOS user attr resolved to: %s"
       user resolved
 
-let resolve_boot ~target ~gcroots_dir =
+let resolve_boot ~override_inputs ~target ~gcroots_dir =
   let attr = target.attr in
   let root name = Filename.concat gcroots_dir name in
   let kernel_dir =
-    build_path ~out_link:(root "kernel") ~label:"kernel build output"
+    build_path ~out_link:(root "kernel") ~override_inputs
+      ~label:"kernel build output"
       (attr ^ ".config.system.build.kernel")
   in
   let kernel_file =
-    eval_raw ~label:"kernel file name"
+    eval_raw ~override_inputs ~label:"kernel file name"
       (attr ^ ".config.system.boot.loader.kernelFile")
   in
   let initrd_output =
-    build_path ~out_link:(root "initrd") ~label:"initial ramdisk build output"
+    build_path ~out_link:(root "initrd") ~override_inputs
+      ~label:"initial ramdisk build output"
       (attr ^ ".config.system.build.initialRamdisk")
   in
   let initrd =
@@ -252,19 +269,27 @@ let resolve_boot ~target ~gcroots_dir =
        Expected initrd file: %s"
       initrd_output initrd;
   let toplevel =
-    build_path ~out_link:(root "toplevel") ~label:"NixOS toplevel build output"
+    build_path ~out_link:(root "toplevel") ~override_inputs
+      ~label:"NixOS toplevel build output"
       (attr ^ ".config.system.build.toplevel")
   in
   let registration =
-    resolve_registration ~target ~toplevel ~out_link:(root "closure-info")
+    resolve_registration ~override_inputs ~target ~toplevel
+      ~out_link:(root "closure-info")
   in
-  let nix = eval_raw ~label:"Nix package" (attr ^ ".config.nix.package") in
-  let openssh = eval_raw ~label:"OpenSSH package" (attr ^ ".pkgs.openssh") in
+  let nix =
+    eval_raw ~override_inputs ~label:"Nix package" (attr ^ ".config.nix.package")
+  in
+  let openssh =
+    eval_raw ~override_inputs ~label:"OpenSSH package" (attr ^ ".pkgs.openssh")
+  in
   let systemd =
-    eval_raw ~label:"systemd package" (attr ^ ".config.systemd.package")
+    eval_raw ~override_inputs ~label:"systemd package"
+      (attr ^ ".config.systemd.package")
   in
   let kernel_params =
-    eval_json ~label:"kernel parameters" (attr ^ ".config.boot.kernelParams")
+    eval_json ~override_inputs ~label:"kernel parameters"
+      (attr ^ ".config.boot.kernelParams")
     |> parse_json_string_array
   in
   let init_param = "init=" ^ Filename.concat toplevel "init" in

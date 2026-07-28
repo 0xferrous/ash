@@ -14,15 +14,17 @@ type virtle_opts = {
 let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
-let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake name user
-    spaces print_serial mount_cwd ephemeral attach keep kitty =
+let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake
+    override_inputs name user spaces print_serial mount_cwd ephemeral attach
+    keep kitty =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ?name ?user ~config_path:config ?flake ~spaces ~print_serial ~mount_cwd
-    ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
+    ?name ?user ~config_path:config ?flake ~override_inputs ~spaces
+    ~print_serial ~mount_cwd ~ephemeral ~attach ~keep ~kitty
+    ~verbose:opts.verbose ()
 
 let list_vms global =
   Log.set_debug global.debug;
@@ -142,6 +144,17 @@ let flake_arg =
            for an existing named VM."
         ~docv:"FLAKE#HOST")
 
+let override_input_arg =
+  Arg.(
+    value
+    & opt_all (pair ~sep:'=' string string) []
+    & info [ "override-input" ]
+        ~doc:
+          "Override a flake input while evaluating --flake. Repeatable; use \
+           NAME=FLAKE, for example --override-input ash=path:../ash. Relative \
+           path references are resolved before being saved in ash-state.toml."
+        ~docv:"NAME=FLAKE")
+
 let name_arg =
   Arg.(
     value
@@ -242,9 +255,9 @@ let spawn_cmd =
     (Cmd.info "spawn" ~doc:"spawn an agent VM" ~man:spawn_man)
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
-      $ ro_store_socket_arg $ config_arg $ flake_arg $ name_arg $ user_arg
-      $ spaces_arg $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg
-      $ attach_flag $ keep_flag $ kitty_flag)
+      $ ro_store_socket_arg $ config_arg $ flake_arg $ override_input_arg
+      $ name_arg $ user_arg $ spaces_arg $ print_serial_arg $ mount_cwd_arg
+      $ ephemeral_arg $ attach_flag $ keep_flag $ kitty_flag)
 
 let attach_name_arg =
   Arg.(

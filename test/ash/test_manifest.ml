@@ -1090,6 +1090,8 @@ let test_spawn_reuses_saved_flake_when_omitted () =
     {
       config_path = "/tmp/ash-config.toml";
       flake = saved_flake;
+      override_inputs =
+        [ ("ash", "/tmp/local-ash"); ("nixpkgs", "github:NixOS/nixpkgs") ];
       name;
       spaces = [ "base" ];
       user = None;
@@ -1113,6 +1115,15 @@ let test_spawn_reuses_saved_flake_when_omitted () =
   assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
   assert_equal "explicit flake overrides saved" "github:owner/repo#other"
     (Virtle.resolve_spawn_flake ~name (Some "github:owner/repo#other"));
+  assert_equal "saved override inputs"
+    "ash=/tmp/local-ash,nixpkgs=github:NixOS/nixpkgs"
+    (Virtle.resolve_spawn_override_inputs ~name []
+    |> List.map (fun (input, flake) -> input ^ "=" ^ flake)
+    |> String.concat ",");
+  assert_equal "explicit override inputs replace saved" "ash=path:../ash"
+    (Virtle.resolve_spawn_override_inputs ~name [ ("ash", "path:../ash") ]
+    |> List.map (fun (input, flake) -> input ^ "=" ^ flake)
+    |> String.concat ",");
   assert_equal "saved spaces" "base"
     (String.concat "," (Virtle.resolve_spawn_spaces ~name []));
   assert_equal "explicit spaces override saved" "rust,go"
@@ -1136,6 +1147,16 @@ let test_nix_storage_flake_ref_absolutizes_relative_paths () =
     (Nix.storage_flake_ref "nixpkgs#agent");
   assert_equal "github flake unchanged" "github:owner/repo#agent"
     (Nix.storage_flake_ref "github:owner/repo#agent")
+
+let test_nix_override_input_args () =
+  assert_equal "Nix override input arguments"
+    "--override-input 'ash' 'path:../ash' --override-input 'nixpkgs' \
+     'github:NixOS/nixpkgs'"
+    (Nix.override_input_args
+       [ ("ash", "path:../ash"); ("nixpkgs", "github:NixOS/nixpkgs") ]);
+  assert_equal "Nix eval override input placement"
+    "eval --override-input 'ash' 'path:../ash' --raw 'flake#attr'"
+    (Nix.subcommand_args "eval" [ ("ash", "path:../ash") ] "--raw 'flake#attr'")
 
 let test_nix_local_store_uri () =
   assert_equal "local store URI encodes paths"
@@ -1282,6 +1303,7 @@ let () =
     test_spawn_reuses_saved_flake_when_omitted;
   run "nix storage flake refs absolutize relative paths"
     test_nix_storage_flake_ref_absolutizes_relative_paths;
+  run "nix override input arguments" test_nix_override_input_args;
   run "nix local store URI" test_nix_local_store_uri;
   run "prepare lower store" test_prepare_lower_store;
   run "nix json string array parser" test_nix_json_string_array_parser;

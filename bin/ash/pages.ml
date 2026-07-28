@@ -100,6 +100,11 @@ let spawn =
            in ash-state.toml. A new VM still requires --flake, and an explicit \
            --flake overrides the saved value.";
         `P
+          "Repeatable --override-input NAME=FLAKE options are forwarded to \
+           every Nix evaluation and build of the selected flake. Existing VMs \
+           reuse their saved overrides when none are supplied; passing any \
+           overrides replaces the saved list.";
+        `P
           "For a new VM, no configured spaces are applied unless --space is \
            passed. For an existing named VM, omitting --space reuses the space \
            list saved in ash-state.toml. Passing --space explicitly replaces \
@@ -135,9 +140,9 @@ let spawn =
            store registration dump, host-side ssh, and host-side \
            systemd-ssh-proxy paths.";
         `P
-          "Path-like flake references are saved in ash-state.toml as resolved \
-           absolute paths so ash regenerate NAME works from any current \
-           directory.";
+          "Path-like flake references and override input references are saved \
+           in ash-state.toml as resolved absolute paths so ash regenerate NAME \
+           works from any current directory.";
         `P
           "The selected NixOS configuration must expose normal NixOS system \
            attributes such as config.system.build.kernel, \

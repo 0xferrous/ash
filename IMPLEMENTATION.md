@@ -21,10 +21,11 @@ nix build
 ash spawn -s rust -s go --flake path/to/flake#agent
 ```
 
-Short form:
+Short form, with a local flake input override:
 
 ```sh
-ash spawn -s rust -s go -f ../my-nix#agent
+ash spawn -s rust -s go -f ../my-nix#agent \
+  --override-input ash=path:../ash
 ```
 
 Mount the current repository into the guest workspace:
@@ -105,6 +106,7 @@ Spawn options:
 
 - `-s`, `--space SPACE` — repeatable ash config space; spaces supply mount points. New VMs apply no spaces when omitted; existing named VMs reuse the saved space list.
 - `-f`, `--flake FLAKE#HOST` — flake directory plus host reference, e.g. `../my-nix#agent`. Required for a new VM; when spawning an existing named VM, omitting it reuses the value saved in `ash-state.toml`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
+- `--override-input NAME=FLAKE` — override an input of the selected flake during every Nix evaluation and build. Repeatable. Relative path references are resolved before being saved in `ash-state.toml`; an existing named VM reuses saved overrides when none are supplied.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
 - `-u`, `--user USER` — override the guest SSH user. The default is evaluated from `config.services.getty.autologinUser` in the selected NixOS configuration.
 - `-c`, `--config CONFIG` — ash config. Default: `$XDG_CONFIG_HOME/ash/config.toml`, falling back to `~/.config/ash/config.toml`.
@@ -184,6 +186,7 @@ Space selection is explicit:
 - If no `-s`/`--space` option is passed for a new VM, no configured spaces are applied.
 - If no `-s`/`--space` option is passed for an existing named VM, `ash` reuses the saved space list.
 - If `-f`/`--flake` is omitted for an existing named VM with saved `ash-state.toml`, `ash` reuses the saved flake; new VMs still require it.
+- If no `--override-input` option is passed for an existing named VM, `ash` reuses the saved override inputs. Passing one or more overrides replaces the saved list.
 - If one or more spaces are passed, `ash` uses exactly those spaces and replaces the saved selection.
 
 Each mount entry is either `HOST_PATH` or `HOST_PATH:GUEST_PATH`. Host `~` resolves against the host user's home. Guest `~` resolves against the evaluated guest SSH user's home. When the guest path is omitted, the original host path string is reused and resolved for the guest. Absolute paths are accepted on both sides. Missing host paths are skipped with a warning. Mounts are deduplicated after parsing and path expansion by source, target, and read-only mode, preserving the first occurrence.

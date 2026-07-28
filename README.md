@@ -48,6 +48,17 @@ with a repeatable `--space`/`-s` option:
 ash spawn --name work -s ash -f ../my-nix#agent
 ```
 
+Use repeatable `--override-input NAME=FLAKE` options to override inputs while
+Ash evaluates and builds the selected flake:
+
+```sh
+ash spawn --name work -f ../my-nix#agent \
+  --override-input ash=path:../ash
+```
+
+Overrides are saved with named VM state and reused by later regeneration.
+Relative path references are saved as absolute paths.
+
 For a new VM, omitting `--space` applies no configured spaces. For an existing
 named VM, it reuses the saved space list. Spaces can compose other spaces with
 `extends = ["base", ...]`; extended spaces are evaluated recursively before the
