@@ -2,9 +2,10 @@ external peer_credentials : Unix.file_descr -> int * int * int
   = "agent_portal_peer_credentials"
 
 type identity = {
-  pid : int;
-  uid : int;
-  gid : int;
+  pid : int option;
+  uid : int option;
+  gid : int option;
+  peer : string;
   container_id : string option;
 }
 
@@ -53,13 +54,28 @@ let container_id pid =
           | Some index -> take_hex text (index + 8)
           | None -> None))
 
-let identity socket =
-  let pid, uid, gid = peer_credentials socket in
-  { pid; uid; gid; container_id = container_id pid }
+let identity socket peer_vsock_cid =
+  match peer_vsock_cid with
+  | Some cid ->
+      {
+        pid = None;
+        uid = None;
+        gid = None;
+        peer = "vsock:" ^ string_of_int cid;
+        container_id = None;
+      }
+  | None ->
+      let pid, uid, gid = peer_credentials socket in
+      {
+        pid = Some pid;
+        uid = Some uid;
+        gid = Some gid;
+        peer = "pid:" ^ string_of_int pid;
+        container_id = container_id pid;
+      }
 
 let rate_key identity =
-  Option.value identity.container_id
-    ~default:("pid:" ^ string_of_int identity.pid)
+  Option.value identity.container_id ~default:identity.peer
 
 let allow_rate state identity =
   Mutex.lock state.rate_mutex;
@@ -99,9 +115,9 @@ let prompt state identity reason =
           ~finally:(fun () -> ignore (Atomic.fetch_and_add state.prompts (-1)))
           (fun () ->
             let context =
-              Printf.sprintf "container=%s pid=%d reason=%s"
+              Printf.sprintf "container=%s peer=%s reason=%s"
                 (Option.value identity.container_id ~default:"unknown")
-                identity.pid
+                identity.peer
                 (Option.value reason ~default:"(none)")
             in
             let input_path = Filename.temp_file "agent-portal" ".prompt" in
@@ -172,17 +188,19 @@ let gh_should_prompt policy operation require_approval =
 let send socket response =
   Wire.write socket (Protocol.response_to_msgpack response)
 
-let handle state socket =
+let handle state socket peer_vsock_cid =
   let request_id = ref 0L in
   try
-    let caller = identity socket in
+    let caller = identity socket peer_vsock_cid in
     let request =
       Wire.read ~timeout_ms:state.config.request_timeout_ms socket
       |> Protocol.request_of_msgpack
     in
     request_id := request.id;
-    Logging.info "request id=%Ld pid=%d uid=%d container=%s" request.id
-      caller.pid caller.uid
+    Logging.info "request id=%Ld peer=%s uid=%s gid=%s container=%s" request.id
+      caller.peer
+      (Option.fold ~none:"(none)" ~some:string_of_int caller.uid)
+      (Option.fold ~none:"(none)" ~some:string_of_int caller.gid)
       (Option.value caller.container_id ~default:"(none)");
     if request.version <> 1 then
       send socket
@@ -291,25 +309,14 @@ let handle state socket =
         (Protocol.error !request_id "invalid_request" (Printexc.to_string exn))
     with _ -> ())
 
-let run config socket_path : unit =
+let run_endpoint config endpoint : unit =
   if not config.Config.enabled then failwith "portal is disabled";
-  let socket_directory = Filename.dirname socket_path in
-  Process.ensure_dir socket_directory;
-  Unix.chmod socket_directory 0o700;
-  (if Sys.file_exists socket_path then
-     match (Unix.lstat socket_path).st_kind with
-     | Unix.S_SOCK -> Unix.unlink socket_path
-     | _ -> failwith ("refusing to replace non-socket path: " ^ socket_path));
-  let listener = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let listener = Transport.listen endpoint config.max_inflight in
   Fun.protect
-    ~finally:(fun () ->
-      Unix.close listener;
-      try Unix.unlink socket_path with Unix.Unix_error _ -> ())
+    ~finally:(fun () -> Transport.close_listener listener)
     (fun () ->
-      Unix.bind listener (Unix.ADDR_UNIX socket_path);
-      Unix.chmod socket_path 0o600;
-      Unix.listen listener config.max_inflight;
-      Logging.info "agent-portal-host listening on %s" socket_path;
+      Logging.info "agent-portal-host listening on %s"
+        (Transport.describe_listener endpoint);
       let state =
         {
           config;
@@ -320,7 +327,8 @@ let run config socket_path : unit =
         }
       in
       while true do
-        let socket, _ = Unix.accept listener in
+        let accepted = Transport.accept listener in
+        let socket = accepted.socket in
         if Atomic.fetch_and_add state.inflight 1 >= config.max_inflight then (
           ignore (Atomic.fetch_and_add state.inflight (-1));
           send socket
@@ -334,6 +342,8 @@ let run config socket_path : unit =
                    ~finally:(fun () ->
                      ignore (Atomic.fetch_and_add state.inflight (-1));
                      try Unix.close socket with Unix.Unix_error _ -> ())
-                   (fun () -> handle state socket))
+                   (fun () -> handle state socket accepted.peer_vsock_cid))
                socket)
       done)
+
+let run config socket_path = run_endpoint config (Transport.Unix socket_path)

@@ -9,13 +9,13 @@ depend on the Ash VM implementation.
 | Component | Source | Purpose |
 |---|---|---|
 | `Agent_portal` | `lib/portal/` | Protocol, configuration, client, policy, and host server |
-| `agent-portal-host` | `bin/agent-portal-host/` | Host-side Unix-socket service |
+| `agent-portal-host` | `bin/agent-portal-host/` | Host-side Unix-socket or AF_VSOCK service |
 | `agent-portal-cli` | `bin/agent-portal-cli/` | Direct client and diagnostic tool |
 | `gh` | `wrappers/gh/` | Transparent GitHub CLI wrapper |
 | `wl-paste` | `wrappers/wl-paste/` | Transparent image clipboard wrapper |
 
-The protocol is version 1 MessagePack over a Unix domain socket and is
-compatible with the Rust implementation in Agent-box.
+The protocol is version 1 MessagePack over a Unix domain socket or Linux
+AF_VSOCK stream and is compatible with the Rust implementation in Agent-box.
 
 ## First run
 
@@ -25,7 +25,10 @@ Add a Portal section to the Ash config:
 [portal]
 enabled = true
 global = true
+transport = "unix" # or "vsock"
 socket_path = "/run/user/1000/agent-portal/portal.sock"
+vsock_cid = 2
+vsock_port = 4050
 prompt_command = "rofi -dmenu -p 'agent-portal'"
 
 [portal.policy.defaults]
@@ -49,7 +52,12 @@ Options belonging to a client operation follow its subcommand, for example:
 
 ```sh
 agent-portal-cli ping --socket /tmp/portal.sock
+agent-portal-cli ping --vsock 2:4050
 ```
+
+To serve guests over vsock, set `transport = "vsock"` or start the host with
+`--vsock-port PORT`. The host binds `VMADDR_CID_ANY`; clients default to host
+CID 2.
 
 ## Configuration lookup
 
@@ -61,7 +69,10 @@ Portal clients and wrappers resolve configuration in this order:
 4. legacy `~/.agent-box.toml`
 
 `AGENT_PORTAL_SOCKET` overrides the configured socket for clients and wrappers.
-The default socket is `/run/user/<uid>/agent-portal/portal.sock`.
+It may also contain a `vsock:CID:PORT` endpoint. `AGENT_PORTAL_VSOCK=CID:PORT`
+selects vsock directly and takes precedence over `AGENT_PORTAL_SOCKET`. The
+default transport is Unix with socket
+`/run/user/<uid>/agent-portal/portal.sock`.
 
 ## Configuration reference
 
@@ -69,7 +80,10 @@ The default socket is `/run/user/<uid>/agent-portal/portal.sock`.
 [portal]
 enabled = true
 global = true
+transport = "unix" # or "vsock"
 socket_path = "/run/user/1000/agent-portal/portal.sock"
+vsock_cid = 2 # client destination; the host listens on every local CID
+vsock_port = 4050
 prompt_command = "rofi -dmenu -p 'agent-portal'"
 
 [portal.timeouts]
@@ -111,8 +125,9 @@ The aliases `allow`, `ask`, and `deny` map to `ask_for_none`,
 
 The host:
 
-- creates the socket directory with mode `0700` and socket with mode `0600`
-- obtains caller PID, UID, and GID through `SO_PEERCRED`
+- creates a Unix socket directory with mode `0700` and socket with mode `0600`
+- obtains Unix-socket caller PID, UID, and GID through `SO_PEERCRED`
+- identifies vsock callers by their kernel-reported source CID
 - identifies Podman callers from `/proc/<pid>/cgroup` when possible
 - supports per-container policy overrides
 - limits concurrent requests, prompt concurrency, request rate, and payload size
@@ -122,7 +137,9 @@ The host:
 - refuses to replace a non-socket filesystem entry at the configured path
 
 Prompt commands follow the dmenu convention: choices are written to stdin and
-the selected line is read from stdout.
+the selected line is read from stdout. Vsock does not expose a peer PID, UID,
+or cgroup, so per-container policy overrides do not apply to vsock callers;
+they use the default policy. Rate limiting is keyed by source CID.
 
 ## Wrappers
 
@@ -181,7 +198,6 @@ searching `PATH`. Explicit `AGENT_PORTAL_HOST_GH` and
 
 ## Current Ash integration boundary
 
-Portal is currently standalone. Ash does not yet expose the Unix socket to a
-VM or inject `AGENT_PORTAL_SOCKET` into guests. That transport/integration step
-should be designed separately because a VM boundary differs from Agent-box's
-container bind-mount model.
+Portal can communicate across a VM boundary over vsock, but Ash does not yet
+start the host service or inject the selected endpoint into guests
+automatically. Configure the host and guest wrappers explicitly for now.

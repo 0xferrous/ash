@@ -9,9 +9,17 @@ let print_exec result =
   flush stderr;
   result.exit_code
 
-let run socket config reason out require_approval command =
+let run socket vsock config reason out require_approval command =
   try
-    let client = Client.create ?socket ?config () in
+    let vsock =
+      Option.map
+        (fun value ->
+          match Agent_portal.Transport.parse_vsock value with
+          | Agent_portal.Transport.Vsock { cid; port } -> (cid, port)
+          | Agent_portal.Transport.Unix _ -> assert false)
+        vsock
+    in
+    let client = Client.create ?socket ?vsock ?config () in
     match command with
     | `Ping -> (
         match Client.request client Protocol.Ping with
@@ -51,6 +59,13 @@ let socket =
     value
     & opt (some string) None
     & info [ "socket" ] ~doc:"Override the portal socket." ~docv:"PATH")
+
+let vsock =
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "vsock" ] ~doc:"Connect to the AF_VSOCK endpoint CID:PORT."
+        ~docv:"CID:PORT")
 
 let config =
   Arg.(
@@ -95,7 +110,8 @@ let environment_pairs values =
 
 let common make term =
   Term.(
-    const run $ socket $ config $ reason $ out $ approval $ (const make $ term))
+    const run $ socket $ vsock $ config $ reason $ out $ approval
+    $ (const make $ term))
 
 let ping = Cmd.v (Cmd.info "ping") (common (fun () -> `Ping) Term.(const ()))
 

@@ -1,11 +1,15 @@
 type decision = Allow | Ask | Deny
 type gh_policy = Ask_for_writes | Ask_for_all | Ask_for_none | Deny_all
+type transport = Unix | Vsock
 type method_policy = { clipboard_read_image : decision; gh_exec : gh_policy }
 
 type t = {
   enabled : bool;
   global : bool;
+  transport : transport;
   socket_path : string;
+  vsock_cid : int;
+  vsock_port : int;
   prompt_command : string option;
   request_timeout_ms : int;
   prompt_timeout_ms : int;
@@ -41,7 +45,10 @@ let defaults () =
   {
     enabled = true;
     global = false;
+    transport = Unix;
     socket_path = default_socket_path ();
+    vsock_cid = 2;
+    vsock_port = 4050;
     prompt_command = None;
     request_timeout_ms = 0;
     prompt_timeout_ms = 0;
@@ -71,6 +78,20 @@ let decision = function
   | "ask" -> Ask
   | "deny" -> Deny
   | value -> invalid_arg ("invalid portal policy decision: " ^ value)
+
+let transport = function
+  | "unix" -> Unix
+  | "vsock" -> Vsock
+  | value -> invalid_arg ("invalid portal transport: " ^ value)
+
+let uint32 name value =
+  if value < 0 || Int64.of_int value > 0xffff_ffffL then
+    invalid_arg (name ^ " must fit in an unsigned 32-bit integer")
+  else value
+
+let positive_uint32 name value =
+  let value = uint32 name value in
+  if value = 0 then invalid_arg (name ^ " must be positive") else value
 
 let gh_policy = function
   | "ask_for_writes" | "ask" -> Ask_for_writes
@@ -142,9 +163,17 @@ let load ?path () =
     {
       enabled = get document Otoml.get_boolean (p "enabled") fallback.enabled;
       global = get document Otoml.get_boolean (p "global") fallback.global;
+      transport =
+        get document Otoml.get_string (p "transport") "unix" |> transport;
       socket_path =
         get document Otoml.get_string (p "socket_path") fallback.socket_path
         |> expand_home;
+      vsock_cid =
+        get document Otoml.get_integer (p "vsock_cid") fallback.vsock_cid
+        |> uint32 "portal.vsock_cid";
+      vsock_port =
+        get document Otoml.get_integer (p "vsock_port") fallback.vsock_port
+        |> positive_uint32 "portal.vsock_port";
       prompt_command =
         Otoml.find_opt document Otoml.get_string (p "prompt_command");
       request_timeout_ms =

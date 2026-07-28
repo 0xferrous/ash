@@ -382,25 +382,27 @@ therefore remain usable independently from VM orchestration.
 
 ## Agent Portal implementation
 
-Portal uses protocol-versioned MessagePack requests over a Unix socket. It
-keeps Agent-box's method and response representation so the OCaml and Rust
-implementations can communicate with each other. The supported methods are
-`ping`, `clipboard.read_image`, `gh.exec`, and approval-gated `exec`.
+Portal uses protocol-versioned MessagePack requests over a Unix socket or
+Linux AF_VSOCK stream. It keeps Agent-box's method and response representation
+so the OCaml and Rust implementations can communicate with each other. The
+supported methods are `ping`, `clipboard.read_image`, `gh.exec`, and
+approval-gated `exec`.
 
-The host authenticates local callers with `SO_PEERCRED`, attempts Podman
-container attribution from cgroups, applies default or per-container policy,
-and enforces concurrency, rate, prompt, timeout, and clipboard-size limits.
-The socket directory and socket use modes `0700` and `0600`. Host command
-resolution skips the package's own executable directory to avoid recursively
-calling the installed wrappers.
+For Unix sockets, the host authenticates local callers with `SO_PEERCRED` and
+attempts Podman container attribution from cgroups. For vsock, it identifies
+the peer by the kernel-reported source CID; per-container overrides do not
+apply. It enforces concurrency, rate, prompt, timeout, and clipboard-size
+limits. The Unix socket directory and socket use modes `0700` and `0600`.
+Host command resolution skips the package's own executable directory to avoid
+recursively calling the installed wrappers.
 
 The `gh` policy table in `lib/portal/gh_policy.ml` is generated from
 `data/gh-policy.json`; `tools/gh-policy-gen.py` refreshes the report, JSON, and
 OCaml source from the installed GitHub CLI command tree.
 
 See [`PORTAL.md`](./PORTAL.md) for configuration and wrapper contracts. Portal
-is currently standalone: Ash does not yet transport its Unix socket across the
-VM boundary.
+can cross the VM boundary over vsock, but Ash does not yet start it or inject
+its endpoint automatically.
 
 ## Build
 

@@ -72,7 +72,10 @@ let test_config () =
   output_string oc
     {|
 [portal]
+transport = "vsock"
 socket_path = "/tmp/test-portal.sock"
+vsock_cid = 7
+vsock_port = 44050
 
 [portal.policy.defaults]
 clipboard_read_image = "ask"
@@ -85,6 +88,9 @@ gh_exec = "deny_all"
   close_out oc;
   let config = Portal.Config.load ~path () in
   assert_equal "socket path" "/tmp/test-portal.sock" config.socket_path;
+  assert_true "vsock transport" (config.transport = Portal.Config.Vsock);
+  assert_true "vsock CID" (config.vsock_cid = 7);
+  assert_true "vsock port" (config.vsock_port = 44050);
   let policy = Portal.Config.policy_for_container config (Some "abc123") in
   assert_true "container clipboard policy"
     (policy.clipboard_read_image = Portal.Config.Deny);
@@ -132,6 +138,18 @@ let test_host_roundtrip () =
           | Portal.Protocol.Pong _ -> ()
           | _ -> fail "ping returned wrong response")
 
+let test_transport () =
+  let check value cid port =
+    match Portal.Transport.parse_vsock value with
+    | Portal.Transport.Vsock endpoint ->
+        assert_true "parsed vsock CID" (endpoint.cid = cid);
+        assert_true "parsed vsock port" (endpoint.port = port)
+    | Portal.Transport.Unix _ -> fail "parsed vsock as Unix"
+  in
+  check "2:4050" 2 4050;
+  check "vsock:7:44050" 7 44050;
+  check "vsock://9:1234" 9 1234
+
 let test_gh_policy () =
   assert_true "gh pr view is read"
     (Portal.Gh_policy.classify [ "pr"; "view"; "123" ] = Portal.Gh_policy.Read);
@@ -148,4 +166,5 @@ let () =
   run "Rust u128 timestamp compatibility" test_rust_u128_timestamp;
   run "portal config" test_config;
   run "host roundtrip" test_host_roundtrip;
+  run "transport parsing" test_transport;
   run "gh policy" test_gh_policy

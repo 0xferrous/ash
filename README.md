@@ -145,14 +145,15 @@ Portal protocol:
 - `gh` — transparent GitHub CLI wrapper
 - `wl-paste` — transparent image-clipboard wrapper
 
-Portal uses MessagePack over a permission-restricted Unix socket and remains
-wire-compatible with the Rust Agent-box implementation. Its code is isolated
-under `lib/portal/`, `bin/agent-portal-*`, and `wrappers/`; it does not depend
+Portal uses MessagePack over a permission-restricted Unix socket or Linux
+AF_VSOCK stream and remains wire-compatible with the Rust Agent-box
+implementation. Its code is isolated under `lib/portal/`,
+`bin/agent-portal-*`, and `wrappers/`; it does not depend
 on the Ash VM implementation.
 
 See [PORTAL.md](./PORTAL.md) for configuration, security behavior, and wrapper
-compatibility. Ash does not yet mount or transport the Portal socket into its
-VMs automatically.
+compatibility. The Portal host and clients support vsock, but Ash does not yet
+start the service or inject its endpoint into VMs automatically.
 
 ## Source layout
 
