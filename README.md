@@ -202,6 +202,7 @@ Portal protocol:
 
 - `agent-portal-host` — host-side capability broker
 - `agent-portal-cli` — diagnostic and direct API client
+- `ash-dbus-proxy` — experimental filtered host D-Bus/vsock bridge
 - `gh` — transparent GitHub CLI wrapper
 - `wl-paste` — transparent image-clipboard wrapper
 

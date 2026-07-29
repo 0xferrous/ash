@@ -71,7 +71,7 @@
           inherit src;
           duneVersion = "3";
 
-          nativeBuildInputs = [ pkgs.git ];
+          nativeBuildInputs = [ pkgs.git pkgs.makeWrapper ];
 
           buildInputs = [ pkgs.e2fsprogs ];
 
@@ -83,11 +83,17 @@
             ocamlPackages.yojson
           ];
 
+          postFixup = ''
+            wrapProgram "$out/bin/ash-dbus-proxy" \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.xdg-dbus-proxy ]}
+          '';
+
           strictDeps = true;
         };
 
         ash = pkgs.runCommand "${ashBuild.pname}-${ashBuild.version}" { } ''
           install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
+          install -Dm755 ${ashBuild}/bin/ash-dbus-proxy "$out/bin/ash-dbus-proxy"
         '';
 
         agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
@@ -96,6 +102,10 @@
 
         agentPortalCli = pkgs.runCommand "agent-portal-cli" { } ''
           install -Dm755 ${ashBuild}/bin/agent-portal-cli "$out/bin/agent-portal-cli"
+        '';
+
+        ashDbusProxy = pkgs.runCommand "ash-dbus-proxy" { } ''
+          install -Dm755 ${ashBuild}/bin/ash-dbus-proxy "$out/bin/ash-dbus-proxy"
         '';
 
         nixExt4Image = pkgs.runCommand "nix-ext4-image" { } ''
@@ -148,6 +158,7 @@
           "agent-portal-cli" = agentPortalCli;
           "agent-portal-host" = agentPortalHost;
           "agent-portal-wrappers" = agentPortalWrappers;
+          "ash-dbus-proxy" = ashDbusProxy;
           "nix-ext4-image" = nixExt4Image;
           command-pages = ash-command-pages;
           ash-command-pages = ash-command-pages;
@@ -161,6 +172,11 @@
           default = {
             type = "app";
             program = "${ash}/bin/ash";
+          };
+
+          "ash-dbus-proxy" = {
+            type = "app";
+            program = "${ashDbusProxy}/bin/ash-dbus-proxy";
           };
 
           "nix-ext4-image" = {

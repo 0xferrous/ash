@@ -33,6 +33,11 @@ global = false
 # socket_path = "/run/user/1000/agent-portal/portal.sock"
 # prompt_command = "rofi -dmenu -p 'agent-portal'"
 
+# Experimental filtered access to the host notification service. The guest
+# package must include ash-dbus-proxy; the host must provide xdg-dbus-proxy.
+[portal.dbus]
+notifications = false
+
 [portal.policy.defaults]
 clipboard_read_image = "allow"
 gh_exec = "ask_for_writes"

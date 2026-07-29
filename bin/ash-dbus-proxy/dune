@@ -1,0 +1,4 @@
+(executable
+ (public_name ash-dbus-proxy)
+ (name main)
+ (libraries agent_portal cmdliner))

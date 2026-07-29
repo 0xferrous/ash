@@ -19,6 +19,7 @@ type t = {
   rate_burst : int;
   max_clipboard_bytes : int;
   allowed_mime : string list;
+  dbus_notifications : bool;
   defaults : method_policy;
   containers : (string * method_policy) list;
 }
@@ -69,6 +70,7 @@ let defaults () =
     rate_burst = 10;
     max_clipboard_bytes = 20 * 1024 * 1024;
     allowed_mime = [ "image/png"; "image/jpeg"; "image/webp" ];
+    dbus_notifications = false;
     defaults = default_policy;
     containers = [];
   }
@@ -210,6 +212,10 @@ let of_document document =
         (Otoml.get_array Otoml.get_string)
         (nested "clipboard" "allowed_mime")
         fallback.allowed_mime;
+    dbus_notifications =
+      get document Otoml.get_boolean
+        (nested "dbus" "notifications")
+        fallback.dbus_notifications;
     defaults = policy_defaults;
     containers = container_policies document policy_defaults;
   }

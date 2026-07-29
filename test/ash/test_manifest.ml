@@ -151,6 +151,7 @@ let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
       portal_host = Some "/bin/agent-portal-host";
+      portal_dbus_proxy = Some "/bin/ash-dbus-proxy";
       kitty;
       virtiofsd = "/bin/virtiofsd";
       virtle = "/bin/virtle";
@@ -765,6 +766,38 @@ vsock_cid = 2
   assert_string_contains "managed portal sets Nushell endpoint"
     (string_field nushell "text")
     {|$env.AGENT_PORTAL_VSOCK = "managed:2"|}
+
+let test_dbus_notifications_manifest () =
+  let config =
+    parse_toml
+      {|[portal]
+enabled = true
+global = false
+vsock_cid = 2
+
+[portal.dbus]
+notifications = true
+|}
+  in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"dbus-notifications" ()
+  in
+  let doc = parse_toml manifest in
+  let runs = table_array doc "run" in
+  assert_int "Portal and D-Bus run count" 2 (List.length runs);
+  let dbus_exec = strings_field (List.nth runs 1) "exec" in
+  assert_equal "D-Bus bridge executable" "/bin/ash-dbus-proxy"
+    (List.hd dbus_exec);
+  assert_bool "D-Bus bridge host mode" true (List.mem "host" dbus_exec);
+  assert_bool "D-Bus bridge managed port" true (List.mem "--managed" dbus_exec);
+  assert_bool "D-Bus bridge expected CID" true (List.mem "{{.CID}}" dbus_exec);
+  let profile = table_array doc "write_files" |> List.hd in
+  assert_string_contains "guest D-Bus Unix socket address"
+    (string_field profile "text")
+    "DBUS_SESSION_BUS_ADDRESS=\"unix:path=${XDG_RUNTIME_DIR";
+  assert_string_contains "guest D-Bus socket path"
+    (string_field profile "text")
+    "/ash-dbus-proxy/bus.sock"
 
 let test_global_portal_manifest () =
   let config =
@@ -1666,6 +1699,7 @@ let () =
   run "space mount deduplication after parsing"
     test_space_mount_deduplication_after_parsing;
   run "managed portal manifest" test_managed_portal_manifest;
+  run "D-Bus notifications manifest" test_dbus_notifications_manifest;
   run "global portal manifest" test_global_portal_manifest;
   run "disabled portal manifest" test_disabled_portal_manifest;
   run "ro-store socket override" test_ro_store_socket_override;

@@ -102,6 +102,9 @@ max_clipboard_bytes = 20971520
 [portal.clipboard]
 allowed_mime = ["image/png", "image/jpeg", "image/webp"]
 
+[portal.dbus]
+notifications = false
+
 [portal.policy.defaults]
 clipboard_read_image = "allow"
 gh_exec = "ask_for_writes"
@@ -238,3 +241,27 @@ virtle can install shell startup files before SSH readiness. Ash writes
 `~/.local/share/nushell/vendor/autoload/ash-agent-portal.nu` for Nushell.
 Setting `portal.enabled = false` rewrites both generated files to clear stale
 Portal environment variables on the next boot.
+
+### Experimental host notifications
+
+Set the following to expose only `org.freedesktop.Notifications` from the host
+session bus:
+
+```toml
+[portal.dbus]
+notifications = true
+```
+
+Ash starts `ash-dbus-proxy host` with the VM, which launches
+`xdg-dbus-proxy --filter --talk=org.freedesktop.Notifications` and relays its
+filtered Unix socket over a VM-specific AF_VSOCK port. A guest-side
+`ash-dbus-proxy connect --listen ...` service exposes a local Unix socket and
+relays each connection over vsock. The guest profile points
+`DBUS_SESSION_BUS_ADDRESS` at that socket. This allows commands such as
+`notify-send 'VM task finished'` to use the host's notification daemon.
+
+The host must have `xdg-dbus-proxy`; set `ASH_XDG_DBUS_PROXY` if it is not in
+`PATH`. The guest must install `ash-dbus-proxy` and run its listener, for
+example as a user systemd service. The relay carries the D-Bus byte stream but not Unix file descriptors,
+which is sufficient for ordinary notification calls but not a general-purpose
+session-bus bridge.

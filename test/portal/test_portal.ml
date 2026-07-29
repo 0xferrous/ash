@@ -108,6 +108,9 @@ socket_path = "/tmp/test-portal.sock"
 vsock_cid = 7
 vsock_port = 44050
 
+[portal.dbus]
+notifications = true
+
 [portal.policy.defaults]
 clipboard_read_image = "ask"
 gh_exec = "ask_for_all"
@@ -122,6 +125,7 @@ gh_exec = "deny_all"
   assert_true "vsock transport" (config.transport = Portal.Config.Vsock);
   assert_true "vsock CID" (config.vsock_cid = 7);
   assert_true "vsock port" (config.vsock_port = 44050);
+  assert_true "D-Bus notifications" config.dbus_notifications;
   let policy = Portal.Config.policy_for_container config (Some "abc123") in
   assert_true "container clipboard policy"
     (policy.clipboard_read_image = Portal.Config.Deny);
