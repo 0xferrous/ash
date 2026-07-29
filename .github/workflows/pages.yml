@@ -37,8 +37,8 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Build ash
-        run: nix build .#ash
+      - name: Build documentation tools
+        run: nix build .#all
 
       - name: Generate command pages
         env:
