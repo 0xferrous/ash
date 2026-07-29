@@ -343,18 +343,44 @@ let assert_mount_parse_error label ~host_home ~guest_user spec =
 let test_xdg_config_path () =
   let old_home = Sys.getenv_opt "HOME" in
   let old_xdg = Sys.getenv_opt "XDG_CONFIG_HOME" in
+  let old_ash = Sys.getenv_opt "ASH_CONFIG_HOME" in
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "HOME" (Option.value old_home ~default:"");
-      Unix.putenv "XDG_CONFIG_HOME" (Option.value old_xdg ~default:""))
+      Unix.putenv "XDG_CONFIG_HOME" (Option.value old_xdg ~default:"");
+      Unix.putenv "ASH_CONFIG_HOME" (Option.value old_ash ~default:""))
     (fun () ->
       Unix.putenv "HOME" "/home/tester";
+      Unix.putenv "ASH_CONFIG_HOME" "";
       Unix.putenv "XDG_CONFIG_HOME" "/tmp/test-config";
       assert_equal "XDG config path" "/tmp/test-config/ash/config.toml"
         (Util.default_ash_config_path ());
       Unix.putenv "XDG_CONFIG_HOME" "";
       assert_equal "fallback config path" "/home/tester/.config/ash/config.toml"
+        (Util.default_ash_config_path ());
+      Unix.putenv "ASH_CONFIG_HOME" "~/dev-config";
+      assert_equal "Ash config home override"
+        "/home/tester/dev-config/config.toml"
         (Util.default_ash_config_path ()))
+
+let test_ash_state_home () =
+  let old_home = Sys.getenv_opt "HOME" in
+  let old_xdg = Sys.getenv_opt "XDG_STATE_HOME" in
+  let old_ash = Sys.getenv_opt "ASH_STATE_HOME" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "HOME" (Option.value old_home ~default:"");
+      Unix.putenv "XDG_STATE_HOME" (Option.value old_xdg ~default:"");
+      Unix.putenv "ASH_STATE_HOME" (Option.value old_ash ~default:""))
+    (fun () ->
+      Unix.putenv "HOME" "/home/tester";
+      Unix.putenv "ASH_STATE_HOME" "";
+      Unix.putenv "XDG_STATE_HOME" "/tmp/test-state";
+      assert_equal "XDG state path" "/tmp/test-state/ash"
+        (Virtle.state_base_dir ());
+      Unix.putenv "ASH_STATE_HOME" "~/.local/state/nash";
+      assert_equal "Ash state home override" "/home/tester/.local/state/nash"
+        (Virtle.state_base_dir ()))
 
 let test_space_mount_spec_parsing () =
   let host_home = "/home/host" in
@@ -1270,6 +1296,7 @@ let () =
   run "global network config" test_global_network_config;
   run "no spaces selected by default" test_no_spaces_selected_by_default;
   run "XDG config path" test_xdg_config_path;
+  run "Ash state home" test_ash_state_home;
   run "space mount spec parsing" test_space_mount_spec_parsing;
   run "space extension graph traversal" test_space_extension_graph_traversal;
   run "space extension evaluation" test_space_extension_evaluation;

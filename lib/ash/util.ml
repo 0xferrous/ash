@@ -5,14 +5,19 @@ let config_home_dir () =
   | Some path when path <> "" -> path
   | _ -> Filename.concat (home_dir ()) ".config"
 
-let default_ash_config_path () =
-  Filename.concat (config_home_dir ()) "ash/config.toml"
-
 let expand_home path =
   if path = "~" then home_dir ()
   else if String.length path >= 2 && String.sub path 0 2 = "~/" then
     Filename.concat (home_dir ()) (String.sub path 2 (String.length path - 2))
   else path
+
+let ash_config_dir () =
+  match Sys.getenv_opt "ASH_CONFIG_HOME" with
+  | Some path when path <> "" -> expand_home path
+  | _ -> Filename.concat (config_home_dir ()) "ash"
+
+let default_ash_config_path () =
+  Filename.concat (ash_config_dir ()) "config.toml"
 
 let ensure_dir path =
   let rec loop path =

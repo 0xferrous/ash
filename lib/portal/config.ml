@@ -36,6 +36,11 @@ let expand_home path =
     Filename.concat (home_dir ()) (String.sub path 2 (String.length path - 2))
   else path
 
+let ash_config_dir () =
+  match Sys.getenv_opt "ASH_CONFIG_HOME" with
+  | Some path when path <> "" -> expand_home path
+  | _ -> Filename.concat (config_home_dir ()) "ash"
+
 let default_socket_path () =
   Printf.sprintf "/run/user/%d/agent-portal/portal.sock" (Unix.getuid ())
 
@@ -65,10 +70,14 @@ let defaults () =
 let default_path () =
   match Sys.getenv_opt "AGENT_PORTAL_CONFIG" with
   | Some path when path <> "" -> path
-  | _ ->
-      let ash = Filename.concat (config_home_dir ()) "ash/config.toml" in
-      if Sys.file_exists ash then ash
-      else Filename.concat (home_dir ()) ".agent-box.toml"
+  | _ -> (
+      match Sys.getenv_opt "ASH_CONFIG_HOME" with
+      | Some path when path <> "" ->
+          Filename.concat (expand_home path) "config.toml"
+      | _ ->
+          let ash = Filename.concat (ash_config_dir ()) "config.toml" in
+          if Sys.file_exists ash then ash
+          else Filename.concat (home_dir ()) ".agent-box.toml")
 
 let get document getter path default =
   Otoml.find_opt document getter path |> Option.value ~default

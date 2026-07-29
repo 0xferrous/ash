@@ -109,7 +109,7 @@ Spawn options:
 - `--override-input NAME=FLAKE` — override an input of the selected flake during every Nix evaluation and build. Repeatable. Relative path references are resolved before being saved in `ash-state.toml`; an existing named VM reuses saved overrides when none are supplied.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
 - `-u`, `--user USER` — override the guest SSH user. The default is evaluated from `config.services.getty.autologinUser` in the selected NixOS configuration.
-- `-c`, `--config CONFIG` — ash config. Default: `$XDG_CONFIG_HOME/ash/config.toml`, falling back to `~/.config/ash/config.toml`.
+- `-c`, `--config CONFIG` — ash config. Default: `$ASH_CONFIG_HOME/config.toml` when `ASH_CONFIG_HOME` is set; otherwise `$XDG_CONFIG_HOME/ash/config.toml`, falling back to `~/.config/ash/config.toml`.
 - `--ssh PATH` — override path to host `ssh`. Defaults to the selected NixOS config's `pkgs.openssh`.
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
 - `--ro-store-socket PATH` — use an existing virtiofs daemon socket for the read-only `/nix/store` mount instead of starting ash's own `ro-store` virtiofsd.
@@ -179,7 +179,7 @@ nixosConfigurations.<HOST>.config.services.getty.autologinUser
 nixosConfigurations.<HOST>.config.users.users.<USER>.name
 ```
 
-Then it reads `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. The optional `global.nix_store_virtiofs_socket` setting selects an existing host-wide virtiofsd socket serving `/nix/store`; `--ro-store-socket` takes precedence. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
+Then it reads `$ASH_CONFIG_HOME/config.toml` when `ASH_CONFIG_HOME` is set, otherwise `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. The optional `global.nix_store_virtiofs_socket` setting selects an existing host-wide virtiofsd socket serving `/nix/store`; `--ro-store-socket` takes precedence. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
 
 Space selection is explicit:
 
@@ -340,7 +340,7 @@ or, if `XDG_STATE_HOME` is unset:
 
 If `--name` is not passed, `ash` generates a name from the current directory basename and timestamp, such as `ash-20260708193000`. Passing the same `--name` reuses the same state directory and persistent image. For state paths, names preserve letters, digits, `.`, `_`, and `-`; other characters are replaced with `-`.
 
-Ash keeps its manifests, configuration, workspace, persistent image, and other managed files directly under `~/.local/state/ash/<name>/` (or the equivalent `XDG_STATE_HOME` path). The generated manifest sets virtle's own `state_dir` to the nested `virtle_state/` directory, so virtle runtime files and control sockets live under `~/.local/state/ash/<name>/virtle_state/`.
+Ash keeps its manifests, configuration, workspace, persistent image, and other managed files under `$ASH_STATE_HOME/<name>/` when `ASH_STATE_HOME` is set. Otherwise it uses `~/.local/state/ash/<name>/` (or the equivalent `XDG_STATE_HOME/ash` path). The generated manifest sets virtle's own `state_dir` to the nested `virtle_state/` directory, so virtle runtime files and control sockets live under `~/.local/state/ash/<name>/virtle_state/`.
 
 Every generated manifest disables virtle's default user-mode network and appends an Ash-managed QEMU bridge NIC through `qemu.exec`. The NIC attaches to `ash0` by default through `/run/wrappers/bin/qemu-bridge-helper` and uses a stable locally administered MAC derived from the Ash VM name. The host must provide the bridge, DHCP, NAT if desired, and bridge-helper authorization.
 

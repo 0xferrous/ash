@@ -27,8 +27,12 @@ nix run github:0xferrous/ash -- --help
 ## Configuration
 
 Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
-`~/.config/ash/config.toml`. See [`example_config.toml`](./example_config.toml)
-for the global and space mount formats. Set
+`~/.config/ash/config.toml`. `ASH_CONFIG_HOME` overrides the application
+configuration directory directly, so `ASH_CONFIG_HOME=~/.config/nash` selects
+`~/.config/nash/config.toml`. `ASH_STATE_HOME` similarly overrides the complete
+VM state root instead of appending `ash`. See
+[`example_config.toml`](./example_config.toml) for the global and space mount
+formats. Set
 `global.memory` to configure VM memory in MiB; it defaults to 4096. VMs attach
 to the private host bridge `ash0` through
 `/run/wrappers/bin/qemu-bridge-helper`; override these with

@@ -65,6 +65,23 @@ let temp_dir prefix =
   Unix.mkdir path 0o700;
   path
 
+let test_config_home_override () =
+  let old_home = Sys.getenv_opt "HOME" in
+  let old_ash = Sys.getenv_opt "ASH_CONFIG_HOME" in
+  let old_portal = Sys.getenv_opt "AGENT_PORTAL_CONFIG" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "HOME" (Option.value old_home ~default:"");
+      Unix.putenv "ASH_CONFIG_HOME" (Option.value old_ash ~default:"");
+      Unix.putenv "AGENT_PORTAL_CONFIG" (Option.value old_portal ~default:""))
+    (fun () ->
+      Unix.putenv "HOME" "/home/tester";
+      Unix.putenv "AGENT_PORTAL_CONFIG" "";
+      Unix.putenv "ASH_CONFIG_HOME" "~/.config/nash";
+      assert_equal "Portal Ash config home override"
+        "/home/tester/.config/nash/config.toml"
+        (Portal.Config.default_path ()))
+
 let test_config () =
   let directory = temp_dir "portal-config" in
   let path = Filename.concat directory "config.toml" in
@@ -166,6 +183,7 @@ let run name test =
 let () =
   run "protocol roundtrip" test_protocol_roundtrip;
   run "Rust u128 timestamp compatibility" test_rust_u128_timestamp;
+  run "Portal Ash config home override" test_config_home_override;
   run "portal config" test_config;
   run "host roundtrip" test_host_roundtrip;
   run "transport parsing" test_transport;

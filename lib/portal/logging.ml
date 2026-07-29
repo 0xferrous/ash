@@ -3,9 +3,12 @@ let channel : out_channel option ref = ref None
 let visible = ref true
 
 let state_home () =
-  match Sys.getenv_opt "XDG_STATE_HOME" with
-  | Some path when path <> "" -> path
-  | _ -> Filename.concat (Config.home_dir ()) ".local/state"
+  match Sys.getenv_opt "ASH_STATE_HOME" with
+  | Some path when path <> "" -> Config.expand_home path
+  | _ -> (
+      match Sys.getenv_opt "XDG_STATE_HOME" with
+      | Some path when path <> "" -> Filename.concat path "ash"
+      | _ -> Filename.concat (Config.home_dir ()) ".local/state/ash")
 
 let default_path socket_path =
   let name = Filename.basename socket_path in
@@ -13,7 +16,7 @@ let default_path socket_path =
     if Filename.check_suffix name ".sock" then Filename.chop_suffix name ".sock"
     else name
   in
-  Filename.concat (state_home ()) ("ash/logs/" ^ stem ^ ".log")
+  Filename.concat (state_home ()) ("logs/" ^ stem ^ ".log")
 
 let init ?path ?(stderr = true) socket_path =
   let path = Option.value path ~default:(default_path socket_path) in

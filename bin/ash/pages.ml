@@ -21,10 +21,11 @@ let main =
            manages spawn, attach, copy, mount, stop, and cleanup flows.";
         `S "STATE";
         `P
-          "Named VMs keep ash state under XDG_STATE_HOME/ash/NAME/ when \
-           XDG_STATE_HOME is set, or ~/.local/state/ash/NAME/ otherwise. State \
-           includes the saved ash config, generated virtle manifest, SSH keys, \
-           hotmount staging data, and VM runtime data.";
+          "Named VMs keep ash state under ASH_STATE_HOME/NAME/ when \
+           ASH_STATE_HOME is set. Otherwise they use XDG_STATE_HOME/ash/NAME/ \
+           or ~/.local/state/ash/NAME/. State includes the saved ash config, \
+           generated virtle manifest, SSH keys, hotmount staging data, and VM \
+           runtime data.";
         `S "GLOBAL OPTIONS";
         `P
           "The options --debug, --virtle=PATH, and -v/--verbose are shared by \
@@ -156,12 +157,13 @@ let spawn =
            --user overrides the evaluated value.";
         `S "SPACE CONFIGURATION";
         `P
-          "The config defaults to XDG_CONFIG_HOME/ash/config.toml, falling \
-           back to ~/.config/ash/config.toml, and can be overridden with \
-           --config. Each [spaces.NAME] table may define rw_mounts and \
-           ro_mounts arrays, plus an extends array naming other spaces. \
-           Extended spaces are evaluated recursively before the extending \
-           space. Unknown spaces and inheritance cycles are errors.";
+          "The config defaults to ASH_CONFIG_HOME/config.toml when \
+           ASH_CONFIG_HOME is set. Otherwise it uses \
+           XDG_CONFIG_HOME/ash/config.toml or ~/.config/ash/config.toml. \
+           --config overrides every default. Each [spaces.NAME] table may \
+           define rw_mounts and ro_mounts arrays, plus an extends array naming \
+           other spaces. Extended spaces are evaluated recursively before the \
+           extending space. Unknown spaces and inheritance cycles are errors.";
         `P
           "The [global] table may set memory to the VM memory in MiB; the \
            default is 4096. It may also set nix_store_virtiofs_socket to an \
