@@ -73,7 +73,10 @@
           ash-command-pages = ash-command-pages;
         };
 
-        apps.default = flake-utils.lib.mkApp { drv = ash; };
+        apps.default = {
+          type = "app";
+          program = "${ash}/bin/ash";
+        };
 
         devShells.default = pkgs.mkShell {
           inputsFrom = [ ashBuild ];
