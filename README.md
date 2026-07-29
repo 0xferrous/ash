@@ -51,6 +51,18 @@ Use Kitty's SSH kitten for an attached session:
 ash attach --kitty work
 ```
 
+Forward Wayland and X11 applications from the guest to the host with Waypipe:
+
+```sh
+ash attach --waypipe work
+```
+
+Waypipe and Kitty can be combined:
+
+```sh
+ash attach --waypipe --kitty work
+```
+
 Start and attach immediately, keeping the VM after SSH exits:
 
 ```sh

@@ -16,7 +16,7 @@ let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     nix_store_image_size_mib config flake override_inputs name user spaces
-    kernel_serial mount_cwd ephemeral attach keep kitty =
+    kernel_serial mount_cwd ephemeral attach keep kitty waypipe =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
@@ -24,7 +24,7 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?name ?user
     ~config_path:config ?flake ~override_inputs ~spaces ~kernel_serial
-    ~mount_cwd ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
+    ~mount_cwd ~ephemeral ~attach ~keep ~kitty ~waypipe ~verbose:opts.verbose ()
 
 let list_vms global =
   Log.set_debug global.debug;
@@ -38,10 +38,10 @@ let rm_vms global =
   Log.set_debug global.debug;
   Virtle.rm_vms ()
 
-let attach opts name spawn keep kitty =
+let attach opts name spawn keep kitty waypipe =
   Log.set_debug opts.global.debug;
   if keep && not spawn then Log.fatal "--keep requires --spawn";
-  Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~kitty
+  Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~kitty ~waypipe
     ~verbose:opts.verbose ()
 
 let resume opts name attach keep =
@@ -264,6 +264,14 @@ let kitty_flag =
     & info [ "kitty" ]
         ~doc:"Use `kitten ssh` instead of ssh for the attached session.")
 
+let waypipe_flag =
+  Arg.(
+    value & flag
+    & info [ "waypipe" ]
+        ~doc:
+          "Forward guest Wayland and X11 applications to the host through \
+           Waypipe. May be combined with --kitty.")
+
 let suspend_flag =
   Arg.(
     value & flag
@@ -291,7 +299,7 @@ let spawn_cmd =
       $ ro_store_socket_arg $ nix_store_strategy_arg $ nix_store_image_size_arg
       $ config_arg $ flake_arg $ override_input_arg $ name_arg $ user_arg
       $ spaces_arg $ kernel_serial_arg $ mount_cwd_arg $ ephemeral_arg
-      $ attach_flag $ keep_flag $ kitty_flag)
+      $ attach_flag $ keep_flag $ kitty_flag $ waypipe_flag)
 
 let attach_name_arg =
   Arg.(
@@ -309,7 +317,7 @@ let attach_cmd =
     (Cmd.info "attach" ~doc:"ssh into a running VM" ~man:attach_man)
     Term.(
       const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag
-      $ kitty_flag)
+      $ kitty_flag $ waypipe_flag)
 
 let resume_name_arg =
   Arg.(

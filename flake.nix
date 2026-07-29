@@ -91,10 +91,16 @@
           strictDeps = true;
         };
 
-        ash = pkgs.runCommand "${ashBuild.pname}-${ashBuild.version}" { } ''
-          install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
-          install -Dm755 ${ashBuild}/bin/ash-dbus-proxy "$out/bin/ash-dbus-proxy"
-        '';
+        ash = pkgs.runCommand "${ashBuild.pname}-${ashBuild.version}"
+          {
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+          }
+          ''
+            install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
+            install -Dm755 ${ashBuild}/bin/ash-dbus-proxy "$out/bin/ash-dbus-proxy"
+            wrapProgram "$out/bin/ash" \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.waypipe ]}
+          '';
 
         agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
           install -Dm755 ${ashBuild}/bin/agent-portal-host "$out/bin/agent-portal-host"
@@ -195,6 +201,7 @@
             ocamlPackages.otoml
             ocamlPackages.utop
             pkgs.e2fsprogs
+            pkgs.waypipe
           ];
         };
       }

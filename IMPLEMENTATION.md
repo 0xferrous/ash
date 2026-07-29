@@ -89,6 +89,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `bindfs` — creates host-side staging mounts for runtime hotmounts. See [Runtime hotmount implementation](#runtime-hotmount-implementation).
 - `mountpoint` — used by `ash mount` to avoid remounting an already-mounted host-side hotmount directory.
 - `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
+- `waypipe` — wraps attached sessions selected with `--waypipe`, forwarding guest Wayland and X11 applications to the host compositor. The packaged Ash CLI includes the host executable; source builds resolve it from `PATH`. The guest must provide both `waypipe` and `xwayland-satellite` in its SSH command `PATH`.
 - `systemd-ssh-proxy` — host SSH proxy used for vsock SSH connections. Defaults to the selected NixOS config's `config.systemd.package`; override with `--systemd-ssh-proxy PATH`.
 - `systemd-run` — starts background VMs as transient user units for `ash spawn`, `ash spawn --attach --keep`, and `ash attach --spawn --keep`.
 - `agent-portal-host` — required when `[portal]` is enabled with `global = false`; resolved beside `ash`, from `ASH_AGENT_PORTAL_HOST`, or from `PATH`.
@@ -120,12 +121,16 @@ Spawn options:
 - `--kernel-serial=off|print|console` — disable serial I/O, stream guest kernel/init output, or connect host standard input and output to the guest serial console.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
 - `--attach` — attach after spawning. Without `--keep`, the VM stops when SSH exits.
+- `--kitty` — use `kitten ssh` for the attached session.
+- `--waypipe` — wrap the attached SSH session with Waypipe so guest Wayland and X11 applications display through the host compositor. This can be combined with `--kitty` and is saved for regenerated launches.
 - `--keep` — with `--attach`, start as a background VM and keep it running after SSH exits. Plain `spawn` already keeps the VM, so `--keep` requires `--attach`.
 - `--ephemeral` — remove the VM state directory after the launched SSH/VM session exits. Requires `--attach` and cannot be used with `--keep`.
 
 Attach options:
 
 - `--spawn` — if the named VM is stopped, load its saved `ash-state.toml`, regenerate the manifest, start it, then attach.
+- `--kitty` — use `kitten ssh`. It can be combined with `--waypipe`.
+- `--waypipe` — forward guest Wayland and X11 applications to the host. It can be combined with `--kitty`.
 - `--keep` — with `--spawn`, start the stopped VM as a background systemd unit and keep it running after SSH exits. `ash attach --keep` without `--spawn` is invalid.
 
 ## Lifecycle commands
@@ -300,6 +305,16 @@ The lazy variants handle virtiofsd briefly keeping the staging mount busy.
 ```nix
 services.qemuGuest.enable = true;
 ```
+
+## Waypipe guest contract
+
+`--waypipe` runs the host Waypipe client around Ash's generated SSH wrapper. Waypipe uses that wrapper to connect over the existing SSH/vsock path and starts `waypipe server` in the guest. A login shell opened through the resulting session receives `WAYLAND_DISPLAY`, so Wayland applications started there appear on the host.
+
+The guest must provide `waypipe` and `xwayland-satellite` in its SSH command `PATH`; for NixOS, include `pkgs.waypipe` and `pkgs.xwayland-satellite` in `environment.systemPackages`. The host must be running a Wayland session with usable `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` values. Ash passes `--no-gpu` because its generated VM currently has no guest GPU, and passes `--xwls` so Waypipe starts `xwayland-satellite` and exports `DISPLAY` for X11 applications such as `glxgears`. Waypipe and `kitten ssh` compose by selecting Ash's Kitty SSH wrapper as Waypipe's `--ssh-bin`.
+
+Ash disables Virtle's SSH autoprovisioning in generated manifests. Attached launches start the VM as an Ash-managed user unit without asking Virtle to open SSH, wait for QGA readiness, install Ash's `<state>/id_ed25519` public key through QGA, and only then launch the selected OpenSSH, Kitty, or Waypipe client. For non-`--keep` sessions, Ash stops the temporary user unit when the attached client exits; ephemeral state is then removed as before.
+
+Waypipe forwards compositor protocols rather than creating a strong sandbox boundary. Only use it with guests and applications trusted with access to the host Wayland compositor.
 
 ## Guest SSH contract
 

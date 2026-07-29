@@ -297,6 +297,15 @@ let spawn =
            spawn sessions and save that choice in ash-state.toml for later \
            regenerated launches.";
         `P
+          "Pass --waypipe to wrap the attached SSH session with Waypipe. The \
+           guest must provide waypipe and xwayland-satellite in PATH, and the \
+           host must be running a Wayland compositor. --waypipe and --kitty \
+           may be combined.";
+        `P
+          "Waypipe runs with --no-gpu because Ash does not expose a guest GPU. \
+           It forwards host compositor protocols and should only be used with \
+           trusted guest applications.";
+        `P
           "This requires the guest to have QEMU Guest Agent support and the \
            guest user/home path expected by the generated manifest.";
         `S "MDNS NAME";
@@ -357,8 +366,15 @@ let attach =
         `P
           "Pass --kitty to use kitten ssh instead of ssh for this attached \
            session.";
+        `P
+          "Pass --waypipe to forward guest Wayland and X11 applications to the \
+           host compositor. Waypipe uses Ash's generated SSH wrapper, enables \
+           xwayland-satellite for X11 clients, and can use the Kitty wrapper \
+           when --kitty is also passed.";
         `S Manpage.s_examples;
         `Pre "ash attach work";
+        `Pre "ash attach --waypipe work";
+        `Pre "ash attach --waypipe --kitty work";
         `Pre "ash attach --spawn work";
         `Pre "ash attach --spawn --keep work";
       ];

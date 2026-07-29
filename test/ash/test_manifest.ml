@@ -32,6 +32,11 @@ let find_int doc path =
   | Some value -> value
   | None -> fail ("missing int: " ^ String.concat "." path)
 
+let find_bool doc path =
+  match Otoml.find_opt doc Otoml.get_boolean path with
+  | Some value -> value
+  | None -> fail ("missing bool: " ^ String.concat "." path)
+
 let find_strings doc path =
   match Otoml.find_opt doc (Otoml.get_array Otoml.get_string) path with
   | Some value -> value
@@ -123,8 +128,8 @@ let test_target : Nix.target =
 
 let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
     ?(mount_cwd = false) ?nix_store_strategy ?nix_store_image_size_mib
-    ?ro_store_socket ?(kitty = false) ?(config_path = "/tmp/config.toml")
-    ~config ~flake ~name () =
+    ?ro_store_socket ?(kitty = false) ?waypipe
+    ?(config_path = "/tmp/config.toml") ~config ~flake ~name () =
   let nix_store_strategy =
     Option.value nix_store_strategy
       ~default:(Ash_config.global_nix_store_strategy config)
@@ -153,6 +158,7 @@ let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
       portal_host = Some "/bin/agent-portal-host";
       portal_dbus_proxy = Some "/bin/ash-dbus-proxy";
       kitty;
+      waypipe;
       virtiofsd = "/bin/virtiofsd";
       virtle = "/bin/virtle";
     }
@@ -1316,6 +1322,60 @@ let test_kitty_selects_kitten_ssh_wrapper () =
   assert_equal "selected kitty wrapper" kitty_wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]))
 
+let test_waypipe_wraps_openssh_and_kitty () =
+  let root = temp_dir "ash-test-waypipe" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config = parse_toml "[spaces]\n" in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"wayland"
+      ~waypipe:"/bin/waypipe" ()
+  in
+  let manifest_doc = parse_toml manifest in
+  let exec = find_strings manifest_doc [ "ssh"; "exec" ] in
+  let openssh_wrapper =
+    Filename.concat state "ash/wayland/ssh-with-space-mounts"
+  in
+  let waypipe_wrapper = Filename.concat state "ash/wayland/ssh-with-waypipe" in
+  assert_equal "Waypipe manifest wrapper" waypipe_wrapper (List.hd exec);
+  assert_int "Waypipe manifest exec count" 1 (List.length exec);
+  assert_bool "Virtle SSH autoprovision disabled" false
+    (find_bool manifest_doc [ "ssh"; "autoprovision" ]);
+  let waypipe_content =
+    In_channel.with_open_text waypipe_wrapper In_channel.input_all
+  in
+  assert_string_contains "Waypipe executable" waypipe_content "/bin/waypipe";
+  assert_string_contains "Waypipe disables GPU protocols" waypipe_content
+    "--no-gpu";
+  assert_string_contains "Waypipe remote binary" waypipe_content
+    "'--remote-bin' 'waypipe'";
+  assert_string_contains "Waypipe enables X11 compatibility" waypipe_content
+    "'--xwls'";
+  assert_string_contains "Waypipe wraps OpenSSH helper" waypipe_content
+    openssh_wrapper;
+  assert_string_contains "Waypipe forwards SSH arguments" waypipe_content
+    {|'ssh' "$@"|};
+  let _, kitty_manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"wayland-kitty" ~kitty:true
+      ~waypipe:"/bin/waypipe" ()
+  in
+  let kitty_exec = find_strings (parse_toml kitty_manifest) [ "ssh"; "exec" ] in
+  let kitty_wrapper =
+    Filename.concat state "ash/wayland-kitty/ssh-with-space-mounts-kitty"
+  in
+  let kitty_waypipe_wrapper =
+    Filename.concat state "ash/wayland-kitty/ssh-with-waypipe-kitty"
+  in
+  assert_equal "Waypipe Kitty manifest wrapper" kitty_waypipe_wrapper
+    (List.hd kitty_exec);
+  assert_string_contains "Waypipe wraps Kitty SSH helper"
+    (In_channel.with_open_text kitty_waypipe_wrapper In_channel.input_all)
+    kitty_wrapper
+
 let test_spawn_reuses_saved_flake_when_omitted () =
   let root = temp_dir "ash-test-saved-flake" in
   Unix.putenv "XDG_STATE_HOME" root;
@@ -1339,6 +1399,7 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       systemd_ssh_proxy = None;
       registration_path = Some "/nix/store/closure-info/registration";
       kitty = false;
+      waypipe = Some "/bin/waypipe";
       virtiofsd = "/bin/virtiofsd";
       virtle = "/bin/virtle";
     }
@@ -1350,6 +1411,8 @@ let test_spawn_reuses_saved_flake_when_omitted () =
   assert_equal "saved registration path" "/nix/store/closure-info/registration"
     (Option.value saved.registration_path ~default:"");
   assert_bool "saved kernel serial" true (saved.kernel_serial = Virtle.Console);
+  assert_equal "saved Waypipe executable" "/bin/waypipe"
+    (Option.value saved.waypipe ~default:"");
   assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
   assert_bool "saved Nix store strategy" true
     (Virtle.resolve_spawn_nix_store_strategy ~name None = Some Ash_config.Image);
@@ -1704,6 +1767,7 @@ let () =
   run "disabled portal manifest" test_disabled_portal_manifest;
   run "ro-store socket override" test_ro_store_socket_override;
   run "kitty selects kitten ssh wrapper" test_kitty_selects_kitten_ssh_wrapper;
+  run "waypipe wraps OpenSSH and Kitty" test_waypipe_wraps_openssh_and_kitty;
   run "qga params use valid json" test_qga_params_use_valid_json;
   run "qga int field finds nested values" test_qga_int_field_finds_nested_values;
   run "qga output data decodes base64" test_qga_output_data_decodes_base64;
