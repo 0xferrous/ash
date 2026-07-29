@@ -6,8 +6,14 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = import nixpkgs { inherit system; };
         ocamlPackages = pkgs.ocamlPackages;
@@ -15,17 +21,17 @@
 
         src = cleanSourceWith {
           src = ./.;
-          filter = path: type:
-            let base = baseNameOf path;
-            in !(base == "_build"
-              || base == "result"
-              || hasPrefix "result-" base
-              || base == ".direnv");
+          filter =
+            path: type:
+            let
+              base = baseNameOf path;
+            in
+            !(base == "_build" || base == "result" || hasPrefix "result-" base || base == ".direnv");
         };
 
-        ash = ocamlPackages.buildDunePackage {
+        ashBuild = ocamlPackages.buildDunePackage {
           pname = "ash";
-          version = "0.1.0";
+          version = "0.1.1";
           inherit src;
           duneVersion = "3";
 
@@ -42,14 +48,18 @@
           strictDeps = true;
         };
 
+        ash = pkgs.runCommand "${ashBuild.pname}-${ashBuild.version}" { } ''
+          install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
+        '';
+
         ash-command-pages = pkgs.stdenvNoCC.mkDerivation {
           pname = "ash-command-pages";
-          version = "0.1.0";
+          version = "0.1.1";
           dontUnpack = true;
           installPhase = ''
             runHook preInstall
             mkdir -p "$out/share/doc/ash/html"
-            ${ash}/bin/ash-docs-html "$out/share/doc/ash/html"
+            ${ashBuild}/bin/ash-docs-html "$out/share/doc/ash/html"
             runHook postInstall
           '';
         };
@@ -58,6 +68,7 @@
         packages = {
           default = ash;
           ash = ash;
+          all = ashBuild;
           command-pages = ash-command-pages;
           ash-command-pages = ash-command-pages;
         };
@@ -65,7 +76,7 @@
         apps.default = flake-utils.lib.mkApp { drv = ash; };
 
         devShells.default = pkgs.mkShell {
-          inputsFrom = [ ash ];
+          inputsFrom = [ ashBuild ];
           packages = [
             ocamlPackages.ocaml
             ocamlPackages.dune_3
@@ -75,5 +86,6 @@
             ocamlPackages.utop
           ];
         };
-      });
+      }
+    );
 }
