@@ -123,8 +123,8 @@ VMs attach to the private host bridge `ash0` through
 `global.network_bridge` and `global.qemu_bridge_helper`. The host must create
 the bridge and authorize it in `/etc/qemu/bridge.conf`.
 
-Set `global.nix_store_virtiofs_socket` to reuse a host-wide virtiofsd serving
-`/nix/store`; `--ro-store-socket` overrides it.
+Pass `--ro-store-socket PATH` to reuse an existing virtiofsd serving
+`/nix/store`.
 
 For each VM, Ash also creates a lower-store metadata database under
 `shares/ro/guest-store-state` from the resolved NixOS closure registration.

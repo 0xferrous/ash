@@ -9,9 +9,6 @@
 # network_bridge = "ash0"
 # qemu_bridge_helper = "/run/wrappers/bin/qemu-bridge-helper"
 
-# Reuse a host-wide virtiofsd serving /nix/store. --ro-store-socket overrides this.
-# nix_store_virtiofs_socket = "/run/ash/nix-store.sock"
-
 # Host capability Portal. Managed mode starts one vsock host per VM.
 [portal]
 enabled = true

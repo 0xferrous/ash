@@ -26,11 +26,6 @@ let load_for_spaces path spaces =
 let strings path config =
   Otoml.find_opt config (Otoml.get_array Otoml.get_string) path
 
-let global_nix_store_virtiofs_socket config =
-  Otoml.find_opt config Otoml.get_string
-    [ "global"; "nix_store_virtiofs_socket" ]
-  |> Option.map (fun path -> Util.expand_home path |> Util.absolute_path)
-
 let global_memory config =
   Otoml.find_opt config Otoml.get_integer [ "global"; "memory" ]
   |> Option.value ~default:4096

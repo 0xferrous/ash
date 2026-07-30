@@ -2185,11 +2185,7 @@ let render_resolved_manifest inputs =
   let workspace_host_dir = Filename.concat state_dir "workspace" in
   let hotmounts_host_dir = hotmounts_dir ~name:inputs.name in
   let ro_store_socket =
-    match inputs.ro_store_socket with
-    | Some socket -> socket
-    | None ->
-        Ash_config.global_nix_store_virtiofs_socket config
-        |> Option.value ~default:"ro-store.sock"
+    Option.value inputs.ro_store_socket ~default:"ro-store.sock"
   in
   let shares_ro_host_dir = shares_ro_dir ~name:inputs.name in
   let shares_rw_host_dir = shares_rw_dir ~name:inputs.name in
