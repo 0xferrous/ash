@@ -37,23 +37,7 @@ type resolved_manifest_inputs = {
 }
 
 let find_exe ?hint ?env explicit_path default_name =
-  let candidate =
-    match explicit_path with
-    | Some path -> path
-    | None -> (
-        match Option.bind env Sys.getenv_opt with
-        | Some path when path <> "" -> path
-        | _ -> default_name)
-  in
-  match Util.find_in_path candidate with
-  | Some path ->
-      Log.debug "executable=%S resolved=%S" candidate path;
-      path
-  | None ->
-      let hint =
-        match hint with None -> "" | Some hint -> "\n\nHint: " ^ hint
-      in
-      Log.fatal ~code:127 "could not find executable %S%s" candidate hint
+  Util.get_exe ?hint ?env explicit_path default_name
 
 let find_virtle explicit_path =
   find_exe
@@ -216,7 +200,7 @@ let virtiofs_mount ?target ?cache ?extra_args ~tag ~source ~read_only ~socket
   in
   Otoml.table (List.rev fields)
 
-let image_mount ~source =
+let image_mount ~source ~size ~label =
   Otoml.table
     [
       ("type", Otoml.string "image");
@@ -225,10 +209,10 @@ let image_mount ~source =
       ( "image",
         Otoml.table
           [
-            ("size", Otoml.integer 16384);
+            ("size", Otoml.integer size);
             ("fs", Otoml.string "ext4");
             ("create", Otoml.boolean true);
-            ("label", Otoml.string "persist");
+            ("label", Otoml.string label);
           ] );
     ]
 
@@ -396,15 +380,17 @@ let mount_action (mount : Ash_config.mount) =
     ~target:mount.target ~read_only:mount.read_only
 
 let write_space_mount_ssh_wrapper ?(kitty = false) ~name ~virtle ~manifest_path
-    ~registration_path ~ssh_exec mounts =
+    ~registration_path ~load_registration ~ssh_exec mounts =
   let path = space_mount_ssh_wrapper_path_for ~kitty ~name in
   let registration_action =
     Qga.load_nix_registration_action ~name:"ash-load-nix-registration"
       ~registration:registration_path
   in
   let registration_command =
-    Printf.sprintf
-      {sh|result=$(%s --manifest %s rpc guest-exec %s)
+    if not load_registration then ""
+    else
+      Printf.sprintf
+        {sh|result=$(%s --manifest %s rpc guest-exec %s)
 case "$result" in
   *'"exitCode":0'*)
     ash_log INFO %s
@@ -416,11 +402,11 @@ case "$result" in
     exit 1
     ;;
 esac|sh}
-      (Util.shell_quote virtle)
-      (Util.shell_quote manifest_path)
-      (Util.shell_quote (Qga.params registration_action))
-      (Util.shell_quote "loaded Nix store registration")
-      (Util.shell_quote "failed to load Nix store registration")
+        (Util.shell_quote virtle)
+        (Util.shell_quote manifest_path)
+        (Util.shell_quote (Qga.params registration_action))
+        (Util.shell_quote "loaded Nix store registration")
+        (Util.shell_quote "failed to load Nix store registration")
   in
   let mount_commands =
     mounts
@@ -1320,6 +1306,8 @@ let inspect_vm_json ~name =
             ("apparentBytes", json_int64 vm.apparent_bytes);
             ( "persistImage",
               inspect_path (Filename.concat vm.path "persist.img") );
+            ( "nixStoreImage",
+              inspect_path (Filename.concat vm.path "nix-store.img") );
             ("workspace", inspect_path (Filename.concat vm.path "workspace"));
           ] );
       ("runtime", inspect_runtime_json vm);
@@ -1391,7 +1379,13 @@ let configured_mount_target fields =
       | Some "shares-rw" -> Some (Filename.concat shares_guest_dir "rw")
       | Some "ro-store" -> Some "/nix/store"
       | Some "workspace_cwd" -> Some "/mnt/cwd"
-      | _ -> None)
+      | _ -> (
+          match List.assoc_opt "image" fields with
+          | Some (Otoml.TomlTable image | Otoml.TomlInlineTable image) -> (
+              match inspect_table_string image "label" with
+              | Some "nix-store" -> Some "/nix"
+              | _ -> None)
+          | _ -> None))
 
 let print_configured_mount fields =
   let mount_type =
@@ -1410,7 +1404,7 @@ let print_configured_mount fields =
     | Some tag -> tag
     | None -> (
         match List.assoc_opt "image" fields with
-        | Some (Otoml.TomlTable image) ->
+        | Some (Otoml.TomlTable image | Otoml.TomlInlineTable image) ->
             inspect_table_string image "label"
             |> Option.value ~default:mount_type
         | _ -> mount_type)
@@ -1450,6 +1444,10 @@ let inspect_vm_human ~name =
   let persist = Filename.concat vm.path "persist.img" in
   if Sys.file_exists persist then
     inspect_print_field "Persist image" (human_size (state_path_size persist));
+  let nix_store = Filename.concat vm.path "nix-store.img" in
+  if Sys.file_exists nix_store then
+    inspect_print_field "Nix store image"
+      (human_size (state_path_size nix_store));
   Printf.printf "\nConfiguration\n";
   (match read_toml_for_inspect (ash_config_path ~name) with
   | None -> ()
@@ -2184,6 +2182,7 @@ let render_resolved_manifest inputs =
   in
   let workspace_host_dir = Filename.concat state_dir "workspace" in
   let hotmounts_host_dir = hotmounts_dir ~name:inputs.name in
+  let store_strategy = Ash_config.global_nix_store_strategy config in
   let ro_store_socket =
     Option.value inputs.ro_store_socket ~default:"ro-store.sock"
   in
@@ -2191,36 +2190,58 @@ let render_resolved_manifest inputs =
   let shares_rw_host_dir = shares_rw_dir ~name:inputs.name in
   Util.ensure_dir workspace_host_dir;
   Util.ensure_dir hotmounts_host_dir;
-  Util.ensure_dir shares_ro_host_dir;
-  Util.ensure_dir shares_rw_host_dir;
   let shares_rw_identity =
-    prepare_guest_store_dirs (shares_rw_identity ()) shares_rw_host_dir
+    match store_strategy with
+    | Ash_config.Shared ->
+        Util.ensure_dir shares_ro_host_dir;
+        Util.ensure_dir shares_rw_host_dir;
+        Some
+          (prepare_guest_store_dirs (shares_rw_identity ()) shares_rw_host_dir)
+    | Ash_config.Image -> None
   in
   let workspace_mount =
     workspace_mount ~workspace_guest_dir ~workspace_host_dir
+  in
+  let store_mounts =
+    match (store_strategy, shares_rw_identity) with
+    | Ash_config.Shared, Some identity ->
+        [
+          virtiofs_mount ~cache:"never" ~tag:"shares-ro"
+            ~source:shares_ro_host_dir ~read_only:true ~socket:"shares-ro.sock"
+            ~bin:inputs.virtiofsd ();
+          virtiofs_mount ~cache:"never"
+            ~extra_args:(shares_rw_virtiofs_extra_args identity)
+            ~tag:"shares-rw" ~source:shares_rw_host_dir ~read_only:false
+            ~socket:"shares-rw.sock" ~bin:inputs.virtiofsd ();
+          (* The host Nix store is root-owned. virtiofsd's default namespace
+             sandbox maps an unprivileged launcher to namespace root, leaving
+             host uid/gid 0 unmapped and exposing store paths to the guest as
+             nobody:nogroup. Preserve ownership by avoiding the namespace. *)
+          virtiofs_mount ~extra_args:[ "--sandbox=none" ] ~tag:"ro-store"
+            ~source:"/nix/store" ~read_only:true ~socket:ro_store_socket
+            ~bin:inputs.virtiofsd ();
+        ]
+    | Ash_config.Image, None ->
+        [
+          image_mount
+            ~source:(Filename.concat state_dir "nix-store.img")
+            ~size:(Ash_config.global_nix_store_image_size config)
+            ~label:"nix-store";
+        ]
+    | _ -> assert false
   in
   let mounts =
     [
       space_mount ~bin:inputs.virtiofsd workspace_mount;
       virtiofs_mount ~cache:"never" ~tag:"hotmounts" ~source:hotmounts_host_dir
         ~read_only:false ~socket:"hotmounts.sock" ~bin:inputs.virtiofsd ();
-      virtiofs_mount ~cache:"never" ~tag:"shares-ro" ~source:shares_ro_host_dir
-        ~read_only:true ~socket:"shares-ro.sock" ~bin:inputs.virtiofsd ();
-      virtiofs_mount ~cache:"never"
-        ~extra_args:(shares_rw_virtiofs_extra_args shares_rw_identity)
-        ~tag:"shares-rw" ~source:shares_rw_host_dir ~read_only:false
-        ~socket:"shares-rw.sock" ~bin:inputs.virtiofsd ();
-      (* The host Nix store is root-owned. virtiofsd's default namespace sandbox
-         maps an unprivileged launcher to namespace root, leaving host uid/gid 0
-         unmapped and exposing store paths to the guest as nobody:nogroup.
-         OpenSSH rejects root-owned system configuration with that translated
-         ownership, so preserve the host ownership metadata for this readonly
-         share by avoiding the user namespace. *)
-      virtiofs_mount ~extra_args:[ "--sandbox=none" ] ~tag:"ro-store"
-        ~source:"/nix/store" ~read_only:true ~socket:ro_store_socket
-        ~bin:inputs.virtiofsd ();
-      image_mount ~source:(Filename.concat state_dir "persist.img");
     ]
+    @ store_mounts
+    @ [
+        image_mount
+          ~source:(Filename.concat state_dir "persist.img")
+          ~size:16384 ~label:"persist";
+      ]
     @ (if inputs.mount_cwd then
          [
            virtiofs_mount ~cache:"never" ~tag:"workspace_cwd" ~source:"."
@@ -2235,7 +2256,9 @@ let render_resolved_manifest inputs =
     [
       write_space_mount_ssh_wrapper ~name:inputs.name ~virtle:inputs.virtle
         ~manifest_path:(manifest_path ~name:inputs.name)
-        ~registration_path:boot.registration ~ssh_exec:real_ssh_exec ssh_mounts;
+        ~registration_path:boot.registration
+        ~load_registration:(store_strategy = Ash_config.Shared)
+        ~ssh_exec:real_ssh_exec ssh_mounts;
     ]
   in
   let kitty_exec =
@@ -2243,7 +2266,9 @@ let render_resolved_manifest inputs =
       write_space_mount_ssh_wrapper ~kitty:true ~name:inputs.name
         ~virtle:inputs.virtle
         ~manifest_path:(manifest_path ~name:inputs.name)
-        ~registration_path:boot.registration ~ssh_exec:kitty_ssh_exec ssh_mounts;
+        ~registration_path:boot.registration
+        ~load_registration:(store_strategy = Ash_config.Shared)
+        ~ssh_exec:kitty_ssh_exec ssh_mounts;
     ]
   in
   let selected_ssh_exec = if inputs.kitty then kitty_exec else ssh_exec in
@@ -2477,11 +2502,29 @@ let render_manifest (inputs : manifest_inputs) =
     Nix.resolve_boot ~override_inputs:inputs.override_inputs ~target
       ~gcroots_dir
   in
-  let lower_store_state =
-    Filename.concat (shares_ro_dir ~name:inputs.name) "guest-store-state"
-  in
-  Nix.prepare_lower_store ~nix_store:boot.nix_store
-    ~registration:boot.registration ~state:lower_store_state;
+  let store_strategy = Ash_config.global_nix_store_strategy config in
+  (match (store_strategy, inputs.ro_store_socket) with
+  | Ash_config.Image, Some _ ->
+      Log.fatal
+        "--ro-store-socket cannot be used with the image-backed Nix store \
+         strategy"
+  | _ -> ());
+  (match store_strategy with
+  | Ash_config.Shared ->
+      let lower_store_state =
+        Filename.concat (shares_ro_dir ~name:inputs.name) "guest-store-state"
+      in
+      Nix.prepare_lower_store ~nix_store:boot.nix_store
+        ~registration:boot.registration ~state:lower_store_state
+  | Ash_config.Image ->
+      Nix.prepare_image_store ~nix_executable:boot.nix ~toplevel:boot.toplevel
+        ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
+        ~size_mib:(Ash_config.global_nix_store_image_size config)
+        ~resize_allowed:
+          (not
+             (socket_accepts_connection
+                (control_socket_path (virtle_state_dir inputs.name))))
+        ());
   let ssh = Option.value inputs.ssh ~default:boot.ssh in
   let systemd_ssh_proxy =
     Option.value inputs.systemd_ssh_proxy ~default:boot.systemd_ssh_proxy
@@ -2602,10 +2645,27 @@ let registration_for_inputs (inputs : manifest_inputs) =
         inputs.name
         (Util.shell_quote inputs.name)
 
+let manifest_uses_image_store path =
+  let doc = load_manifest_doc path in
+  match Otoml.find_opt doc Otoml.get_value [ "mounts" ] with
+  | Some (Otoml.TomlTableArray mounts) ->
+      List.exists
+        (function
+          | Otoml.TomlTable fields -> (
+              match List.assoc_opt "image" fields with
+              | Some (Otoml.TomlTable image | Otoml.TomlInlineTable image) ->
+                  List.assoc_opt "label" image
+                  = Some (Otoml.TomlString "nix-store")
+              | _ -> false)
+          | _ -> false)
+        mounts
+  | _ -> false
+
 let wait_and_mount (inputs : manifest_inputs) path =
   let registration = registration_for_inputs inputs in
   wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name;
-  execute_nix_registration ~virtle:inputs.virtle ~path registration;
+  if not (manifest_uses_image_store path) then
+    execute_nix_registration ~virtle:inputs.virtle ~path registration;
   execute_space_mounts ~virtle:inputs.virtle ~path
     (space_mounts_for_inputs inputs);
   restore_hotmounts ~virtle:inputs.virtle ~manifest_path:path ~name:inputs.name
@@ -2804,10 +2864,13 @@ let stop ?name ~force () =
   let code = Systemd_run.stop_user_unit ~name:vm.name in
   exit code
 
-let remove_nix_store_shares ~name =
-  let path = shares_dir ~name in
-  Log.debug "removing Nix store shares for VM %s: %s" name path;
-  Util.remove_tree ~force:true path
+let remove_nix_store_state ~name =
+  let shares = shares_dir ~name in
+  let image = Filename.concat (state_dir name) "nix-store.img" in
+  Log.debug "removing Nix store state for VM %s" name;
+  Util.remove_tree ~force:true shares;
+  (try Unix.unlink image with Unix.Unix_error _ -> ());
+  try Unix.unlink (image ^ ".toplevel") with Unix.Unix_error _ -> ()
 
 let regenerate ?virtle ~name () =
   let name = Util.name_slug name in
@@ -2839,6 +2902,6 @@ let rebuild_db ?virtle ~name () =
   then
     Log.fatal
       "VM %S is running; stop it before rebuilding its Nix store database" name;
-  remove_nix_store_shares ~name;
+  remove_nix_store_state ~name;
   regenerate ?virtle ~name ();
   Printf.printf "rebuilt Nix store database for %s\n" name

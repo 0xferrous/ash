@@ -189,23 +189,44 @@ let spawn =
            roots remain while the VM state exists and are removed with that \
            state, including after an ephemeral session.";
         `P
-          "Guest preparation is done by ash through virtle guest-exec. Ash \
-           first imports the selected system closure's registration dump into \
-           the guest Nix database, then mounts workspace/space targets. \
-           Background spawns do this after launch; foreground attached spawns \
-           use the generated SSH wrapper. A marker under /run prevents \
-           repeated registration imports during the same boot.";
+          "Guest preparation is done by ash through virtle guest-exec. With \
+           strategy=shared, Ash imports the selected closure registration into \
+           the guest Nix database, then mounts workspace/space targets. The \
+           image strategy already contains the initialized database and skips \
+           the import. Foreground attached spawns use the generated SSH \
+           wrapper for the same preparation.";
         `P
           "Runtime hotmounts are managed later with ash mount, ash umount, ash \
            mount-space, and ash umount-space. Successful hotmounts are saved \
            as desired state and restored by later background starts and \
            resumes. Foreground attached starts do not currently restore them.";
+        `S "NIX STORE STRATEGIES";
+        `P
+          "Set [global.nix_store].strategy to shared or image. shared is the \
+           default. image_size_mib configures the image strategy's capacity in \
+           MiB and defaults to 16384.";
+        `P
+          "The shared strategy exposes the host /nix/store read-only through \
+           the ro-store virtiofs tag. It also provides shares-ro and shares-rw \
+           for guests using Nix's local-overlay store. --ro-store-socket may \
+           select an existing virtiofsd socket for this strategy.";
+        `P
+          "The image strategy creates nix-store.img as a private ext4 \
+           filesystem labeled nix-store and copies the selected closure and \
+           Nix database into it. It does not expose the host /nix/store. The \
+           guest must mount the label at /nix with neededForBoot enabled.";
+        `P
+          "Increasing image_size_mib grows a stopped VM's filesystem \
+           automatically. Shrinking it or changing the selected closure \
+           requires ash rebuild-db, which recreates the image and discards \
+           guest-added store paths.";
         `S "ASSUMED MOUNTS";
         `P
-          "Every generated virtle.toml includes ash's fixed mounts: workspace, \
-           hotmounts, read-only and read-write shares under /run/ash/shares, a \
-           read-only ro-store mount for /nix/store, and a persistent ext4 disk \
-           image at persist.img. The manifest sets KVM acceleration on, so the \
+          "Every generated virtle.toml includes workspace, hotmounts, and a \
+           persistent ext4 disk image at persist.img. The shared Nix store \
+           strategy also includes shares-ro, shares-rw, and the read-only \
+           ro-store virtiofs mount. The image strategy instead attaches \
+           nix-store.img, labeled nix-store. The manifest enables KVM, so the \
            host is expected to provide /dev/kvm.";
         `P
           "The workspace mount exposes a directory inside ash VM state to the \
@@ -217,26 +238,22 @@ let spawn =
            new host directories can be staged and mounted into a running guest \
            without regenerating the manifest.";
         `P
-          "The shares mounts expose VM-state directories at /run/ash/shares/ro \
-           and /run/ash/shares/rw. Before launch, Ash loads the resolved NixOS \
-           closure registration into shares/ro/guest-store-state so a guest \
-           local-overlay store can use it as readonly lower-store metadata. \
-           The rw share provides guest-store-state, guest-store-upper, and \
-           guest-store-work for host-backed OverlayFS upper layers. Configure \
-           the local-overlay store's writable state to use guest-store-state \
-           so its metadata is reset with the upper layer. When subordinate \
-           host UID/GID ranges are available, Ash maps guest identities \
-           one-to-one so dedicated build users keep distinct ownership; \
-           otherwise it falls back to squashing identities to the host user.";
+          "With the shared strategy, the shares mounts expose VM-state \
+           directories at /run/ash/shares/ro and /run/ash/shares/rw. Before \
+           launch, Ash loads the resolved NixOS closure registration into \
+           shares/ro/guest-store-state so a guest local-overlay store can use \
+           it as readonly lower-store metadata. The rw share provides \
+           guest-store-state, guest-store-upper, and guest-store-work for \
+           host-backed OverlayFS upper layers. Configure the local-overlay \
+           store's writable state to use guest-store-state so its metadata is \
+           reset with the upper layer. When subordinate host UID/GID ranges \
+           are available, Ash maps guest identities one-to-one so dedicated \
+           build users keep distinct ownership; otherwise it falls back to \
+           squashing identities to the host user.";
         `P
           "When --mount-cwd is used, ash adds workspace_cwd for the current \
            host directory. The current agent guest config mounts this tag at \
            /mnt/cwd.";
-        `P
-          "Note: /nix/store is exposed through virtiofs. Correct file \
-           ownership and permissions currently require running the virtiofs \
-           daemon as root; see \
-           https://github.com/shazow/agentspace/issues/131.";
         `S "SSH AUTOPROVISIONING";
         `P
           "spawn writes virtle.toml with ssh.autoprovision enabled. This \
@@ -446,26 +463,25 @@ let rebuild_db =
       [
         `S Manpage.s_description;
         `P
-          "Deletes the named VM's read-only and read-write Nix store shares, \
-           then regenerates them from the VM's saved ash-state.toml and \
-           current NixOS closure.";
+          "Deletes the named VM's strategy-specific Nix store state, then \
+           regenerates it from the VM's saved ash-state.toml and current NixOS \
+           closure.";
         `S "WHAT IT RESETS";
         `P
-          "rebuild-db removes shares/ro, including the synthetic lower-store \
-           metadata database, and shares/rw, including the writable store \
-           database and guest OverlayFS upper and work directories. \
-           Guest-installed or modified Nix store paths in that writable \
-           overlay are discarded.";
+          "For strategy=shared, rebuild-db removes shares/ro and shares/rw, \
+           including local-overlay metadata, upper, and work directories. For \
+           strategy=image, it removes nix-store.img and its closure marker. In \
+           either case, guest-installed store paths are discarded.";
         `S "SAFETY";
         `P
-          "The VM must be stopped. Persistent disk, workspace, SSH keys, \
-           hotmounts, and other VM state are preserved.";
+          "The VM must be stopped. persist.img, workspace, SSH keys, \
+           hotmounts, and other non-store VM state are preserved.";
         `S "REGENERATION";
         `P
-          "After removing the shares, ash resolves the saved flake again and \
-           regenerates the lower-store database, writable store directories, \
-           virtle.toml, and SSH helper scripts. The next normal spawn starts \
-           with the rebuilt store.";
+          "After removing the store state, ash resolves the saved flake again, \
+           prepares the configured store strategy, and regenerates virtle.toml \
+           and SSH helper scripts. The next normal spawn starts with the \
+           rebuilt store.";
         `S Manpage.s_examples;
         `Pre "ash stop work";
         `Pre "ash rebuild-db work";

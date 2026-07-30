@@ -9,6 +9,13 @@
 # network_bridge = "ash0"
 # qemu_bridge_helper = "/run/wrappers/bin/qemu-bridge-helper"
 
+# Nix store strategy. "shared" is the default and exposes the host store
+# read-only through virtiofs. "image" creates a private ext4 image mounted at
+# /nix by a compatible guest configuration.
+# [global.nix_store]
+# strategy = "image"
+# image_size_mib = 32768
+
 # Host capability Portal. Managed mode starts one vsock host per VM.
 [portal]
 enabled = true

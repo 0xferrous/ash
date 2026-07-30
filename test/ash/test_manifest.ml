@@ -110,7 +110,9 @@ let test_boot : Nix.boot =
     kernel = "/nix/store/kernel/bzImage";
     initrd = "/nix/store/initrd/initrd";
     kernel_params = [ "init=/nix/store/system/init"; "root=fstab" ];
+    toplevel = "/nix/store/system";
     registration = "/nix/store/closure-info/registration";
+    nix = "/nix/store/nix/bin/nix";
     nix_store = "/nix/store/nix/bin/nix-store";
     ssh = "/nix/store/openssh/bin/ssh";
     systemd_ssh_proxy = "/nix/store/systemd/lib/systemd/systemd-ssh-proxy";
@@ -319,6 +321,72 @@ let test_no_spaces_selected_by_default () =
          (Filename.concat state "ash/no-spaces/shares/rw/guest-store-work"))
   then fail "guest store work dir should exist";
   assert_equal "default ssh user" "agent" (find_string doc [ "ssh"; "user" ])
+
+let test_image_backed_nix_store_manifest () =
+  let root = temp_dir "ash-test-image-store" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config =
+    parse_toml {|[global.nix_store]
+strategy = "image"
+image_size_mib = 24576
+|}
+  in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"image-store" ()
+  in
+  let mounts = table_array (parse_toml manifest) "mounts" in
+  assert_int "fixed mount count with image store" 4 (List.length mounts);
+  assert_bool "image store omits ro-store" false
+    (List.exists
+       (fun table ->
+         List.assoc_opt "tag" table = Some (Otoml.TomlString "ro-store"))
+       mounts);
+  assert_bool "image store omits shares" false
+    (List.exists
+       (fun table ->
+         match List.assoc_opt "tag" table with
+         | Some (Otoml.TomlString ("shares-ro" | "shares-rw")) -> true
+         | _ -> false)
+       mounts);
+  let store =
+    List.find
+      (fun table ->
+        match List.assoc_opt "image" table with
+        | Some (Otoml.TomlTable image | Otoml.TomlInlineTable image) ->
+            List.assoc_opt "label" image = Some (Otoml.TomlString "nix-store")
+        | _ -> false)
+      mounts
+  in
+  assert_equal "image store source"
+    (Filename.concat state "ash/image-store/nix-store.img")
+    (string_field store "source");
+  (match table_field store "image" with
+  | Otoml.TomlTable image | Otoml.TomlInlineTable image ->
+      assert_int "image store size" 24576
+        (match table_field image "size" with
+        | Otoml.TomlInteger size -> size
+        | _ -> fail "image size is not an integer")
+  | _ -> fail "image store configuration is not a table");
+  assert_bool "image store target" true
+    (Virtle.configured_mount_target store = Some "/nix");
+  let manifest_path = Filename.concat state "ash/image-store/virtle.toml" in
+  write_file manifest_path manifest;
+  assert_bool "image store detected from manifest" true
+    (Virtle.manifest_uses_image_store manifest_path);
+  assert_bool "image store does not prepare host shares" false
+    (Sys.file_exists (Filename.concat state "ash/image-store/shares"));
+  let wrapper =
+    In_channel.with_open_text
+      (Filename.concat state "ash/image-store/ssh-with-space-mounts")
+      In_channel.input_all
+  in
+  assert_bool "image store skips registration import" false
+    (Virtle.contains_substring wrapper "ash-load-nix-registration")
 
 let assert_mount_parse_ok label ~host_home ~guest_user ~read_only spec
     expected_source expected_target =
@@ -1206,6 +1274,73 @@ let test_prepare_lower_store () =
   assert_string_contains "lower store URI encodes state path" args
     "%2Fstate%20with%20spaces.tmp-"
 
+let test_prepare_image_store () =
+  let root = temp_dir "ash-test-image-store-prepare" in
+  let bin = Filename.concat root "bin" in
+  let image = Filename.concat root "nix-store.img" in
+  let image_root = Printf.sprintf "%s.root-%d" image (Unix.getpid ()) in
+  let nix_args = Filename.concat root "nix-args" in
+  let e2fsck_args = Filename.concat root "e2fsck-args" in
+  let mke2fs_args = Filename.concat root "mke2fs-args" in
+  let resize2fs_args = Filename.concat root "resize2fs-args" in
+  mkdir_p bin;
+  let nix = Filename.concat bin "nix" in
+  write_file nix
+    "#!/bin/sh\n\
+     printf '%s\\n' \"$@\" > \"$ASH_TEST_NIX_ARGS\"\n\
+     mkdir -p \"$ASH_TEST_IMAGE_ROOT/nix/store\" \
+     \"$ASH_TEST_IMAGE_ROOT/nix/var/nix/db\"\n";
+  let mke2fs = Filename.concat bin "mke2fs" in
+  write_file mke2fs
+    "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_MKE2FS_ARGS\"\n";
+  let e2fsck = Filename.concat bin "e2fsck" in
+  write_file e2fsck
+    "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_E2FSCK_ARGS\"\n";
+  let resize2fs = Filename.concat bin "resize2fs" in
+  write_file resize2fs
+    "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_RESIZE2FS_ARGS\"\n";
+  let unshare = Filename.concat bin "unshare" in
+  write_file unshare "#!/bin/sh\nshift 2\nexec \"$@\"\n";
+  List.iter
+    (fun path -> Unix.chmod path 0o755)
+    [ nix; e2fsck; mke2fs; resize2fs; unshare ];
+  Unix.putenv "ASH_TEST_NIX_ARGS" nix_args;
+  Unix.putenv "ASH_TEST_IMAGE_ROOT" image_root;
+  Unix.putenv "ASH_TEST_E2FSCK_ARGS" e2fsck_args;
+  Unix.putenv "ASH_TEST_MKE2FS_ARGS" mke2fs_args;
+  Unix.putenv "ASH_TEST_RESIZE2FS_ARGS" resize2fs_args;
+  Nix.prepare_image_store ~nix_executable:nix ~mke2fs ~unshare
+    ~toplevel:"/nix/store/system" ~image ~size_mib:8 ();
+  assert_bool "image store created" true (Sys.file_exists image);
+  assert_bool "image store marker created" true
+    (Sys.file_exists (image ^ ".toplevel"));
+  assert_equal "image store marker" "/nix/store/system\n8\n"
+    (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
+  assert_bool "image store is correctly sized" true
+    (Int64.equal (Unix.LargeFile.stat image).st_size 8388608L);
+  let copied_args = In_channel.with_open_text nix_args In_channel.input_all in
+  assert_string_contains "image store uses nix copy" copied_args "copy\n";
+  assert_string_contains "image store copies closure" copied_args
+    "/nix/store/system";
+  let filesystem_args =
+    In_channel.with_open_text mke2fs_args In_channel.input_all
+  in
+  assert_string_contains "image store filesystem label" filesystem_args
+    "nix-store";
+  assert_string_contains "image store filesystem source" filesystem_args
+    (Filename.concat image_root "nix");
+  Nix.prepare_image_store ~e2fsck ~resize2fs ~toplevel:"/nix/store/system"
+    ~image ~size_mib:16 ();
+  assert_bool "image store grows backing file" true
+    (Int64.equal (Unix.LargeFile.stat image).st_size 16777216L);
+  assert_equal "grown image store marker" "/nix/store/system\n16\n"
+    (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
+  assert_equal "e2fsck receives forced preen arguments"
+    ("-f\n-p\n" ^ image ^ "\n")
+    (In_channel.with_open_text e2fsck_args In_channel.input_all);
+  assert_equal "resize2fs receives image path" (image ^ "\n")
+    (In_channel.with_open_text resize2fs_args In_channel.input_all)
+
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
@@ -1221,7 +1356,7 @@ let test_scp_args () =
      dir,user@ash-vm-7:~/dst dir"
     (String.concat "," args)
 
-let test_remove_nix_store_shares () =
+let test_remove_nix_store_state () =
   let root = temp_dir "ash-test-rebuild-db" in
   let previous = Sys.getenv_opt "XDG_STATE_HOME" in
   Fun.protect
@@ -1239,8 +1374,14 @@ let test_remove_nix_store_shares () =
         (Filename.concat shares "rw/guest-store-upper/store-path")
         "path";
       write_file preserved "keep";
-      Virtle.remove_nix_store_shares ~name;
+      let image = Filename.concat (Virtle.state_dir name) "nix-store.img" in
+      write_file image "image";
+      write_file (image ^ ".toplevel") "/nix/store/system\n";
+      Virtle.remove_nix_store_state ~name;
       assert_bool "Nix store shares removed" false (Sys.file_exists shares);
+      assert_bool "Nix store image removed" false (Sys.file_exists image);
+      assert_bool "Nix store image marker removed" false
+        (Sys.file_exists (image ^ ".toplevel"));
       assert_bool "other VM state preserved" true (Sys.file_exists preserved))
 
 let test_state_sizes_ignore_hotmounts () =
@@ -1269,6 +1410,7 @@ let () =
   run "global memory config" test_global_memory_config;
   run "global network config" test_global_network_config;
   run "no spaces selected by default" test_no_spaces_selected_by_default;
+  run "image-backed Nix store manifest" test_image_backed_nix_store_manifest;
   run "XDG config path" test_xdg_config_path;
   run "Ash state home" test_ash_state_home;
   run "space mount spec parsing" test_space_mount_spec_parsing;
@@ -1321,7 +1463,8 @@ let () =
   run "nix override input arguments" test_nix_override_input_args;
   run "nix local store URI" test_nix_local_store_uri;
   run "prepare lower store" test_prepare_lower_store;
+  run "prepare image store" test_prepare_image_store;
   run "nix json string array parser" test_nix_json_string_array_parser;
   run "scp arguments" test_scp_args;
-  run "remove Nix store shares" test_remove_nix_store_shares;
+  run "remove Nix store state" test_remove_nix_store_state;
   run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts

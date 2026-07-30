@@ -98,7 +98,7 @@ ash ls
 ash rm
 ```
 
-Reset a stopped VM's Nix store metadata and writable overlay:
+Reset a stopped VM's strategy-specific Nix store state:
 
 ```sh
 ash stop work
@@ -123,17 +123,26 @@ VMs attach to the private host bridge `ash0` through
 `global.network_bridge` and `global.qemu_bridge_helper`. The host must create
 the bridge and authorize it in `/etc/qemu/bridge.conf`.
 
-Pass `--ro-store-socket PATH` to reuse an existing virtiofsd serving
-`/nix/store`.
-
-For each VM, Ash also creates a lower-store metadata database under
-`shares/ro/guest-store-state` from the resolved NixOS closure registration.
-Guests can pair that database with the read-only store mount when using Nix's
+The default Nix store strategy is `shared`: Ash exposes the host `/nix/store`
+read-only through virtiofs. Pass `--ro-store-socket PATH` to reuse an existing
+virtiofsd. Ash also provides lower-store metadata and writable overlay
+locations under `shares/ro` and `shares/rw` for guests using Nix's
 `local-overlay` store.
 
-The writable store's `state` should point at `shares/rw/guest-store-state`,
-beside `guest-store-upper`; keeping its database in the persistent image while
-resetting Ash's shares leaves stale valid-path records.
+To use a private image-backed store instead:
+
+```toml
+[global.nix_store]
+strategy = "image"
+image_size_mib = 32768
+```
+
+Ash copies the selected NixOS closure into a persistent ext4 image labeled
+`nix-store` without exposing the host store to the guest. The guest must mount
+that label at `/nix` with `neededForBoot = true`. Increasing
+`image_size_mib` grows an existing stopped VM's filesystem automatically.
+Shrinking it or changing the selected system closure requires
+`ash rebuild-db NAME`, which discards guest-added store paths.
 
 Select a space with a repeatable `--space`/`-s` option:
 

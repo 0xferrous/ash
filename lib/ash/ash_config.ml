@@ -8,6 +8,7 @@ type mount = {
 }
 
 type space_resources = { mounts : mount list }
+type nix_store_strategy = Shared | Image
 
 let load path : config =
   let path = Util.expand_home path in
@@ -37,6 +38,28 @@ let global_network_bridge config =
 let global_qemu_bridge_helper config =
   Otoml.find_opt config Otoml.get_string [ "global"; "qemu_bridge_helper" ]
   |> Option.value ~default:"/run/wrappers/bin/qemu-bridge-helper"
+
+let global_nix_store_strategy config =
+  match
+    Otoml.find_opt config Otoml.get_string [ "global"; "nix_store"; "strategy" ]
+  with
+  | None | Some "shared" -> Shared
+  | Some "image" -> Image
+  | Some strategy ->
+      Log.fatal
+        "invalid global.nix_store.strategy %S (expected \"shared\" or \
+         \"image\")"
+        strategy
+
+let global_nix_store_image_size config =
+  let size =
+    Otoml.find_opt config Otoml.get_integer
+      [ "global"; "nix_store"; "image_size_mib" ]
+    |> Option.value ~default:16384
+  in
+  if size <= 0 then
+    Log.fatal "global.nix_store.image_size_mib must be greater than zero";
+  size
 
 let portal config =
   if Otoml.path_exists config [ "portal" ] then

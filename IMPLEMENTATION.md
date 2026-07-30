@@ -84,6 +84,8 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `nix` — evaluates the selected flake/NixOS configuration for kernel, initrd, toplevel, kernel params, a `pkgs.closureInfo` registration dump, `ssh`, and `systemd-ssh-proxy` paths.
 - `virtle` — validates, launches, controls, and queries VMs. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`; override with `--virtle PATH`.
 - `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest.
+- `mke2fs` and `unshare` — used to create an ext4 image-backed Nix store while mapping the host user to filesystem root.
+- `e2fsck` and `resize2fs` — check and grow an existing image-backed Nix store when `image_size_mib` increases.
 - `bindfs` — creates host-side staging mounts for runtime hotmounts. See [Runtime hotmount implementation](#runtime-hotmount-implementation).
 - `mountpoint` — used by `ash mount` to avoid remounting an already-mounted host-side hotmount directory.
 - `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
@@ -179,7 +181,7 @@ nixosConfigurations.<HOST>.config.services.getty.autologinUser
 nixosConfigurations.<HOST>.config.users.users.<USER>.name
 ```
 
-Then it reads `$ASH_CONFIG_HOME/config.toml` when `ASH_CONFIG_HOME` is set, otherwise `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. Pass `--ro-store-socket` to select an existing virtiofsd socket serving `/nix/store`. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
+Then it reads `$ASH_CONFIG_HOME/config.toml` when `ASH_CONFIG_HOME` is set, otherwise `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. `global.nix_store.strategy` selects `shared` (the default) or `image`; `global.nix_store.image_size_mib` defaults to 16384. Pass `--ro-store-socket` to select an existing virtiofsd socket for the shared strategy. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
 
 Space selection is explicit:
 
@@ -197,17 +199,23 @@ It also exposes these mount devices to the guest:
 
 - `workspace` — writable virtiofs share for `<state_dir>/workspace`, intended for `/home/<ssh-user>/workspace`
 - `hotmounts` — writable virtiofs share for `<state_dir>/hotmounts`, used by `ash mount` for QGA-driven hot mounts into a running VM.
-- `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock` with its user-namespace sandbox disabled so root ownership from the host store remains root ownership in the guest. The share is still exported readonly. Without this ownership preservation, an unprivileged virtiofsd exposes root-owned store paths as `nobody:nogroup`, and OpenSSH rejects included system configuration as unsafe. Pass `--ro-store-socket PATH` to use an existing host-wide daemon instead.
+The `shared` strategy adds:
+
+- `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock` with its user-namespace sandbox disabled so root ownership from the host store remains root ownership in the guest. Pass `--ro-store-socket PATH` to use an existing daemon instead.
 - `shares-ro` — readonly VM-state data, including `guest-store-state`, a synthetic local-store metadata database for the resolved NixOS closure.
-- `shares-rw` — writable VM-state data, including `guest-store-state`, `guest-store-upper`, and `guest-store-work` for guests that choose a host-backed OverlayFS upper layer. The local-overlay store's writable `state` must use `guest-store-state` so its SQLite metadata has the same lifetime as the upper layer; keeping that metadata in the persistent image makes `ash rebuild-db` leave stale valid-path records. When the host user has subordinate UID/GID ranges, Ash creates those backing directories inside the same user namespace used by virtiofsd, maps guest root to the host UID, and maps the remaining guest IDs one-to-one into the subordinate ranges so dedicated guest build users retain distinct ownership. Without suitable ranges, Ash falls back to identity squashing.
+- `shares-rw` — writable VM-state data, including `guest-store-state`, `guest-store-upper`, and `guest-store-work` for guests that choose a host-backed OverlayFS upper layer. When subordinate UID/GID ranges are available, Ash maps guest identities one-to-one; otherwise it falls back to identity squashing.
+
+The `image` strategy instead adds `nix-store.img`, a writable ext4 image labeled `nix-store`. It does not add `ro-store`, `shares-ro`, or `shares-rw`, so the guest has no live host Nix store share.
 - `persist` — writable ext4 image labeled `persist`
 - `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
 
 Ash also builds `pkgs.closureInfo { rootPaths = [ toplevel ]; }` for the exact resolved NixOS toplevel. The kernel, initrd, toplevel, and closure-info outputs are built with indirect GC roots under `<state_dir>/gcroots/`; the closure-info output contains the `registration` file, while the toplevel root retains its transitive system closure. The roots remain valid for stopped VMs and disappear automatically when the VM state directory is deleted, including ephemeral cleanup.
 
-Before rendering the manifest, Ash uses the selected NixOS configuration's `config.nix.package` to load that registration into a synthetic local-store database at `<state_dir>/shares/ro/guest-store-state`. The synthetic store uses the host `/nix/store` as its physical store directory, but contains metadata only for the pinned NixOS closure. The guest receives this database through the readonly `shares-ro` mount and can use it as the lower metadata source for a `local-overlay` store whose lower files come from `ro-store`.
+For the `shared` strategy, Ash uses the selected NixOS configuration's `config.nix.package` to load that registration into a synthetic local-store database at `<state_dir>/shares/ro/guest-store-state`. The synthetic store uses the host `/nix/store` as its physical store directory, but contains metadata only for the pinned NixOS closure.
 
-After guest readiness and before ash-managed mounts, ash also imports the resulting `registration` file with guest-root `nix-store --load-db` for guests that use the regular local store. Guests configured with a `local-overlay` store skip this import because the closure is already present in the readonly lower-store database. Ash detects these guests through `/etc/ash/local-overlay-store` or a `store = local-overlay://...` entry in `nix.conf`. Foreground attach flows apply the same check in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating regular-store imports during the same boot; because `/run` is volatile, every new boot imports the registration again. The resolved registration path is saved in `ash-state.toml`, not the virtle manifest, because it is consumed by ash rather than virtle.
+For the `image` strategy, Ash runs the selected Nix package's `nix copy` into a temporary rooted local store, creates a sparse ext4 filesystem with `mke2fs -d`, and attaches the resulting `<state_dir>/nix-store.img`. `unshare --user --map-root-user` makes the copied store root-owned in the filesystem image. A neighboring `.toplevel` marker records the closure and configured size used to initialize the image. Increasing `image_size_mib` for a stopped VM enlarges the sparse backing file and runs `resize2fs`; shrinking remains an explicit `ash rebuild-db`. Regeneration also refuses a changed closure until `ash rebuild-db` recreates the image, because recreation discards guest-added store paths.
+
+With the `shared` strategy, after guest readiness and before ash-managed mounts, ash imports the resulting `registration` file with guest-root `nix-store --load-db` for guests that use the regular local store. Guests configured with a `local-overlay` store skip this import because the closure is already present in the readonly lower-store database. Ash detects these guests through `/etc/ash/local-overlay-store` or a `store = local-overlay://...` entry in `nix.conf`. Foreground attach flows apply the same check in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating regular-store imports during the same boot. The `image` strategy skips this import because `nix copy` initialized both the store paths and database inside the image.
 
 The guest may mount these tags/labels as needed. The current agent guest config mounts them as:
 
@@ -217,10 +225,18 @@ fileSystems."/home/agent/workspace" = {
   fsType = "virtiofs";
 };
 
+# Shared strategy:
 fileSystems."/nix/store" = {
   device = "ro-store";
   fsType = "virtiofs";
   options = [ "ro" ];
+};
+
+# Image strategy, in a guest configuration built for this strategy:
+fileSystems."/nix" = {
+  device = "/dev/disk/by-label/nix-store";
+  fsType = "ext4";
+  neededForBoot = true;
 };
 
 fileSystems."/persist" = {

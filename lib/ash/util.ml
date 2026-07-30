@@ -95,6 +95,25 @@ let find_in_path program =
         some_if (is_executable path) path)
     |> List.find_opt (fun _ -> true)
 
+let get_exe ?hint ?env explicit_path default_name =
+  let candidate =
+    match explicit_path with
+    | Some path -> path
+    | None -> (
+        match Option.bind env Sys.getenv_opt with
+        | Some path when path <> "" -> path
+        | _ -> default_name)
+  in
+  match find_in_path candidate with
+  | Some path ->
+      Log.debug "executable=%S resolved=%S" candidate path;
+      path
+  | None ->
+      let hint =
+        match hint with None -> "" | Some hint -> "\n\nHint: " ^ hint
+      in
+      Log.fatal ~code:127 "could not find executable %S%s" candidate hint
+
 let shell_quote s =
   "'" ^ String.concat "'\\''" (String.split_on_char '\'' s) ^ "'"
 
