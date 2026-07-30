@@ -14,17 +14,17 @@ type virtle_opts = {
 let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
-let spawn opts ssh systemd_ssh_proxy ro_store_socket config flake
-    override_inputs name user spaces print_serial mount_cwd ephemeral attach
-    keep kitty =
+let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
+    nix_store_image_size_mib config flake override_inputs name user spaces
+    print_serial mount_cwd ephemeral attach keep kitty =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ?name ?user ~config_path:config ?flake ~override_inputs ~spaces
-    ~print_serial ~mount_cwd ~ephemeral ~attach ~keep ~kitty
-    ~verbose:opts.verbose ()
+    ?nix_store_strategy ?nix_store_image_size_mib ?name ?user
+    ~config_path:config ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd
+    ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
 
 let list_vms global =
   Log.set_debug global.debug;
@@ -126,6 +126,31 @@ let ro_store_socket_arg =
           "Use an existing virtiofs daemon socket for the read-only /nix/store \
            mount instead of starting ash's own ro-store virtiofsd."
         ~docv:"PATH")
+
+let nix_store_strategy_arg =
+  Arg.(
+    value
+    & opt
+        (some
+           (enum [ ("shared", Ash_config.Shared); ("image", Ash_config.Image) ]))
+        None
+    & info [ "nix-store-strategy" ]
+        ~doc:
+          "Override this VM's Nix store strategy. Defaults to the value in \
+           [global.nix_store] and is saved in ash-state.toml."
+        ~docv:"STRATEGY")
+
+let nix_store_image_size_arg =
+  Arg.(
+    value
+    & opt (some int) None
+    & info
+        [ "nix-store-image-size-mib" ]
+        ~doc:
+          "Override this VM's image-backed Nix store capacity in MiB. Defaults \
+           to [global.nix_store].image_size_mib and is saved in \
+           ash-state.toml."
+        ~docv:"MIB")
 
 let config_arg =
   Arg.(
@@ -255,9 +280,10 @@ let spawn_cmd =
     (Cmd.info "spawn" ~doc:"spawn an agent VM" ~man:spawn_man)
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
-      $ ro_store_socket_arg $ config_arg $ flake_arg $ override_input_arg
-      $ name_arg $ user_arg $ spaces_arg $ print_serial_arg $ mount_cwd_arg
-      $ ephemeral_arg $ attach_flag $ keep_flag $ kitty_flag)
+      $ ro_store_socket_arg $ nix_store_strategy_arg $ nix_store_image_size_arg
+      $ config_arg $ flake_arg $ override_input_arg $ name_arg $ user_arg
+      $ spaces_arg $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg
+      $ attach_flag $ keep_flag $ kitty_flag)
 
 let attach_name_arg =
   Arg.(

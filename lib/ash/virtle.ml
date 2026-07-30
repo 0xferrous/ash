@@ -7,6 +7,8 @@ type manifest_inputs = {
   user : string option;
   print_serial : bool;
   mount_cwd : bool;
+  nix_store_strategy : Ash_config.nix_store_strategy option;
+  nix_store_image_size_mib : int option;
   ro_store_socket : string option;
   ssh : string option;
   systemd_ssh_proxy : string option;
@@ -27,6 +29,8 @@ type resolved_manifest_inputs = {
   user : string option;
   print_serial : bool;
   mount_cwd : bool;
+  nix_store_strategy : Ash_config.nix_store_strategy;
+  nix_store_image_size_mib : int;
   ro_store_socket : string option;
   ssh : string;
   systemd_ssh_proxy : string;
@@ -162,6 +166,14 @@ let string_array_of_doc doc path =
   | Some value -> value
   | None ->
       Log.fatal "ash-state.toml is missing string array field %s"
+        (String.concat "." path)
+
+let positive_integer_opt_of_doc doc path =
+  match Otoml.find_opt doc Otoml.get_integer path with
+  | None -> None
+  | Some value when value > 0 -> Some value
+  | Some _ ->
+      Log.fatal "ash-state.toml field %s must be greater than zero"
         (String.concat "." path)
 
 let virtiofs_section ?cache ?(extra_args = []) ~socket ~bin () =
@@ -2182,7 +2194,7 @@ let render_resolved_manifest inputs =
   in
   let workspace_host_dir = Filename.concat state_dir "workspace" in
   let hotmounts_host_dir = hotmounts_dir ~name:inputs.name in
-  let store_strategy = Ash_config.global_nix_store_strategy config in
+  let store_strategy = inputs.nix_store_strategy in
   let ro_store_socket =
     Option.value inputs.ro_store_socket ~default:"ro-store.sock"
   in
@@ -2225,8 +2237,7 @@ let render_resolved_manifest inputs =
         [
           image_mount
             ~source:(Filename.concat state_dir "nix-store.img")
-            ~size:(Ash_config.global_nix_store_image_size config)
-            ~label:"nix-store";
+            ~size:inputs.nix_store_image_size_mib ~label:"nix-store";
         ]
     | _ -> assert false
   in
@@ -2374,6 +2385,21 @@ let ash_config (inputs : manifest_inputs) =
     | None -> fields
   in
   let fields =
+    match inputs.nix_store_strategy with
+    | Some strategy ->
+        fields
+        @ [
+            ( "nix_store_strategy",
+              Otoml.string (Ash_config.string_of_nix_store_strategy strategy) );
+          ]
+    | None -> fields
+  in
+  let fields =
+    match inputs.nix_store_image_size_mib with
+    | Some size -> fields @ [ ("nix_store_image_size_mib", Otoml.integer size) ]
+    | None -> fields
+  in
+  let fields =
     match inputs.ro_store_socket with
     | Some socket -> fields @ [ ("ro_store_socket", Otoml.string socket) ]
     | None -> fields
@@ -2442,6 +2468,13 @@ let load_ash_config ~name =
       Option.value
         (Otoml.find_opt doc Otoml.get_boolean [ "spawn"; "kitty" ])
         ~default:false;
+    nix_store_strategy =
+      Otoml.find_opt doc Otoml.get_string [ "spawn"; "nix_store_strategy" ]
+      |> Option.map
+           (Ash_config.nix_store_strategy_of_string
+              ~field:"spawn.nix_store_strategy");
+    nix_store_image_size_mib =
+      positive_integer_opt_of_doc doc [ "spawn"; "nix_store_image_size_mib" ];
     ro_store_socket =
       Otoml.find_opt doc Otoml.get_string [ "spawn"; "ro_store_socket" ];
     ssh = Otoml.find_opt doc Otoml.get_string [ "spawn"; "ssh" ];
@@ -2479,6 +2512,28 @@ let resolve_spawn_spaces ~name spaces =
     saved.spaces)
   else []
 
+let resolve_spawn_nix_store_strategy ~name strategy =
+  match strategy with
+  | Some _ -> strategy
+  | None when has_saved_ash_config ~name ->
+      let saved = load_ash_config ~name in
+      saved.nix_store_strategy
+  | None -> None
+
+let resolve_spawn_nix_store_image_size ~name size =
+  let size =
+    match size with
+    | Some _ -> size
+    | None when has_saved_ash_config ~name ->
+        let saved = load_ash_config ~name in
+        saved.nix_store_image_size_mib
+    | None -> None
+  in
+  match size with
+  | Some size when size <= 0 ->
+      Log.fatal "nix_store_image_size_mib must be greater than zero"
+  | _ -> size
+
 let render_manifest (inputs : manifest_inputs) =
   let config = Ash_config.load_for_spaces inputs.config_path inputs.spaces in
   let portal_host =
@@ -2502,7 +2557,14 @@ let render_manifest (inputs : manifest_inputs) =
     Nix.resolve_boot ~override_inputs:inputs.override_inputs ~target
       ~gcroots_dir
   in
-  let store_strategy = Ash_config.global_nix_store_strategy config in
+  let store_strategy =
+    Option.value inputs.nix_store_strategy
+      ~default:(Ash_config.global_nix_store_strategy config)
+  in
+  let store_image_size_mib =
+    Option.value inputs.nix_store_image_size_mib
+      ~default:(Ash_config.global_nix_store_image_size config)
+  in
   (match (store_strategy, inputs.ro_store_socket) with
   | Ash_config.Image, Some _ ->
       Log.fatal
@@ -2519,7 +2581,7 @@ let render_manifest (inputs : manifest_inputs) =
   | Ash_config.Image ->
       Nix.prepare_image_store ~nix_executable:boot.nix ~toplevel:boot.toplevel
         ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
-        ~size_mib:(Ash_config.global_nix_store_image_size config)
+        ~size_mib:store_image_size_mib
         ~resize_allowed:
           (not
              (socket_accepts_connection
@@ -2542,6 +2604,8 @@ let render_manifest (inputs : manifest_inputs) =
         user = Some user;
         print_serial = inputs.print_serial;
         mount_cwd = inputs.mount_cwd;
+        nix_store_strategy = store_strategy;
+        nix_store_image_size_mib = store_image_size_mib;
         ro_store_socket = inputs.ro_store_socket;
         ssh;
         kitty = inputs.kitty;
@@ -2568,8 +2632,8 @@ let write_manifest_for_inputs inputs =
   (inputs, path)
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ~config_path ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd ~kitty
-    () =
+    ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
+    ~override_inputs ~spaces ~print_serial ~mount_cwd ~kitty () =
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
   let flake = Nix.storage_flake_ref (resolve_spawn_flake ~name flake) in
@@ -2578,6 +2642,12 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     |> List.map (fun (input, flake) -> (input, Nix.storage_flake_ref flake))
   in
   let spaces = resolve_spawn_spaces ~name spaces in
+  let nix_store_strategy =
+    resolve_spawn_nix_store_strategy ~name nix_store_strategy
+  in
+  let nix_store_image_size_mib =
+    resolve_spawn_nix_store_image_size ~name nix_store_image_size_mib
+  in
   let virtle = find_virtle virtle in
   if kitty then ignore (find_kitten ());
   let ssh = Option.map (fun path -> find_ssh (Some path)) ssh in
@@ -2598,6 +2668,8 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       user;
       print_serial;
       mount_cwd;
+      nix_store_strategy;
+      nix_store_image_size_mib;
       ro_store_socket;
       ssh;
       systemd_ssh_proxy;
@@ -2697,12 +2769,13 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
   | None -> Util.exec inputs.virtle args
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ~config_path ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd
-    ~ephemeral ~attach ~keep ~kitty ~verbose () =
+    ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
+    ~override_inputs ~spaces ~print_serial ~mount_cwd ~ephemeral ~attach ~keep
+    ~kitty ~verbose () =
   let inputs, path =
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-      ~config_path ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd
-      ~kitty ()
+      ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
+      ~override_inputs ~spaces ~print_serial ~mount_cwd ~kitty ()
   in
   if attach && keep then
     launch_background_and_attach ~resume:None inputs path ~verbose

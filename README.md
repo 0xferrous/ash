@@ -137,6 +137,17 @@ strategy = "image"
 image_size_mib = 32768
 ```
 
+Override these defaults for an individual VM when spawning it:
+
+```sh
+ash spawn --name private --nix-store-strategy image \
+  --nix-store-image-size-mib 65536 -f ../my-nix#agent
+```
+
+The overrides are saved as `nix_store_strategy` and
+`nix_store_image_size_mib` in that VM's `ash-state.toml` and reused by later
+spawns and regeneration.
+
 Ash copies the selected NixOS closure into a persistent ext4 image labeled
 `nix-store` without exposing the host store to the guest. The guest must mount
 that label at `/nix` with `neededForBoot = true`. Increasing

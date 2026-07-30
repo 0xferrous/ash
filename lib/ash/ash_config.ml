@@ -39,17 +39,22 @@ let global_qemu_bridge_helper config =
   Otoml.find_opt config Otoml.get_string [ "global"; "qemu_bridge_helper" ]
   |> Option.value ~default:"/run/wrappers/bin/qemu-bridge-helper"
 
-let global_nix_store_strategy config =
-  match
-    Otoml.find_opt config Otoml.get_string [ "global"; "nix_store"; "strategy" ]
-  with
-  | None | Some "shared" -> Shared
-  | Some "image" -> Image
-  | Some strategy ->
-      Log.fatal
-        "invalid global.nix_store.strategy %S (expected \"shared\" or \
-         \"image\")"
+let nix_store_strategy_of_string ~field = function
+  | "shared" -> Shared
+  | "image" -> Image
+  | strategy ->
+      Log.fatal "invalid %s %S (expected \"shared\" or \"image\")" field
         strategy
+
+let string_of_nix_store_strategy = function
+  | Shared -> "shared"
+  | Image -> "image"
+
+let global_nix_store_strategy config =
+  Otoml.find_opt config Otoml.get_string [ "global"; "nix_store"; "strategy" ]
+  |> Option.map
+       (nix_store_strategy_of_string ~field:"global.nix_store.strategy")
+  |> Option.value ~default:Shared
 
 let global_nix_store_image_size config =
   let size =

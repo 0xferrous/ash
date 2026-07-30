@@ -115,6 +115,8 @@ Spawn options:
 - `--ssh PATH` — override path to host `ssh`. Defaults to the selected NixOS config's `pkgs.openssh`.
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
 - `--ro-store-socket PATH` — use an existing virtiofs daemon socket for the read-only `/nix/store` mount instead of starting ash's own `ro-store` virtiofsd.
+- `--nix-store-strategy shared|image` — override `global.nix_store.strategy` for this VM and save it in `ash-state.toml`.
+- `--nix-store-image-size-mib MIB` — override `global.nix_store.image_size_mib` for this VM and save it in `ash-state.toml`.
 - `--print-serial` — print guest kernel/init serial output while booting.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
 - `--attach` — attach after spawning. Without `--keep`, the VM stops when SSH exits.
@@ -181,7 +183,7 @@ nixosConfigurations.<HOST>.config.services.getty.autologinUser
 nixosConfigurations.<HOST>.config.users.users.<USER>.name
 ```
 
-Then it reads `$ASH_CONFIG_HOME/config.toml` when `ASH_CONFIG_HOME` is set, otherwise `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. `global.nix_store.strategy` selects `shared` (the default) or `image`; `global.nix_store.image_size_mib` defaults to 16384. Pass `--ro-store-socket` to select an existing virtiofsd socket for the shared strategy. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
+Then it reads `$ASH_CONFIG_HOME/config.toml` when `ASH_CONFIG_HOME` is set, otherwise `$XDG_CONFIG_HOME/ash/config.toml` (falling back to `~/.config/ash/config.toml`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. `global.nix_store.strategy` selects `shared` (the default) or `image`; `global.nix_store.image_size_mib` defaults to 16384. `--nix-store-strategy` and `--nix-store-image-size-mib` override those defaults for one VM; explicit overrides are saved in its `ash-state.toml` and reused by later spawns and regeneration. Pass `--ro-store-socket` to select an existing virtiofsd socket for the shared strategy. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
 
 Space selection is explicit:
 

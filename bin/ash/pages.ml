@@ -111,6 +111,10 @@ let spawn =
            list saved in ash-state.toml. Passing --space explicitly replaces \
            the saved selection.";
         `P
+          "--nix-store-strategy and --nix-store-image-size-mib override the \
+           [global.nix_store] defaults for this VM. Explicit overrides are \
+           saved in ash-state.toml and reused when later spawns omit them.";
+        `P
           "After inputs are built, spawn overwrites ash-state.toml with the \
            new inputs and renders virtle.toml from those same new inputs.";
         `S "PORTAL";
@@ -204,7 +208,9 @@ let spawn =
         `P
           "Set [global.nix_store].strategy to shared or image. shared is the \
            default. image_size_mib configures the image strategy's capacity in \
-           MiB and defaults to 16384.";
+           MiB and defaults to 16384. --nix-store-strategy and \
+           --nix-store-image-size-mib override these defaults for one VM and \
+           save the choice in its ash-state.toml.";
         `P
           "The shared strategy exposes the host /nix/store read-only through \
            the ro-store virtiofs tag. It also provides shares-ro and shares-rw \

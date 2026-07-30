@@ -122,8 +122,17 @@ let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
 let render ?(spaces = []) ?user ?(print_serial = false) ?(mount_cwd = false)
-    ?ro_store_socket ?(kitty = false) ?(config_path = "/tmp/config.toml")
-    ~config ~flake ~name () =
+    ?nix_store_strategy ?nix_store_image_size_mib ?ro_store_socket
+    ?(kitty = false) ?(config_path = "/tmp/config.toml") ~config ~flake ~name ()
+    =
+  let nix_store_strategy =
+    Option.value nix_store_strategy
+      ~default:(Ash_config.global_nix_store_strategy config)
+  in
+  let nix_store_image_size_mib =
+    Option.value nix_store_image_size_mib
+      ~default:(Ash_config.global_nix_store_image_size config)
+  in
   Virtle.render_resolved_manifest
     {
       config;
@@ -136,6 +145,8 @@ let render ?(spaces = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       user;
       print_serial;
       mount_cwd;
+      nix_store_strategy;
+      nix_store_image_size_mib;
       ro_store_socket;
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
@@ -331,13 +342,15 @@ let test_image_backed_nix_store_manifest () =
   Unix.putenv "HOME" home;
   Unix.putenv "XDG_STATE_HOME" state;
   let config =
-    parse_toml {|[global.nix_store]
-strategy = "image"
-image_size_mib = 24576
+    parse_toml
+      {|[global.nix_store]
+strategy = "shared"
+image_size_mib = 12288
 |}
   in
   let _, manifest =
-    render ~config ~flake:"../my-nix#agent" ~name:"image-store" ()
+    render ~config ~flake:"../my-nix#agent" ~name:"image-store"
+      ~nix_store_strategy:Ash_config.Image ~nix_store_image_size_mib:24576 ()
   in
   let mounts = table_array (parse_toml manifest) "mounts" in
   assert_int "fixed mount count with image store" 4 (List.length mounts);
@@ -386,7 +399,16 @@ image_size_mib = 24576
       In_channel.input_all
   in
   assert_bool "image store skips registration import" false
-    (Virtle.contains_substring wrapper "ash-load-nix-registration")
+    (Virtle.contains_substring wrapper "ash-load-nix-registration");
+  let _, shared_manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"shared-store" ()
+  in
+  let shared_mounts = table_array (parse_toml shared_manifest) "mounts" in
+  assert_bool "other VM inherits global shared strategy" true
+    (List.exists
+       (fun table ->
+         List.assoc_opt "tag" table = Some (Otoml.TomlString "ro-store"))
+       shared_mounts)
 
 let assert_mount_parse_ok label ~host_home ~guest_user ~read_only spec
     expected_source expected_target =
@@ -1181,6 +1203,8 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       user = None;
       print_serial = false;
       mount_cwd = false;
+      nix_store_strategy = Some Ash_config.Image;
+      nix_store_image_size_mib = Some 32768;
       ro_store_socket = None;
       ssh = None;
       systemd_ssh_proxy = None;
@@ -1197,6 +1221,19 @@ let test_spawn_reuses_saved_flake_when_omitted () =
   assert_equal "saved registration path" "/nix/store/closure-info/registration"
     (Option.value saved.registration_path ~default:"");
   assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
+  assert_bool "saved Nix store strategy" true
+    (Virtle.resolve_spawn_nix_store_strategy ~name None = Some Ash_config.Image);
+  assert_int "saved Nix store image size" 32768
+    (Option.value
+       (Virtle.resolve_spawn_nix_store_image_size ~name None)
+       ~default:0);
+  assert_bool "explicit Nix store strategy overrides saved" true
+    (Virtle.resolve_spawn_nix_store_strategy ~name (Some Ash_config.Shared)
+    = Some Ash_config.Shared);
+  assert_int "explicit Nix store image size overrides saved" 65536
+    (Option.value
+       (Virtle.resolve_spawn_nix_store_image_size ~name (Some 65536))
+       ~default:0);
   assert_equal "explicit flake overrides saved" "github:owner/repo#other"
     (Virtle.resolve_spawn_flake ~name (Some "github:owner/repo#other"));
   assert_equal "saved override inputs"

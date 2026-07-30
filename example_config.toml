@@ -16,6 +16,9 @@
 # strategy = "image"
 # image_size_mib = 32768
 
+# Override these defaults per VM with --nix-store-strategy and
+# --nix-store-image-size-mib. Ash saves explicit overrides in ash-state.toml.
+
 # Host capability Portal. Managed mode starts one vsock host per VM.
 [portal]
 enabled = true
