@@ -24,57 +24,6 @@ Run directly:
 nix run github:0xferrous/ash -- --help
 ```
 
-## Configuration
-
-Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
-`~/.config/ash/config.toml`. `ASH_CONFIG_HOME` overrides the application
-configuration directory directly, so `ASH_CONFIG_HOME=~/.config/nash` selects
-`~/.config/nash/config.toml`. `ASH_STATE_HOME` similarly overrides the complete
-VM state root instead of appending `ash`.
-
-See [`example_config.toml`](./example_config.toml) for the global and space
-mount formats. Set `global.memory` to configure VM memory in MiB; it defaults
-to 4096.
-
-VMs attach to the private host bridge `ash0` through
-`/run/wrappers/bin/qemu-bridge-helper`; override these with
-`global.network_bridge` and `global.qemu_bridge_helper`. The host must create
-the bridge and authorize it in `/etc/qemu/bridge.conf`.
-
-Set `global.nix_store_virtiofs_socket` to reuse a host-wide virtiofsd serving
-`/nix/store`; `--ro-store-socket` overrides it.
-
-For each VM, Ash also creates a lower-store metadata database under
-`shares/ro/guest-store-state` from the resolved NixOS closure registration.
-Guests can pair that database with the read-only store mount when using Nix's
-`local-overlay` store.
-
-The writable store's `state` should point at `shares/rw/guest-store-state`,
-beside `guest-store-upper`; keeping its database in the persistent image while
-resetting Ash's shares leaves stale valid-path records.
-
-Select a space with a repeatable `--space`/`-s` option:
-
-```sh
-ash spawn --name work -s ash -f ../my-nix#agent
-```
-
-Use repeatable `--override-input NAME=FLAKE` options to override inputs while
-Ash evaluates and builds the selected flake:
-
-```sh
-ash spawn --name work -f ../my-nix#agent \
-  --override-input ash=path:../ash
-```
-
-Overrides are saved with named VM state and reused by later regeneration.
-Relative path references are saved as absolute paths.
-
-For a new VM, omitting `--space` applies no configured spaces. For an existing
-named VM, it reuses the saved space list. Spaces can compose other spaces with
-`extends = ["base", ...]`; extended spaces are evaluated recursively before the
-extending space.
-
 ## Quickstart
 
 Start a reusable background VM:
@@ -157,6 +106,57 @@ ash rebuild-db work
 ash attach --spawn work
 ```
 
+## Configuration
+
+Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
+`~/.config/ash/config.toml`. `ASH_CONFIG_HOME` overrides the application
+configuration directory directly, so `ASH_CONFIG_HOME=~/.config/nash` selects
+`~/.config/nash/config.toml`. `ASH_STATE_HOME` similarly overrides the complete
+VM state root instead of appending `ash`.
+
+See [`example_config.toml`](./example_config.toml) for the global and space
+mount formats. Set `global.memory` to configure VM memory in MiB; it defaults
+to 4096.
+
+VMs attach to the private host bridge `ash0` through
+`/run/wrappers/bin/qemu-bridge-helper`; override these with
+`global.network_bridge` and `global.qemu_bridge_helper`. The host must create
+the bridge and authorize it in `/etc/qemu/bridge.conf`.
+
+Set `global.nix_store_virtiofs_socket` to reuse a host-wide virtiofsd serving
+`/nix/store`; `--ro-store-socket` overrides it.
+
+For each VM, Ash also creates a lower-store metadata database under
+`shares/ro/guest-store-state` from the resolved NixOS closure registration.
+Guests can pair that database with the read-only store mount when using Nix's
+`local-overlay` store.
+
+The writable store's `state` should point at `shares/rw/guest-store-state`,
+beside `guest-store-upper`; keeping its database in the persistent image while
+resetting Ash's shares leaves stale valid-path records.
+
+Select a space with a repeatable `--space`/`-s` option:
+
+```sh
+ash spawn --name work -s ash -f ../my-nix#agent
+```
+
+Use repeatable `--override-input NAME=FLAKE` options to override inputs while
+Ash evaluates and builds the selected flake:
+
+```sh
+ash spawn --name work -f ../my-nix#agent \
+  --override-input ash=path:../ash
+```
+
+Overrides are saved with named VM state and reused by later regeneration.
+Relative path references are saved as absolute paths.
+
+For a new VM, omitting `--space` applies no configured spaces. For an existing
+named VM, it reuses the saved space list. Spaces can compose other spaces with
+`extends = ["base", ...]`; extended spaces are evaluated recursively before the
+extending space.
+
 ## Agent Portal
 
 The repository also builds a standalone OCaml implementation of the Agent-box
@@ -177,19 +177,6 @@ See [PORTAL.md](./PORTAL.md) for configuration, security behavior, and wrapper
 compatibility. With an enabled `[portal]` section, Ash either manages a
 per-VM vsock Portal process or injects the endpoint of a user-managed global
 Portal into the guest.
-
-## Source layout
-
-```text
-lib/ash/                 Ash VM-management library
-bin/ash/                 ash and ash-docs-html entry points
-lib/portal/              Agent_portal protocol, client, and host library
-bin/agent-portal-host/   host daemon entry point
-bin/agent-portal-cli/    diagnostic CLI entry point
-wrappers/                transparent compatibility executables
-test/ash/                Ash tests
-test/portal/             Portal tests
-```
 
 ## More detail
 
