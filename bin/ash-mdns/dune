@@ -1,0 +1,5 @@
+(executable
+ (public_name ash-mdns)
+ (name main)
+ (modules main)
+ (libraries ash cmdliner unix))

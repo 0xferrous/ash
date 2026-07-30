@@ -43,7 +43,7 @@ let main =
           "Guest-side operations assume QEMU Guest Agent plus standard NixOS \
            tools under /run/current-system/sw/bin, including sh, mount, \
            mountpoint, install, stat, mkdir, chown, chmod, grep, date, printf, \
-           ss, awk, and who.";
+           ss, awk, who, systemctl, and systemd-run.";
         `S Manpage.s_examples;
         `Pre "ash spawn --name work -f ../my-nix#agent";
         `Pre "ash spawn --name tmp -f ../my-nix#agent --attach";
@@ -299,10 +299,21 @@ let spawn =
         `P
           "This requires the guest to have QEMU Guest Agent support and the \
            guest user/home path expected by the generated manifest.";
+        `S "MDNS NAME";
+        `P
+          "Each running VM publishes <name>.ash.local over mDNS. Ash discovers \
+           the guest IPv4 address through QGA and starts the standalone \
+           ash-mdns responder as a transient guest systemd service. The shared \
+           store exposes it beside ash; image-store guests can install \
+           ash-mdns in PATH. Names that are not lowercase DNS labels are \
+           normalized with a digest suffix. The host must have .local mDNS \
+           resolution enabled, and multicast UDP 5353 must pass over the VM \
+           bridge.";
         `S "GUEST CONTRACT";
         `P
           "The guest should run QEMU Guest Agent. For NixOS guests, enable \
-           services.qemuGuest.enable.";
+           services.qemuGuest.enable. The managed mDNS responder also requires \
+           sh, systemctl, and systemd-run in the guest.";
         `P
           "Attached flows wait for virtle SSH readiness. The guest must write \
            the token SSH-READY to /dev/virtio-ports/virtle.ready after sshd is \

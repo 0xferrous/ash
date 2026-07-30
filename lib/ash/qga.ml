@@ -99,6 +99,55 @@ let shell_action ?(args = []) ~name script =
     name;
   }
 
+let mdns_start_action ~responder ~name ~address ~mac =
+  let script =
+    {sh|
+PATH=/run/current-system/sw/bin:/bin
+
+mac=$1
+requested_responder=$2
+name=$3
+address=$4
+interface=
+for address_file in /sys/class/net/*/address; do
+  [ -r "$address_file" ] || continue
+  read -r interface_mac < "$address_file" || continue
+  if [ "$interface_mac" = "$mac" ]; then
+    interface=${address_file%/address}
+    interface=${interface##*/}
+    break
+  fi
+done
+
+if [ -z "$interface" ]; then
+  echo "could not find interface for MAC $mac" >&2
+  exit 1
+fi
+
+if [ -x "$requested_responder" ]; then
+  responder=$requested_responder
+else
+  responder=$(command -v ash-mdns || true)
+fi
+if [ -z "$responder" ]; then
+  echo "could not find ash-mdns in the guest" >&2
+  exit 1
+fi
+
+systemctl stop ash-mdns.service >/dev/null 2>&1 || true
+exec systemd-run --quiet --collect --unit=ash-mdns \
+  --property=Restart=on-failure --property=RestartSec=1s \
+  "$responder" --interface "$interface" --name "$name" --address "$address"
+|sh}
+  in
+  shell_action ~name:"ash-mdns-start"
+    ~args:[ mac; responder; name; address ]
+    script
+
+let mdns_stop_action () =
+  shell_action ~name:"ash-mdns-stop"
+    "systemctl stop ash-mdns.service >/dev/null 2>&1 || true"
+
 (* QGA ACTION SCRIPT: import the selected NixOS closure into the guest Nix
    database once per boot. *)
 let load_nix_registration_action ~name ~registration =
