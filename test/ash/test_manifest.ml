@@ -629,6 +629,7 @@ vsock_cid = 2
   let exec = strings_field (List.hd runs) "exec" in
   assert_equal "managed portal executable" "/bin/agent-portal-host"
     (List.hd exec);
+  assert_bool "managed portal config flag" true (List.mem "-c" exec);
   assert_bool "managed portal config argument" true
     (List.mem "/tmp/ash-portal-config.toml" exec);
   assert_bool "managed portal CID port option" true

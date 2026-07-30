@@ -2113,7 +2113,7 @@ let portal_manifest_fields inputs state_dir =
                   string_array
                     [
                       portal_host;
-                      "--config";
+                      "-c";
                       Util.expand_home inputs.config_path |> Util.absolute_path;
                       "--vsock-port-for-cid";
                       "{{.CID}}";
