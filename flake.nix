@@ -52,6 +52,15 @@
           install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
         '';
 
+        agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
+          install -Dm755 ${ashBuild}/bin/agent-portal-host "$out/bin/agent-portal-host"
+        '';
+
+        agentPortalWrappers = pkgs.runCommand "agent-portal-wrappers" { } ''
+          install -Dm755 ${ashBuild}/bin/gh "$out/bin/gh"
+          install -Dm755 ${ashBuild}/bin/wl-paste "$out/bin/wl-paste"
+        '';
+
         ash-command-pages = pkgs.stdenvNoCC.mkDerivation {
           pname = "ash-command-pages";
           version = "0.1.3";
@@ -69,6 +78,8 @@
           default = ash;
           ash = ash;
           all = ashBuild;
+          "agent-portal-host" = agentPortalHost;
+          "agent-portal-wrappers" = agentPortalWrappers;
           command-pages = ash-command-pages;
           ash-command-pages = ash-command-pages;
         };
