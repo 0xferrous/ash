@@ -147,6 +147,13 @@ let state_base_dir () =
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
 
+let nix_store_image_cache_dir () =
+  Filename.concat (Util.cache_home_dir ()) "ash/nix-store-images"
+
+let nix_store_image_cache_path ~toplevel ~registration =
+  let key = Nix.image_store_cache_key ~toplevel ~registration in
+  Filename.concat (nix_store_image_cache_dir ()) (key ^ ".img")
+
 let network_mac name =
   let hash =
     Digest.string ("ash-network\000" ^ Util.name_slug name) |> Digest.to_hex
@@ -2616,6 +2623,9 @@ let render_manifest (inputs : manifest_inputs) =
   | Ash_config.Image ->
       Nix.prepare_image_store ~nix_executable:boot.nix ~toplevel:boot.toplevel
         ~registration:boot.registration
+        ~cache_image:
+          (nix_store_image_cache_path ~toplevel:boot.toplevel
+             ~registration:boot.registration)
         ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
         ~size_mib:store_image_size_mib
         ~resize_allowed:

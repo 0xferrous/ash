@@ -457,6 +457,23 @@ let test_xdg_config_path () =
         "/home/tester/dev-config/config.toml"
         (Util.default_ash_config_path ()))
 
+let test_xdg_cache_home () =
+  let old_home = Sys.getenv_opt "HOME" in
+  let old_xdg = Sys.getenv_opt "XDG_CACHE_HOME" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "HOME" (Option.value old_home ~default:"");
+      Unix.putenv "XDG_CACHE_HOME" (Option.value old_xdg ~default:""))
+    (fun () ->
+      Unix.putenv "HOME" "/home/tester";
+      Unix.putenv "XDG_CACHE_HOME" "/tmp/test-cache";
+      assert_equal "XDG image cache path" "/tmp/test-cache/ash/nix-store-images"
+        (Virtle.nix_store_image_cache_dir ());
+      Unix.putenv "XDG_CACHE_HOME" "";
+      assert_equal "fallback image cache path"
+        "/home/tester/.cache/ash/nix-store-images"
+        (Virtle.nix_store_image_cache_dir ()))
+
 let test_ash_state_home () =
   let old_home = Sys.getenv_opt "HOME" in
   let old_xdg = Sys.getenv_opt "XDG_STATE_HOME" in
@@ -1344,7 +1361,10 @@ let test_prepare_image_store () =
   let system_source = Filename.concat sources "system" in
   let registration_source = Filename.concat sources "closure-info" in
   let image = Filename.concat root "nix-store.img" in
+  let second_image = Filename.concat root "second/nix-store.img" in
+  let cache_image = Filename.concat root "cache/nix-store.img" in
   let nix_args = Filename.concat root "nix-args" in
+  let copy_args = Filename.concat root "copy-args" in
   let e2fsck_args = Filename.concat root "e2fsck-args" in
   let resize2fs_args = Filename.concat root "resize2fs-args" in
   mkdir_p bin;
@@ -1355,31 +1375,44 @@ let test_prepare_image_store () =
   let nix = Filename.concat bin "nix" in
   write_file nix
     "#!/bin/sh\n\
-     printf '%s\\n' \"$@\" > \"$ASH_TEST_NIX_ARGS\"\n\
+     printf '%s\\n' \"$@\" >> \"$ASH_TEST_NIX_ARGS\"\n\
      printf '%s\\n' \"$ASH_TEST_SYSTEM_SOURCE\" \
      \"$ASH_TEST_REGISTRATION_SOURCE\"\n";
+  let copy = Filename.concat bin "cp" in
+  let real_copy = Util.get_exe None "cp" in
+  write_file copy
+    ("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$ASH_TEST_COPY_ARGS\"\nexec "
+   ^ Util.shell_quote real_copy ^ " \"$@\"\n");
   let e2fsck = Filename.concat bin "e2fsck" in
   write_file e2fsck
     "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_E2FSCK_ARGS\"\n";
   let resize2fs = Filename.concat bin "resize2fs" in
   write_file resize2fs
     "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_RESIZE2FS_ARGS\"\n";
-  List.iter (fun path -> Unix.chmod path 0o755) [ nix; e2fsck; resize2fs ];
+  List.iter (fun path -> Unix.chmod path 0o755) [ nix; copy; e2fsck; resize2fs ];
   Unix.putenv "ASH_TEST_NIX_ARGS" nix_args;
+  Unix.putenv "ASH_TEST_COPY_ARGS" copy_args;
   Unix.putenv "ASH_TEST_SYSTEM_SOURCE" system_source;
   Unix.putenv "ASH_TEST_REGISTRATION_SOURCE" registration_source;
   Unix.putenv "ASH_TEST_E2FSCK_ARGS" e2fsck_args;
   Unix.putenv "ASH_TEST_RESIZE2FS_ARGS" resize2fs_args;
-  Nix.prepare_image_store ~nix_executable:nix ~toplevel:"/nix/store/system"
-    ~registration:"/nix/store/closure-info/registration" ~image ~size_mib:64 ();
+  Nix.prepare_image_store ~nix_executable:nix ~copy_executable:copy ~resize2fs
+    ~toplevel:"/nix/store/system"
+    ~registration:"/nix/store/closure-info/registration" ~cache_image ~image
+    ~size_mib:256 ();
+  assert_bool "cached image store created" true (Sys.file_exists cache_image);
   assert_bool "image store created" true (Sys.file_exists image);
   assert_bool "image store marker created" true
     (Sys.file_exists (image ^ ".toplevel"));
   assert_equal "image store marker"
-    "4\n/nix/store/system\n64\n/nix/store/closure-info/registration\n"
+    "4\n/nix/store/system\n256\n/nix/store/closure-info/registration\n"
     (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
   assert_bool "image store is correctly sized" true
-    (Int64.equal (Unix.LargeFile.stat image).st_size 67108864L);
+    (Int64.equal (Unix.LargeFile.stat image).st_size 268435456L);
+  assert_bool "cached base is smaller than writable VM image" true
+    (Int64.compare (Unix.LargeFile.stat cache_image).st_size
+       (Unix.LargeFile.stat image).st_size
+    < 0);
   let closure_args = In_channel.with_open_text nix_args In_channel.input_all in
   assert_string_contains "image store resolves closure" closure_args
     "path-info\n-r\n";
@@ -1402,13 +1435,36 @@ let test_prepare_image_store () =
   in
   assert_equal "image store registration contents" "registration-data"
     registration_contents;
+  Nix.prepare_image_store ~nix_executable:nix ~copy_executable:copy ~resize2fs
+    ~toplevel:"/nix/store/system"
+    ~registration:"/nix/store/closure-info/registration" ~cache_image
+    ~image:second_image ~size_mib:384 ();
+  assert_bool "different-sized image store cloned from cache" true
+    (Sys.file_exists second_image);
+  assert_bool "different-sized image store is correctly sized" true
+    (Int64.equal (Unix.LargeFile.stat second_image).st_size 402653184L);
+  let closure_resolutions =
+    In_channel.with_open_text nix_args In_channel.input_lines
+    |> List.filter (fun line -> line = "path-info")
+    |> List.length
+  in
+  assert_int "closure scanned once for cached images" 1 closure_resolutions;
+  let copy_invocations =
+    In_channel.with_open_text copy_args In_channel.input_all
+  in
+  assert_string_contains "cached image clone requests reflink" copy_invocations
+    "--reflink=auto";
+  assert_string_contains "cached image clone preserves sparse layout"
+    copy_invocations "--sparse=always";
+  assert_bool "cached images are independent files" true
+    ((Unix.stat image).st_ino <> (Unix.stat second_image).st_ino);
   ignore (Util.command_output ("e2fsck -fn " ^ Filename.quote image ^ " 2>&1"));
   Nix.prepare_image_store ~e2fsck ~resize2fs ~toplevel:"/nix/store/system"
-    ~registration:"/nix/store/closure-info/registration" ~image ~size_mib:128 ();
+    ~registration:"/nix/store/closure-info/registration" ~image ~size_mib:512 ();
   assert_bool "image store grows backing file" true
-    (Int64.equal (Unix.LargeFile.stat image).st_size 134217728L);
+    (Int64.equal (Unix.LargeFile.stat image).st_size 536870912L);
   assert_equal "grown image store marker"
-    "4\n/nix/store/system\n128\n/nix/store/closure-info/registration\n"
+    "4\n/nix/store/system\n512\n/nix/store/closure-info/registration\n"
     (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
   assert_equal "e2fsck receives forced preen arguments"
     ("-f\n-p\n" ^ image ^ "\n")
@@ -1487,6 +1543,7 @@ let () =
   run "no spaces selected by default" test_no_spaces_selected_by_default;
   run "image-backed Nix store manifest" test_image_backed_nix_store_manifest;
   run "XDG config path" test_xdg_config_path;
+  run "XDG cache home" test_xdg_cache_home;
   run "Ash state home" test_ash_state_home;
   run "space mount spec parsing" test_space_mount_spec_parsing;
   run "space extension graph traversal" test_space_extension_graph_traversal;

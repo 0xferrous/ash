@@ -69,6 +69,10 @@ type image_store_marker =
 let image_store_marker_content ~toplevel ~size_mib ~registration =
   Printf.sprintf "4\n%s\n%d\n%s\n" toplevel size_mib registration
 
+let image_store_cache_key ~toplevel ~registration =
+  Printf.sprintf "base-image-v1\n%s\n%s\n" toplevel registration
+  |> Digest.string |> Digest.to_hex
+
 let read_image_store_marker path =
   match
     In_channel.with_open_text path In_channel.input_all
@@ -100,10 +104,127 @@ let resolve_store_paths ?nix_executable roots =
   |> String.split_on_char '\n' |> List.map String.trim
   |> List.filter (( <> ) "")
 
-let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
-    ?(resize_allowed = true) ~toplevel ~registration ~image ~size_mib () =
+let scan_image_store ?nix_executable ?store_paths ~toplevel ~registration () =
+  let store_paths =
+    match store_paths with
+    | Some paths -> paths
+    | None ->
+        resolve_store_paths ?nix_executable
+          [ toplevel; Filename.dirname registration ]
+  in
+  let metrics = Image_import_core.Metrics.create () in
+  let entries =
+    Image_import_core.Scan.scan_closure ~reporter:image_import_reporter ~jobs:1
+      ~closure_paths:store_paths ~target_root:"/store" ~total_bytes:None metrics
+  in
+  (entries, metrics)
+
+let write_image_store ~toplevel ~registration ~image ~size_mib ~bytes ~entries
+    ~metrics =
   let marker = image ^ ".toplevel" in
-  let bytes = Int64.mul (Int64.of_int size_mib) 1048576L in
+  let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
+  Util.ensure_dir (Filename.dirname image);
+  (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
+  try
+    Image_import_core.Import.write_image ~size:bytes ~label:"nix-store"
+      ~reporter:image_import_reporter ~path:temporary_image ~metrics entries;
+    Image_import_core.Metrics.log ~prefix:"ash image store"
+      ~reporter:image_import_reporter metrics;
+    Unix.rename temporary_image image;
+    Util.atomic_write_file marker
+      (image_store_marker_content ~toplevel ~size_mib ~registration)
+  with exn ->
+    (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
+    raise exn
+
+let create_image_store ?nix_executable ?store_paths ~toplevel ~registration
+    ~image ~size_mib ~bytes () =
+  let entries, metrics =
+    scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
+  in
+  write_image_store ~toplevel ~registration ~image ~size_mib ~bytes ~entries
+    ~metrics
+
+let bytes_of_mib size_mib = Int64.mul (Int64.of_int size_mib) 1048576L
+let mib_of_bytes bytes = Int64.(to_int (div (add bytes 1048575L) 1048576L))
+
+let current_cached_image ~toplevel ~registration ~image =
+  let marker = image ^ ".toplevel" in
+  if not (Sys.file_exists image) then None
+  else
+    match
+      if Sys.file_exists marker then read_image_store_marker marker else None
+    with
+    | Some (Current prepared)
+      when prepared.toplevel = toplevel
+           && prepared.registration = registration
+           && Int64.equal (Unix.LargeFile.stat image).st_size
+                (bytes_of_mib prepared.size_mib) ->
+        Some prepared.size_mib
+    | Some (Current _) | Some Legacy | None -> None
+
+let prepare_cached_image ?nix_executable ?store_paths ~toplevel ~registration
+    ~image () =
+  match current_cached_image ~toplevel ~registration ~image with
+  | Some size_mib ->
+      Log.debug "reusing cached %d MiB image-backed Nix store at %s" size_mib
+        image;
+      size_mib
+  | None ->
+      (try Unix.unlink image with Unix.Unix_error _ -> ());
+      (try Unix.unlink (image ^ ".toplevel") with Unix.Unix_error _ -> ());
+      let entries, metrics =
+        scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
+      in
+      let bytes = Image_import_core.Import.estimate_image_size entries in
+      let size_mib = mib_of_bytes bytes in
+      Log.info "building cached %d MiB image-backed Nix store at %s" size_mib
+        image;
+      write_image_store ~toplevel ~registration ~image ~size_mib ~bytes ~entries
+        ~metrics;
+      Unix.chmod image 0o444;
+      Log.info "cached %d MiB image-backed Nix store at %s" size_mib image;
+      size_mib
+
+let clone_cached_image ?copy_executable ?resize2fs ~cache_image ~cache_size_mib
+    ~toplevel ~registration ~image ~size_mib () =
+  if cache_size_mib > size_mib then
+    Log.fatal
+      "configured Nix store image size is too small for this closure\n\n\
+       Increase image_size_mib to at least %d."
+      cache_size_mib;
+  let marker = image ^ ".toplevel" in
+  let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
+  Util.ensure_dir (Filename.dirname image);
+  (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
+  try
+    Util.clone_file ?copy_executable ~src:cache_image ~dst:temporary_image ();
+    Unix.chmod temporary_image 0o600;
+    if cache_size_mib < size_mib then (
+      let resize2fs =
+        Util.get_exe
+          ~hint:"resize2fs is required to grow a cached Nix store image clone."
+          resize2fs "resize2fs"
+      in
+      Unix.LargeFile.truncate temporary_image (bytes_of_mib size_mib);
+      let code = Util.run_foreground resize2fs [ temporary_image ] in
+      if code <> 0 then
+        failwith
+          (Printf.sprintf "failed to grow cached Nix store image clone %s"
+             temporary_image));
+    Unix.rename temporary_image image;
+    Util.atomic_write_file marker
+      (image_store_marker_content ~toplevel ~size_mib ~registration);
+    Log.info "cloned cached image-backed Nix store into VM state at %s" image
+  with exn ->
+    (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
+    raise exn
+
+let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
+    ?copy_executable ?cache_image ?(resize_allowed = true) ~toplevel
+    ~registration ~image ~size_mib () =
+  let marker = image ^ ".toplevel" in
+  let bytes = bytes_of_mib size_mib in
   if Sys.file_exists image then
     match
       if Sys.file_exists marker then read_image_store_marker marker else None
@@ -184,32 +305,20 @@ let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
            Run `ash rebuild-db` for this VM to recreate the image."
           image
   else
-    let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
-    (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
     try
-      let store_paths =
-        match store_paths with
-        | Some paths -> paths
-        | None ->
-            resolve_store_paths ?nix_executable
-              [ toplevel; Filename.dirname registration ]
-      in
-      let metrics = Image_import_core.Metrics.create () in
-      let entries =
-        Image_import_core.Scan.scan_closure ~reporter:image_import_reporter
-          ~jobs:1 ~closure_paths:store_paths ~target_root:"/store"
-          ~total_bytes:None metrics
-      in
-      Image_import_core.Import.write_image ~size:bytes ~label:"nix-store"
-        ~reporter:image_import_reporter ~path:temporary_image ~metrics entries;
-      Image_import_core.Metrics.log ~prefix:"ash image store"
-        ~reporter:image_import_reporter metrics;
-      Unix.rename temporary_image image;
-      Util.atomic_write_file marker
-        (image_store_marker_content ~toplevel ~size_mib ~registration);
-      Log.info "created %d MiB image-backed Nix store at %s" size_mib image
+      match cache_image with
+      | None ->
+          create_image_store ?nix_executable ?store_paths ~toplevel
+            ~registration ~image ~size_mib ~bytes ();
+          Log.info "created %d MiB image-backed Nix store at %s" size_mib image
+      | Some cache_image ->
+          let cache_size_mib =
+            prepare_cached_image ?nix_executable ?store_paths ~toplevel
+              ~registration ~image:cache_image ()
+          in
+          clone_cached_image ?copy_executable ?resize2fs ~cache_image
+            ~cache_size_mib ~toplevel ~registration ~image ~size_mib ()
     with exn ->
-      (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
       Log.fatal "failed to prepare image-backed Nix store %s: %s" image
         (Printexc.to_string exn)
 

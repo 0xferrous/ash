@@ -223,6 +223,26 @@ let spawn =
            the host /nix/store. The guest must mount the label at /nix with \
            neededForBoot enabled; Ash initializes the Nix database through QGA \
            after boot.";
+        `S "IMAGE STORE CACHE";
+        `P
+          "Ash keeps one read-only, closure-sized base image for each NixOS \
+           toplevel and registration output under \
+           $XDG_CACHE_HOME/ash/nix-store-images, falling back to \
+           ~/.cache/ash/nix-store-images. Writable capacity is not part of the \
+           cache identity, so VMs with different image_size_mib values reuse \
+           the same base.";
+        `P
+          "For a new VM image, Ash clones the cached base with cp \
+           --reflink=auto --sparse=always and grows the writable clone with \
+           resize2fs to image_size_mib. Reflink-capable filesystems initially \
+           share blocks with the base; other filesystems receive a sparse \
+           copy. If image_size_mib is smaller than the closure-sized base, \
+           creation fails and reports the minimum size.";
+        `P
+          "Cache entries are disposable. A missing, malformed, mismatched, or \
+           incorrectly sized cache entry is rebuilt from the selected closure. \
+           Existing VM images are not replaced from cache because they may \
+           contain guest-added store paths.";
         `P
           "Increasing image_size_mib grows a stopped VM's filesystem \
            automatically. Shrinking it or changing the selected closure \
@@ -478,8 +498,11 @@ let rebuild_db =
         `P
           "For strategy=shared, rebuild-db removes shares/ro and shares/rw, \
            including local-overlay metadata, upper, and work directories. For \
-           strategy=image, it removes nix-store.img and its closure marker. In \
-           either case, guest-installed store paths are discarded.";
+           strategy=image, it removes nix-store.img and its closure marker but \
+           preserves the closure base under \
+           $XDG_CACHE_HOME/ash/nix-store-images. The replacement image reuses \
+           that cache when the closure matches. In either case, \
+           guest-installed store paths are discarded.";
         `S "SAFETY";
         `P
           "The VM must be stopped. persist.img, workspace, SSH keys, \

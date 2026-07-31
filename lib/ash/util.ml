@@ -5,6 +5,11 @@ let config_home_dir () =
   | Some path when path <> "" -> path
   | _ -> Filename.concat (home_dir ()) ".config"
 
+let cache_home_dir () =
+  match Sys.getenv_opt "XDG_CACHE_HOME" with
+  | Some path when path <> "" -> path
+  | _ -> Filename.concat (home_dir ()) ".cache"
+
 let expand_home path =
   if path = "~" then home_dir ()
   else if String.length path >= 2 && String.sub path 0 2 = "~/" then
@@ -154,6 +159,23 @@ let run_foreground program args =
       in
       let _, status = Unix.waitpid [] pid in
       process_status_code status)
+
+let clone_file ?copy_executable ~src ~dst () =
+  let copy =
+    get_exe
+      ~hint:
+        "GNU cp is required to clone a cached image-backed Nix store into VM \
+         state."
+      copy_executable "cp"
+  in
+  ensure_dir (Filename.dirname dst);
+  (try Unix.unlink dst with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+  let code =
+    run_foreground copy [ "--reflink=auto"; "--sparse=always"; "--"; src; dst ]
+  in
+  if code <> 0 then (
+    (try Unix.unlink dst with Unix.Unix_error _ -> ());
+    failwith (Printf.sprintf "failed to clone %s to %s" src dst))
 
 let command_output ?(debug = true) command =
   let stdout_file = Filename.temp_file "ash" ".out" in
