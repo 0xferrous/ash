@@ -109,13 +109,26 @@ PATH=/run/current-system/sw/bin:/bin
 
 registration=$1
 
+# Ash declares the active store transport on the kernel command line. Image
+# stores need registration imported even when a guest keeps compatibility
+# markers for its shared/local-overlay mode.
+image_store=false
+if [ -r /proc/cmdline ]; then
+  for parameter in $(cat /proc/cmdline); do
+    case "$parameter" in
+      ash.nix-store=image) image_store=true ;;
+      ash.nix-store=shared) exit 42 ;;
+    esac
+  done
+fi
+
 # A local-overlay store gets the selected system closure from Ash's readonly
 # lower-store database. Importing it again only duplicates metadata in the upper
 # database and can exceed short guest-exec timeouts during early boot.
-if [ -e /etc/ash/local-overlay-store ]; then
+if [ "$image_store" = false ] && [ -e /etc/ash/local-overlay-store ]; then
   exit 42
 fi
-if [ -r /etc/nix/nix.conf ]; then
+if [ "$image_store" = false ] && [ -r /etc/nix/nix.conf ]; then
   while IFS= read -r line; do
     case "$line" in
       store*=*local-overlay://*) exit 42 ;;
