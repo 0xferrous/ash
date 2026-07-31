@@ -34,7 +34,7 @@ type progress = {
   mutable next_report : int;
 }
 
-let log_progress progress current =
+let log_progress ~reporter progress current =
   let count = !(progress.entries) in
   if count >= progress.next_report then (
     progress.next_report <- progress.next_report + 100;
@@ -51,11 +51,11 @@ let log_progress progress current =
           Printf.sprintf "%.1fs" (Int64.to_float remaining /. bps)
       | _ -> "?"
     in
-    Ash.Log.debug
+    Reporter.debug reporter
       "%s progress count=%d entries/s=%.1f bytes/s=%.1f eta=%s current=%s"
       progress.label count eps bps eta current)
 
-let record metrics progress item =
+let record ~reporter metrics progress item =
   Metrics.bump_jobs_seen metrics;
   progress.entries := !(progress.entries) + 1;
   (match item.kind with
@@ -66,10 +66,10 @@ let record metrics progress item =
       progress.bytes :=
         Int64.add !(progress.bytes) (Int64.of_int item.stat.Unix.st_size)
   | Symlink -> Metrics.bump_symlinks metrics);
-  log_progress progress item.source;
+  log_progress ~reporter progress item.source;
   to_entry item
 
-let rec walk ?(target_root = "") ~progress metrics source acc =
+let rec walk ?(target_root = "") ~reporter ~progress metrics source acc =
   let st = Unix.lstat source in
   let target =
     if target_root = "" then source
@@ -81,26 +81,27 @@ let rec walk ?(target_root = "") ~progress metrics source acc =
       |> List.map (fun name -> Filename.concat source name)
     in
     let acc =
-      record metrics progress
+      record ~reporter metrics progress
         { source; target; kind = Dir; stat = st; link_target = None }
       :: acc
     in
     List.fold_left
-      (fun acc child -> walk ~target_root:target ~progress metrics child acc)
+      (fun acc child ->
+        walk ~target_root:target ~reporter ~progress metrics child acc)
       acc children
   else if is_reg st then
-    record metrics progress
+    record ~reporter metrics progress
       { source; target; kind = File; stat = st; link_target = None }
     :: acc
   else if is_lnk st then
     let link_target = Some (Unix.readlink source) in
-    record metrics progress
+    record ~reporter metrics progress
       { source; target; kind = Symlink; stat = st; link_target }
     :: acc
   else acc
 
-let of_root_with_progress ~root ~progress metrics =
-  walk ~progress metrics ~target_root:"" root [] |> List.rev
+let of_root_with_progress ~reporter ~target_root ~root ~progress metrics =
+  walk ~reporter ~progress metrics ~target_root root [] |> List.rev
 
 let of_root ~root =
   let metrics = Metrics.create () in
@@ -114,16 +115,20 @@ let of_root ~root =
       next_report = max_int;
     }
   in
-  of_root_with_progress ~root ~progress metrics
+  of_root_with_progress ~reporter:Reporter.silent ~target_root:"" ~root
+    ~progress metrics
 
-let scan_closure ~jobs ~closure_paths ~target_root ~total_bytes metrics =
-  Ash.Log.info "scan start roots=%d jobs=%d" (List.length closure_paths) jobs;
+let scan_closure ~reporter ~jobs ~closure_paths ~target_root ~total_bytes
+    metrics =
+  Reporter.info reporter "scan start roots=%d jobs=%d"
+    (List.length closure_paths)
+    jobs;
   Metrics.mark_scan_started metrics;
   let results : Plan.entry list =
     closure_paths
     |> List.concat_map (fun path ->
         let target = Filename.concat target_root (Filename.basename path) in
-        Ash.Log.debug "scan root source=%s target=%s" path target;
+        Reporter.debug reporter "scan root source=%s target=%s" path target;
         let progress =
           {
             label = Filename.basename path;
@@ -134,9 +139,10 @@ let scan_closure ~jobs ~closure_paths ~target_root ~total_bytes metrics =
             next_report = 100;
           }
         in
-        of_root_with_progress ~root:path ~progress metrics)
+        of_root_with_progress ~reporter ~target_root ~root:path ~progress
+          metrics)
     |> Plan.dedup_by_target (fun (entry : Plan.entry) -> entry.target)
   in
   Metrics.mark_scan_finished metrics;
-  Ash.Log.info "scan done entries=%d" (List.length results);
+  Reporter.info reporter "scan done entries=%d" (List.length results);
   results

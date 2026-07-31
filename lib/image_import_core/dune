@@ -1,0 +1,3 @@
+(library
+ (name image_import_core)
+ (libraries ash.ext2fs unix))

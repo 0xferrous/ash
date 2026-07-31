@@ -48,10 +48,10 @@ let duration started_at finished_at =
   | Some s, Some e -> Some (e -. s)
   | _ -> None
 
-let log ?(prefix = "metrics") m =
+let log ?(prefix = "metrics") ?(reporter = Reporter.silent) m =
   let elapsed = Unix.gettimeofday () -. m.started_at in
   let fmt secs = Printf.sprintf "%.3fs" secs in
-  Ash.Log.info
+  Reporter.info reporter
     "%s elapsed=%s scan=%s mutate=%s dirs=%d files=%d symlinks=%d bytes=%Ld \
      jobs=%d"
     prefix (fmt elapsed)

@@ -28,9 +28,13 @@ let estimate_image_size (entries : Plan.entry list) =
     (Int64.add data_bytes overhead)
     (Int64.mul 4L (Int64.mul 1024L 1024L))
 
-let estimate_inode_count entries =
+let estimate_inode_count ~size entries =
   let required = List.length entries + 4096 in
-  (required + 4095) / 4096 * 4096
+  (* Match the conventional ext4 density of roughly one inode per 16 KiB so
+     writable images retain useful inode headroom after importing a closure. *)
+  let by_size = Int64.to_int (Int64.div size 16384L) in
+  let estimated = max required by_size in
+  (estimated + 4095) / 4096 * 4096
 
 let ext2fs_backend fs =
   {
@@ -49,13 +53,14 @@ let ext2fs_backend fs =
           ~mode:entry.mode ~uid:entry.uid ~gid:entry.gid ~mtime:entry.mtime);
   }
 
-let import_entries ~backend ~metrics (entries : Plan.entry list) =
+let import_entries ~reporter ~backend ~metrics (entries : Plan.entry list) =
   Metrics.mark_mut_started metrics;
   let total = List.length entries in
   List.iteri
     (fun index (entry : Plan.entry) ->
       if index mod 1000 = 0 then
-        Ash.Log.debug "import progress %d/%d target=%s" index total entry.target;
+        Reporter.debug reporter "import progress %d/%d target=%s" index total
+          entry.target;
       match entry.kind with
       | Plan.Dir -> backend.mkdir entry
       | Plan.File -> backend.write_file entry
@@ -63,14 +68,15 @@ let import_entries ~backend ~metrics (entries : Plan.entry list) =
     entries;
   Metrics.mark_mut_finished metrics
 
-let write_image ?size ?(label = "nix-store") ~path ~metrics entries =
+let write_image ?size ?(label = "nix-store") ?(reporter = Reporter.silent) ~path
+    ~metrics entries =
   let size = Option.value size ~default:(estimate_image_size entries) in
-  let inodes = estimate_inode_count entries in
-  Ash.Log.info "image create path=%s size=%Ld inodes=%d label=%s" path size
-    inodes label;
+  let inodes = estimate_inode_count ~size entries in
+  Reporter.info reporter "image create path=%s size=%Ld inodes=%d label=%s" path
+    size inodes label;
   let fs = Ash_ext2fs.Ext2fs.create ~path ~size ~inodes ~label () in
   Fun.protect
     ~finally:(fun () -> Ash_ext2fs.Ext2fs.close fs)
     (fun () ->
       let backend = ext2fs_backend fs in
-      import_entries ~backend ~metrics entries)
+      import_entries ~reporter ~backend ~metrics entries)

@@ -30,19 +30,24 @@ let jobs_arg =
 let dry_run_arg =
   Arg.(value & flag & info [ "dry-run" ] ~doc:"Only scan and log metrics.")
 
+let reporter =
+  Image_import_core.Reporter.make
+    ~debug:(fun message -> Ash.Log.debug "%s" message)
+    ~info:(fun message -> Ash.Log.info "%s" message)
+
 let run flake out jobs dry_run =
-  let metrics = Image_import.Metrics.create () in
+  let metrics = Image_import_core.Metrics.create () in
   let toplevel = Image_import.Nix.build_toplevel ~flake |> String.trim in
   Ash.Log.info "output=%s" out;
   let closure_paths = Image_import.Nix.closure_paths ~path:toplevel in
   let total_bytes = Image_import.Nix.closure_size ~path:toplevel in
   let entries =
-    Image_import.Scan.scan_closure ~jobs ~closure_paths
+    Image_import_core.Scan.scan_closure ~reporter ~jobs ~closure_paths
       ~target_root:"/nix/store" ~total_bytes metrics
   in
   if dry_run then print_endline (String.concat "\n" closure_paths)
-  else Image_import.Import.write_image ~path:out ~metrics entries;
-  Image_import.Metrics.log ~prefix:"nix-ext4-image" metrics
+  else Image_import_core.Import.write_image ~reporter ~path:out ~metrics entries;
+  Image_import_core.Metrics.log ~reporter ~prefix:"nix-ext4-image" metrics
 
 let cmd =
   Cmd.v

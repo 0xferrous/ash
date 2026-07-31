@@ -1,4 +1,4 @@
-open Image_import
+open Image_import_core
 
 let fail msg = failwith msg
 
@@ -7,6 +7,10 @@ let assert_equal label expected actual =
     fail (Printf.sprintf "%s: expected %S, got %S" label expected actual)
 
 let assert_bool label actual = if not actual then fail label
+
+let assert_int label expected actual =
+  if expected <> actual then
+    fail (Printf.sprintf "%s: expected %d, got %d" label expected actual)
 
 let temp_dir prefix =
   let path = Filename.temp_file prefix "" in
@@ -41,7 +45,7 @@ let make_tree root =
 let test_flake_host_target () =
   assert_equal "flake host target"
     "../my-nix#nixosConfigurations.agent.config.system.build.toplevel"
-    (Nix.toplevel_attr ~flake:"../my-nix#agent")
+    (Image_import.Nix.toplevel_attr ~flake:"../my-nix#agent")
 
 let test_scan () =
   let root = temp_dir "image-import" in
@@ -130,6 +134,11 @@ let test_ext4_image () =
             in
             find 0)))
 
+let test_writable_image_inode_density () =
+  let size = Int64.mul 50_000L 1_048_576L in
+  assert_int "50,000 MiB inode count" 3_203_072
+    (Import.estimate_inode_count ~size [])
+
 let test_ext4_full_inode_group () =
   let root = temp_dir "image-import-inodes" in
   Fun.protect
@@ -146,7 +155,7 @@ let test_ext4_full_inode_group () =
       in
       let image = Filename.concat root "multi-group.img" in
       let metrics = Metrics.create () in
-      Import.write_image ~size:536_870_912L ~label:"inode-test" ~path:image
+      Import.write_image ~size:134_217_728L ~label:"inode-test" ~path:image
         ~metrics entries;
       ignore (command_output ("e2fsck -fn " ^ Filename.quote image ^ " 2>&1")))
 
@@ -159,4 +168,5 @@ let () =
   run "flake host target" test_flake_host_target;
   run "scan" test_scan;
   run "libext2fs image" test_ext4_image;
+  run "writable image inode density" test_writable_image_inode_density;
   run "libext2fs full inode group" test_ext4_full_inode_group
