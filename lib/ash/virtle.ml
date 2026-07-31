@@ -1,3 +1,17 @@
+type kernel_serial = Off | Print | Console
+
+let string_of_kernel_serial = function
+  | Off -> "off"
+  | Print -> "print"
+  | Console -> "console"
+
+let kernel_serial_of_string ~field = function
+  | "off" -> Off
+  | "print" -> Print
+  | "console" -> Console
+  | value ->
+      Log.fatal "%s must be one of off, print, or console (got %S)" field value
+
 type manifest_inputs = {
   config_path : string;
   flake : string;
@@ -5,7 +19,7 @@ type manifest_inputs = {
   name : string;
   spaces : string list;
   user : string option;
-  print_serial : bool;
+  kernel_serial : kernel_serial;
   mount_cwd : bool;
   nix_store_strategy : Ash_config.nix_store_strategy option;
   nix_store_image_size_mib : int option;
@@ -27,7 +41,7 @@ type resolved_manifest_inputs = {
   name : string;
   spaces : string list;
   user : string option;
-  print_serial : bool;
+  kernel_serial : kernel_serial;
   mount_cwd : bool;
   nix_store_strategy : Ash_config.nix_store_strategy;
   nix_store_image_size_mib : int;
@@ -2317,8 +2331,7 @@ let render_resolved_manifest inputs =
                ("path", Otoml.string boot.kernel);
                ("initrd_path", Otoml.string boot.initrd);
                ( "serial",
-                 Otoml.string (if inputs.print_serial then "print" else "off")
-               );
+                 Otoml.string (string_of_kernel_serial inputs.kernel_serial) );
              ]
             @
             if boot.kernel_params = [] then []
@@ -2372,7 +2385,8 @@ let ash_config (inputs : manifest_inputs) =
              inputs.override_inputs) );
       ("name", Otoml.string inputs.name);
       ("spaces", string_array inputs.spaces);
-      ("print_serial", Otoml.boolean inputs.print_serial);
+      ( "kernel_serial",
+        Otoml.string (string_of_kernel_serial inputs.kernel_serial) );
       ("mount_cwd", Otoml.boolean inputs.mount_cwd);
       ("kitty", Otoml.boolean inputs.kitty);
       ("virtiofsd", Otoml.string inputs.virtiofsd);
@@ -2462,7 +2476,17 @@ let load_ash_config ~name =
     name = string_of_doc doc [ "spawn"; "name" ];
     spaces = string_array_of_doc doc [ "spawn"; "spaces" ];
     user = Otoml.find_opt doc Otoml.get_string [ "spawn"; "user" ];
-    print_serial = bool_of_doc doc [ "spawn"; "print_serial" ];
+    kernel_serial =
+      (match
+         Otoml.find_opt doc Otoml.get_string [ "spawn"; "kernel_serial" ]
+       with
+      | Some value -> kernel_serial_of_string ~field:"spawn.kernel_serial" value
+      | None -> (
+          match
+            Otoml.find_opt doc Otoml.get_boolean [ "spawn"; "print_serial" ]
+          with
+          | Some true -> Print
+          | Some false | None -> Off));
     mount_cwd = bool_of_doc doc [ "spawn"; "mount_cwd" ];
     kitty =
       Option.value
@@ -2602,7 +2626,7 @@ let render_manifest (inputs : manifest_inputs) =
         name = inputs.name;
         spaces = inputs.spaces;
         user = Some user;
-        print_serial = inputs.print_serial;
+        kernel_serial = inputs.kernel_serial;
         mount_cwd = inputs.mount_cwd;
         nix_store_strategy = store_strategy;
         nix_store_image_size_mib = store_image_size_mib;
@@ -2633,7 +2657,7 @@ let write_manifest_for_inputs inputs =
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
-    ~override_inputs ~spaces ~print_serial ~mount_cwd ~kitty () =
+    ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~kitty () =
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
   let flake = Nix.storage_flake_ref (resolve_spawn_flake ~name flake) in
@@ -2666,7 +2690,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       name;
       spaces;
       user;
-      print_serial;
+      kernel_serial;
       mount_cwd;
       nix_store_strategy;
       nix_store_image_size_mib;
@@ -2770,12 +2794,12 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
-    ~override_inputs ~spaces ~print_serial ~mount_cwd ~ephemeral ~attach ~keep
+    ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~ephemeral ~attach ~keep
     ~kitty ~verbose () =
   let inputs, path =
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
-      ~override_inputs ~spaces ~print_serial ~mount_cwd ~kitty ()
+      ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~kitty ()
   in
   if attach && keep then
     launch_background_and_attach ~resume:None inputs path ~verbose

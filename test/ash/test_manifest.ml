@@ -121,10 +121,10 @@ let test_boot : Nix.boot =
 let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
-let render ?(spaces = []) ?user ?(print_serial = false) ?(mount_cwd = false)
-    ?nix_store_strategy ?nix_store_image_size_mib ?ro_store_socket
-    ?(kitty = false) ?(config_path = "/tmp/config.toml") ~config ~flake ~name ()
-    =
+let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
+    ?(mount_cwd = false) ?nix_store_strategy ?nix_store_image_size_mib
+    ?ro_store_socket ?(kitty = false) ?(config_path = "/tmp/config.toml")
+    ~config ~flake ~name () =
   let nix_store_strategy =
     Option.value nix_store_strategy
       ~default:(Ash_config.global_nix_store_strategy config)
@@ -143,7 +143,7 @@ let render ?(spaces = []) ?user ?(print_serial = false) ?(mount_cwd = false)
       name;
       spaces;
       user;
-      print_serial;
+      kernel_serial;
       mount_cwd;
       nix_store_strategy;
       nix_store_image_size_mib;
@@ -179,7 +179,7 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   let config = Ash_config.load config_path in
   let spaces, manifest =
     render ~config ~flake:"../my-nix#agent" ~name:"unit-test" ~spaces:[ "ash" ]
-      ~print_serial:true ~mount_cwd:true ()
+      ~kernel_serial:Virtle.Console ~mount_cwd:true ()
   in
   assert_equal "selected spaces" "ash" (String.concat "," spaces);
   let doc = parse_toml manifest in
@@ -202,7 +202,8 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     "helper=/run/wrappers/bin/qemu-bridge-helper";
   assert_string_contains "stable VM MAC" (List.nth qemu_exec 4)
     ("mac=" ^ Virtle.network_mac "unit-test");
-  assert_equal "kernel serial" "print" (find_string doc [ "kernel"; "serial" ]);
+  assert_equal "kernel serial" "console"
+    (find_string doc [ "kernel"; "serial" ]);
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
   let wrapper = Filename.concat state "ash/unit-test/ssh-with-space-mounts" in
@@ -1201,7 +1202,7 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       name;
       spaces = [ "base" ];
       user = None;
-      print_serial = false;
+      kernel_serial = Virtle.Console;
       mount_cwd = false;
       nix_store_strategy = Some Ash_config.Image;
       nix_store_image_size_mib = Some 32768;
@@ -1220,6 +1221,7 @@ let test_spawn_reuses_saved_flake_when_omitted () =
   let saved = Virtle.load_ash_config ~name in
   assert_equal "saved registration path" "/nix/store/closure-info/registration"
     (Option.value saved.registration_path ~default:"");
+  assert_bool "saved kernel serial" true (saved.kernel_serial = Virtle.Console);
   assert_equal "saved flake" saved_flake (Virtle.resolve_spawn_flake ~name None);
   assert_bool "saved Nix store strategy" true
     (Virtle.resolve_spawn_nix_store_strategy ~name None = Some Ash_config.Image);
@@ -1249,6 +1251,22 @@ let test_spawn_reuses_saved_flake_when_omitted () =
     (String.concat "," (Virtle.resolve_spawn_spaces ~name []));
   assert_equal "explicit spaces override saved" "rust,go"
     (String.concat "," (Virtle.resolve_spawn_spaces ~name [ "rust"; "go" ]));
+  let legacy_name = "legacy-serial-vm" in
+  write_file
+    (Virtle.ash_config_path ~name:legacy_name)
+    "[spawn]\n\
+     config_path = '/tmp/ash-config.toml'\n\
+     flake = '/tmp/saved-flake#agent'\n\
+     override_inputs = []\n\
+     name = 'legacy-serial-vm'\n\
+     spaces = []\n\
+     print_serial = true\n\
+     mount_cwd = false\n\
+     kitty = false\n\
+     virtiofsd = '/bin/virtiofsd'\n\
+     virtle = '/bin/virtle'\n";
+  assert_bool "legacy print_serial loads as print" true
+    ((Virtle.load_ash_config ~name:legacy_name).kernel_serial = Virtle.Print);
   assert_equal "new VM has no default spaces" ""
     (String.concat "," (Virtle.resolve_spawn_spaces ~name:"new-vm" []))
 

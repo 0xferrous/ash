@@ -117,7 +117,7 @@ Spawn options:
 - `--ro-store-socket PATH` — use an existing virtiofs daemon socket for the read-only `/nix/store` mount instead of starting ash's own `ro-store` virtiofsd.
 - `--nix-store-strategy shared|image` — override `global.nix_store.strategy` for this VM and save it in `ash-state.toml`.
 - `--nix-store-image-size-mib MIB` — override `global.nix_store.image_size_mib` for this VM and save it in `ash-state.toml`.
-- `--print-serial` — print guest kernel/init serial output while booting.
+- `--kernel-serial=off|print|console` — disable serial I/O, stream guest kernel/init output, or connect host standard input and output to the guest serial console.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
 - `--attach` — attach after spawning. Without `--keep`, the VM stops when SSH exits.
 - `--keep` — with `--attach`, start as a background VM and keep it running after SSH exits. Plain `spawn` already keeps the VM, so `--keep` requires `--attach`.

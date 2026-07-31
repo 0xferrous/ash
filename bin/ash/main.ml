@@ -16,15 +16,15 @@ let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     nix_store_image_size_mib config flake override_inputs name user spaces
-    print_serial mount_cwd ephemeral attach keep kitty =
+    kernel_serial mount_cwd ephemeral attach keep kitty =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?name ?user
-    ~config_path:config ?flake ~override_inputs ~spaces ~print_serial ~mount_cwd
-    ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
+    ~config_path:config ?flake ~override_inputs ~spaces ~kernel_serial
+    ~mount_cwd ~ephemeral ~attach ~keep ~kitty ~verbose:opts.verbose ()
 
 let list_vms global =
   Log.set_debug global.debug;
@@ -211,11 +211,19 @@ let verbose_arg =
           "Increase verbosity. For spawn, passed to virtle; for attach, passed \
            to ssh. Repeatable.")
 
-let print_serial_arg =
+let kernel_serial_arg =
+  let modes =
+    [
+      ("off", Virtle.Off); ("print", Virtle.Print); ("console", Virtle.Console);
+    ]
+  in
   Arg.(
-    value & flag
-    & info [ "print-serial" ]
-        ~doc:"Print guest kernel/init serial output while booting.")
+    value
+    & opt (enum modes) Virtle.Off
+    & info [ "kernel-serial" ] ~docv:"MODE"
+        ~doc:
+          "Configure guest kernel serial I/O: off disables it, print streams \
+           output, and console connects host standard input and output.")
 
 let mount_cwd_arg =
   Arg.(
@@ -282,7 +290,7 @@ let spawn_cmd =
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ ro_store_socket_arg $ nix_store_strategy_arg $ nix_store_image_size_arg
       $ config_arg $ flake_arg $ override_input_arg $ name_arg $ user_arg
-      $ spaces_arg $ print_serial_arg $ mount_cwd_arg $ ephemeral_arg
+      $ spaces_arg $ kernel_serial_arg $ mount_cwd_arg $ ephemeral_arg
       $ attach_flag $ keep_flag $ kitty_flag)
 
 let attach_name_arg =
