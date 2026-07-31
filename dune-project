@@ -22,4 +22,5 @@
   cmdliner
   msgpck
   otoml
+  threads
   yojson))

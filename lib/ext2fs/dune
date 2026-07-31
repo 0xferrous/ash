@@ -1,0 +1,8 @@
+(library
+ (name ash_ext2fs)
+ (public_name ash.ext2fs)
+ (libraries unix)
+ (foreign_stubs
+  (language c)
+  (names ext2fs_stubs))
+ (c_library_flags -lext2fs -lcom_err))

@@ -1,0 +1,5 @@
+(executable
+ (package ash)
+ (public_name nix-ext4-image)
+ (name main)
+ (libraries image_import cmdliner))

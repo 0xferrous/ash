@@ -7,6 +7,7 @@ Most documentation lives in the command help and generated command pages:
 
 - <https://0xf.rs/ash/>
 - [Implementation notes](./IMPLEMENTATION.md)
+- [`nix-ext4-image`](./bin/nix-ext4-image/README.md)
 - [Agent Portal and wrappers](./PORTAL.md)
 
 ## Install / run

@@ -1,0 +1,3 @@
+(library
+ (name image_import)
+ (libraries ash ash.ext2fs unix yojson))

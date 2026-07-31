@@ -37,6 +37,8 @@
 
           nativeBuildInputs = [ pkgs.git ];
 
+          buildInputs = [ pkgs.e2fsprogs ];
+
           propagatedBuildInputs = [
             ocamlPackages.base64
             ocamlPackages.cmdliner
@@ -54,6 +56,10 @@
 
         agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
           install -Dm755 ${ashBuild}/bin/agent-portal-host "$out/bin/agent-portal-host"
+        '';
+
+        nixExt4Image = pkgs.runCommand "nix-ext4-image" { } ''
+          install -Dm755 ${ashBuild}/bin/nix-ext4-image "$out/bin/nix-ext4-image"
         '';
 
         agentPortalWrappers = pkgs.runCommand "agent-portal-wrappers" { } ''
@@ -80,13 +86,21 @@
           all = ashBuild;
           "agent-portal-host" = agentPortalHost;
           "agent-portal-wrappers" = agentPortalWrappers;
+          "nix-ext4-image" = nixExt4Image;
           command-pages = ash-command-pages;
           ash-command-pages = ash-command-pages;
         };
 
-        apps.default = {
-          type = "app";
-          program = "${ash}/bin/ash";
+        apps = {
+          default = {
+            type = "app";
+            program = "${ash}/bin/ash";
+          };
+
+          "nix-ext4-image" = {
+            type = "app";
+            program = "${nixExt4Image}/bin/nix-ext4-image";
+          };
         };
 
         devShells.default = pkgs.mkShell {
@@ -98,6 +112,7 @@
             ocamlPackages.msgpck
             ocamlPackages.otoml
             ocamlPackages.utop
+            pkgs.e2fsprogs
           ];
         };
       }
