@@ -149,12 +149,16 @@ The overrides are saved as `nix_store_strategy` and
 `nix_store_image_size_mib` in that VM's `ash-state.toml` and reused by later
 spawns and regeneration.
 
-Ash copies the selected NixOS closure into a persistent ext4 image labeled
-`nix-store` without exposing the host store to the guest. The guest must mount
-that label at `/nix` with `neededForBoot = true`. Increasing
+Ash copies the selected NixOS closure and registration file into a persistent
+ext4 image labeled `nix-store` without exposing the host store to the guest.
+Ash appends `ash.nix-store=image` or `ash.nix-store=shared` to the kernel command
+line so guests can select the matching stage-1 mount layout. Image-capable
+guests must mount the `nix-store` label at `/nix`; Ash loads the Nix database
+through QGA after boot. Increasing
 `image_size_mib` grows an existing stopped VM's filesystem automatically.
-Shrinking it or changing the selected system closure requires
-`ash rebuild-db NAME`, which discards guest-added store paths.
+Shrinking it, changing the selected system closure, or migrating a legacy
+image created with `mke2fs -d` requires `ash rebuild-db NAME`, which discards
+guest-added store paths.
 
 Select a space with a repeatable `--space`/`-s` option:
 

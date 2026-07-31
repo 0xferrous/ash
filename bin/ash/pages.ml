@@ -193,11 +193,11 @@ let spawn =
            roots remain while the VM state exists and are removed with that \
            state, including after an ephemeral session.";
         `P
-          "Guest preparation is done by ash through virtle guest-exec. With \
-           strategy=shared, Ash imports the selected closure registration into \
-           the guest Nix database, then mounts workspace/space targets. The \
-           image strategy already contains the initialized database and skips \
-           the import. Foreground attached spawns use the generated SSH \
+          "Guest preparation is done by ash through virtle guest-exec. Ash \
+           imports the selected closure registration into the guest Nix \
+           database, then mounts workspace/space targets. Local-overlay guests \
+           skip the import because their readonly lower store already contains \
+           the registration. Foreground attached spawns use the generated SSH \
            wrapper for the same preparation.";
         `P
           "Runtime hotmounts are managed later with ash mount, ash umount, ash \
@@ -218,9 +218,11 @@ let spawn =
            select an existing virtiofsd socket for this strategy.";
         `P
           "The image strategy creates nix-store.img as a private ext4 \
-           filesystem labeled nix-store and copies the selected closure and \
-           Nix database into it. It does not expose the host /nix/store. The \
-           guest must mount the label at /nix with neededForBoot enabled.";
+           filesystem labeled nix-store and copies the selected closure plus \
+           its registration file into it through libext2fs. It does not expose \
+           the host /nix/store. The guest must mount the label at /nix with \
+           neededForBoot enabled; Ash initializes the Nix database through QGA \
+           after boot.";
         `P
           "Increasing image_size_mib grows a stopped VM's filesystem \
            automatically. Shrinking it or changing the selected closure \

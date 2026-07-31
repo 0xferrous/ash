@@ -204,6 +204,9 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     ("mac=" ^ Virtle.network_mac "unit-test");
   assert_equal "kernel serial" "console"
     (find_string doc [ "kernel"; "serial" ]);
+  assert_equal "shared store kernel parameter"
+    "init=/nix/store/system/init,root=fstab,ash.nix-store=shared"
+    (String.concat "," (find_strings doc [ "kernel"; "params" ]));
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
   let wrapper = Filename.concat state "ash/unit-test/ssh-with-space-mounts" in
@@ -353,7 +356,11 @@ image_size_mib = 12288
     render ~config ~flake:"../my-nix#agent" ~name:"image-store"
       ~nix_store_strategy:Ash_config.Image ~nix_store_image_size_mib:24576 ()
   in
-  let mounts = table_array (parse_toml manifest) "mounts" in
+  let doc = parse_toml manifest in
+  let mounts = table_array doc "mounts" in
+  assert_equal "image store kernel parameter"
+    "init=/nix/store/system/init,root=fstab,ash.nix-store=image"
+    (String.concat "," (find_strings doc [ "kernel"; "params" ]));
   assert_int "fixed mount count with image store" 4 (List.length mounts);
   assert_bool "image store omits ro-store" false
     (List.exists
@@ -388,10 +395,6 @@ image_size_mib = 12288
   | _ -> fail "image store configuration is not a table");
   assert_bool "image store target" true
     (Virtle.configured_mount_target store = Some "/nix");
-  let manifest_path = Filename.concat state "ash/image-store/virtle.toml" in
-  write_file manifest_path manifest;
-  assert_bool "image store detected from manifest" true
-    (Virtle.manifest_uses_image_store manifest_path);
   assert_bool "image store does not prepare host shares" false
     (Sys.file_exists (Filename.concat state "ash/image-store/shares"));
   let wrapper =
@@ -399,7 +402,7 @@ image_size_mib = 12288
       (Filename.concat state "ash/image-store/ssh-with-space-mounts")
       In_channel.input_all
   in
-  assert_bool "image store skips registration import" false
+  assert_bool "image store imports registration" true
     (Virtle.contains_substring wrapper "ash-load-nix-registration");
   let _, shared_manifest =
     render ~config ~flake:"../my-nix#agent" ~name:"shared-store" ()
@@ -792,6 +795,10 @@ let test_qga_load_nix_registration_action () =
   in
   let script = List.nth action.args 1 in
   assert_string_contains "registration import" script "nix-store --load-db";
+  assert_string_contains "image store kernel parameter check" script
+    "ash.nix-store=image";
+  assert_string_contains "shared store kernel parameter check" script
+    "ash.nix-store=shared";
   assert_string_contains "local overlay marker skips registration" script
     "/etc/ash/local-overlay-store";
   assert_string_contains "local overlay config skips registration" script
@@ -1333,63 +1340,75 @@ let test_prepare_lower_store () =
 let test_prepare_image_store () =
   let root = temp_dir "ash-test-image-store-prepare" in
   let bin = Filename.concat root "bin" in
+  let sources = Filename.concat root "sources" in
+  let system_source = Filename.concat sources "system" in
+  let registration_source = Filename.concat sources "closure-info" in
   let image = Filename.concat root "nix-store.img" in
-  let image_root = Printf.sprintf "%s.root-%d" image (Unix.getpid ()) in
   let nix_args = Filename.concat root "nix-args" in
   let e2fsck_args = Filename.concat root "e2fsck-args" in
-  let mke2fs_args = Filename.concat root "mke2fs-args" in
   let resize2fs_args = Filename.concat root "resize2fs-args" in
   mkdir_p bin;
+  write_file (Filename.concat system_source "bin/init") "system-init\n";
+  write_file
+    (Filename.concat registration_source "registration")
+    "registration-data\n";
   let nix = Filename.concat bin "nix" in
   write_file nix
     "#!/bin/sh\n\
      printf '%s\\n' \"$@\" > \"$ASH_TEST_NIX_ARGS\"\n\
-     mkdir -p \"$ASH_TEST_IMAGE_ROOT/nix/store\" \
-     \"$ASH_TEST_IMAGE_ROOT/nix/var/nix/db\"\n";
-  let mke2fs = Filename.concat bin "mke2fs" in
-  write_file mke2fs
-    "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_MKE2FS_ARGS\"\n";
+     printf '%s\\n' \"$ASH_TEST_SYSTEM_SOURCE\" \
+     \"$ASH_TEST_REGISTRATION_SOURCE\"\n";
   let e2fsck = Filename.concat bin "e2fsck" in
   write_file e2fsck
     "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_E2FSCK_ARGS\"\n";
   let resize2fs = Filename.concat bin "resize2fs" in
   write_file resize2fs
     "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ASH_TEST_RESIZE2FS_ARGS\"\n";
-  let unshare = Filename.concat bin "unshare" in
-  write_file unshare "#!/bin/sh\nshift 2\nexec \"$@\"\n";
-  List.iter
-    (fun path -> Unix.chmod path 0o755)
-    [ nix; e2fsck; mke2fs; resize2fs; unshare ];
+  List.iter (fun path -> Unix.chmod path 0o755) [ nix; e2fsck; resize2fs ];
   Unix.putenv "ASH_TEST_NIX_ARGS" nix_args;
-  Unix.putenv "ASH_TEST_IMAGE_ROOT" image_root;
+  Unix.putenv "ASH_TEST_SYSTEM_SOURCE" system_source;
+  Unix.putenv "ASH_TEST_REGISTRATION_SOURCE" registration_source;
   Unix.putenv "ASH_TEST_E2FSCK_ARGS" e2fsck_args;
-  Unix.putenv "ASH_TEST_MKE2FS_ARGS" mke2fs_args;
   Unix.putenv "ASH_TEST_RESIZE2FS_ARGS" resize2fs_args;
-  Nix.prepare_image_store ~nix_executable:nix ~mke2fs ~unshare
-    ~toplevel:"/nix/store/system" ~image ~size_mib:8 ();
+  Nix.prepare_image_store ~nix_executable:nix ~toplevel:"/nix/store/system"
+    ~registration:"/nix/store/closure-info/registration" ~image ~size_mib:64 ();
   assert_bool "image store created" true (Sys.file_exists image);
   assert_bool "image store marker created" true
     (Sys.file_exists (image ^ ".toplevel"));
-  assert_equal "image store marker" "/nix/store/system\n8\n"
+  assert_equal "image store marker"
+    "4\n/nix/store/system\n64\n/nix/store/closure-info/registration\n"
     (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
   assert_bool "image store is correctly sized" true
-    (Int64.equal (Unix.LargeFile.stat image).st_size 8388608L);
-  let copied_args = In_channel.with_open_text nix_args In_channel.input_all in
-  assert_string_contains "image store uses nix copy" copied_args "copy\n";
-  assert_string_contains "image store copies closure" copied_args
+    (Int64.equal (Unix.LargeFile.stat image).st_size 67108864L);
+  let closure_args = In_channel.with_open_text nix_args In_channel.input_all in
+  assert_string_contains "image store resolves closure" closure_args
+    "path-info\n-r\n";
+  assert_string_contains "image store includes toplevel" closure_args
     "/nix/store/system";
-  let filesystem_args =
-    In_channel.with_open_text mke2fs_args In_channel.input_all
+  assert_string_contains "image store includes registration output" closure_args
+    "/nix/store/closure-info";
+  let system_contents =
+    Util.command_output
+      ("debugfs -R "
+      ^ Filename.quote "cat /store/system/bin/init"
+      ^ " " ^ Filename.quote image ^ " 2>/dev/null")
   in
-  assert_string_contains "image store filesystem label" filesystem_args
-    "nix-store";
-  assert_string_contains "image store filesystem source" filesystem_args
-    (Filename.concat image_root "nix");
+  assert_equal "image store system contents" "system-init" system_contents;
+  let registration_contents =
+    Util.command_output
+      ("debugfs -R "
+      ^ Filename.quote "cat /store/closure-info/registration"
+      ^ " " ^ Filename.quote image ^ " 2>/dev/null")
+  in
+  assert_equal "image store registration contents" "registration-data"
+    registration_contents;
+  ignore (Util.command_output ("e2fsck -fn " ^ Filename.quote image ^ " 2>&1"));
   Nix.prepare_image_store ~e2fsck ~resize2fs ~toplevel:"/nix/store/system"
-    ~image ~size_mib:16 ();
+    ~registration:"/nix/store/closure-info/registration" ~image ~size_mib:128 ();
   assert_bool "image store grows backing file" true
-    (Int64.equal (Unix.LargeFile.stat image).st_size 16777216L);
-  assert_equal "grown image store marker" "/nix/store/system\n16\n"
+    (Int64.equal (Unix.LargeFile.stat image).st_size 134217728L);
+  assert_equal "grown image store marker"
+    "4\n/nix/store/system\n128\n/nix/store/closure-info/registration\n"
     (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
   assert_equal "e2fsck receives forced preen arguments"
     ("-f\n-p\n" ^ image ^ "\n")

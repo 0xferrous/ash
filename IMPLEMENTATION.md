@@ -84,8 +84,8 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `nix` — evaluates the selected flake/NixOS configuration for kernel, initrd, toplevel, kernel params, a `pkgs.closureInfo` registration dump, `ssh`, and `systemd-ssh-proxy` paths.
 - `virtle` — validates, launches, controls, and queries VMs. Defaults to `$ASH_VIRTLE`, then `virtle` from `PATH`; override with `--virtle PATH`.
 - `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest.
-- `mke2fs` and `unshare` — used to create an ext4 image-backed Nix store while mapping the host user to filesystem root.
-- `e2fsck` and `resize2fs` — check and grow an existing image-backed Nix store when `image_size_mib` increases.
+- `e2fsck` and `resize2fs` — check and grow an existing image-backed Nix store when `image_size_mib` increases. New images are created directly through Ash's `libext2fs` binding.
+- `unshare` — prepares id-mapped writable store directories for the shared/local-overlay strategy when subordinate UID/GID ranges are available.
 - `bindfs` — creates host-side staging mounts for runtime hotmounts. See [Runtime hotmount implementation](#runtime-hotmount-implementation).
 - `mountpoint` — used by `ash mount` to avoid remounting an already-mounted host-side hotmount directory.
 - `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
@@ -207,7 +207,7 @@ The `shared` strategy adds:
 - `shares-ro` — readonly VM-state data, including `guest-store-state`, a synthetic local-store metadata database for the resolved NixOS closure.
 - `shares-rw` — writable VM-state data, including `guest-store-state`, `guest-store-upper`, and `guest-store-work` for guests that choose a host-backed OverlayFS upper layer. When subordinate UID/GID ranges are available, Ash maps guest identities one-to-one; otherwise it falls back to identity squashing.
 
-The `image` strategy instead adds `nix-store.img`, a writable ext4 image labeled `nix-store`. It does not add `ro-store`, `shares-ro`, or `shares-rw`, so the guest has no live host Nix store share.
+The `image` strategy instead adds `nix-store.img`, a writable ext4 image labeled `nix-store`. It does not add `ro-store`, `shares-ro`, or `shares-rw`, so the guest has no live host Nix store share. Ash appends `ash.nix-store=image` or `ash.nix-store=shared` after the evaluated NixOS kernel parameters, replacing any pre-existing `ash.nix-store` value, so a single guest closure can conditionally select its stage-1 mount layout.
 - `persist` — writable ext4 image labeled `persist`
 - `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
 
@@ -215,9 +215,9 @@ Ash also builds `pkgs.closureInfo { rootPaths = [ toplevel ]; }` for the exact r
 
 For the `shared` strategy, Ash uses the selected NixOS configuration's `config.nix.package` to load that registration into a synthetic local-store database at `<state_dir>/shares/ro/guest-store-state`. The synthetic store uses the host `/nix/store` as its physical store directory, but contains metadata only for the pinned NixOS closure.
 
-For the `image` strategy, Ash runs the selected Nix package's `nix copy` into a temporary rooted local store, creates a sparse ext4 filesystem with `mke2fs -d`, and attaches the resulting `<state_dir>/nix-store.img`. `unshare --user --map-root-user` makes the copied store root-owned in the filesystem image. A neighboring `.toplevel` marker records the closure and configured size used to initialize the image. Increasing `image_size_mib` for a stopped VM enlarges the sparse backing file and runs `resize2fs`; shrinking remains an explicit `ash rebuild-db`. Regeneration also refuses a changed closure until `ash rebuild-db` recreates the image, because recreation discards guest-added store paths.
+For the `image` strategy, Ash resolves the selected toplevel closure plus its `closure-info` output and writes both directly into a sparse ext4 filesystem through the shared `libext2fs` importer. Store paths are written below `/store` in the image, which becomes `/nix/store` when the filesystem is mounted at `/nix`. Writable images use conventional ext4 inode density of roughly one inode per 16 KiB rather than sizing inodes only for the initial closure. The image initially contains store paths but no Nix database. A versioned neighboring `.toplevel` marker records the closure, registration output, and configured size used to initialize the image; images with legacy database, directory-layout, or inode-allocation formats require `ash rebuild-db` before reuse. Increasing `image_size_mib` for a stopped VM enlarges the sparse backing file and runs `resize2fs`; shrinking remains an explicit `ash rebuild-db`. Regeneration also refuses a changed closure until `ash rebuild-db` recreates the image, because recreation discards guest-added store paths.
 
-With the `shared` strategy, after guest readiness and before ash-managed mounts, ash imports the resulting `registration` file with guest-root `nix-store --load-db` for guests that use the regular local store. Guests configured with a `local-overlay` store skip this import because the closure is already present in the readonly lower-store database. Ash detects these guests through `/etc/ash/local-overlay-store` or a `store = local-overlay://...` entry in `nix.conf`. Foreground attach flows apply the same check in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating regular-store imports during the same boot. The `image` strategy skips this import because `nix copy` initialized both the store paths and database inside the image.
+After guest readiness and before ash-managed mounts, Ash imports the resulting `registration` file with guest-root `nix-store --load-db` for guests that use the regular local store. This applies to both shared and image-backed stores. Guests configured with a `local-overlay` store skip the import because the closure is already present in the readonly lower-store database. Ash detects these guests through `/etc/ash/local-overlay-store` or a `store = local-overlay://...` entry in `nix.conf`. Foreground attach flows apply the same check in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating regular-store imports during the same boot.
 
 The guest may mount these tags/labels as needed. The current agent guest config mounts them as:
 
@@ -227,19 +227,10 @@ fileSystems."/home/agent/workspace" = {
   fsType = "virtiofs";
 };
 
-# Shared strategy:
-fileSystems."/nix/store" = {
-  device = "ro-store";
-  fsType = "virtiofs";
-  options = [ "ro" ];
-};
-
-# Image strategy, in a guest configuration built for this strategy:
-fileSystems."/nix" = {
-  device = "/dev/disk/by-label/nix-store";
-  fsType = "ext4";
-  neededForBoot = true;
-};
+# A guest supporting both strategies can define conditional stage-1 mount
+# units using ConditionKernelCommandLine=ash.nix-store=shared|image. Shared
+# mode mounts ro-store, shares-ro, shares-rw, and the writable overlay at
+# /sysroot/nix/store. Image mode mounts the ext4 label at /sysroot/nix.
 
 fileSystems."/persist" = {
   device = "/dev/disk/by-label/persist";

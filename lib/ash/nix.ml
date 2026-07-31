@@ -62,32 +62,62 @@ let uri_encode value =
 let local_store_uri ~real ~state =
   Printf.sprintf "local?real=%s&state=%s" (uri_encode real) (uri_encode state)
 
-let image_store_uri root = "local?root=" ^ uri_encode root
+type image_store_marker =
+  | Current of { toplevel : string; size_mib : int; registration : string }
+  | Legacy
 
-let image_store_marker_content ~toplevel ~size_mib =
-  Printf.sprintf "%s\n%d\n" toplevel size_mib
+let image_store_marker_content ~toplevel ~size_mib ~registration =
+  Printf.sprintf "4\n%s\n%d\n%s\n" toplevel size_mib registration
 
 let read_image_store_marker path =
   match
     In_channel.with_open_text path In_channel.input_all
     |> String.split_on_char '\n'
   with
-  | toplevel :: size :: _ -> (
+  | "4" :: toplevel :: size :: registration :: _ -> (
       match int_of_string_opt size with
-      | Some size_mib -> Some (toplevel, size_mib)
+      | Some size_mib -> Some (Current { toplevel; size_mib; registration })
       | None -> None)
+  | _toplevel :: _size :: _ -> Some Legacy
   | _ -> None
 
-let prepare_image_store ?nix_executable ?e2fsck ?mke2fs ?resize2fs ?unshare
-    ?(resize_allowed = true) ~toplevel ~image ~size_mib () =
+let image_import_reporter =
+  Image_import_core.Reporter.make
+    ~debug:(fun message -> Log.debug "%s" message)
+    ~info:(fun message -> Log.info "%s" message)
+
+let resolve_store_paths ?nix_executable roots =
+  let nix =
+    Util.get_exe
+      ~hint:"nix is required to resolve an image-backed Nix store closure."
+      nix_executable "nix"
+  in
+  let command =
+    String.concat " "
+      (List.map Util.shell_quote (nix :: "path-info" :: "-r" :: roots))
+  in
+  Util.command_output command
+  |> String.split_on_char '\n' |> List.map String.trim
+  |> List.filter (( <> ) "")
+
+let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
+    ?(resize_allowed = true) ~toplevel ~registration ~image ~size_mib () =
   let marker = image ^ ".toplevel" in
   let bytes = Int64.mul (Int64.of_int size_mib) 1048576L in
   if Sys.file_exists image then
     match
       if Sys.file_exists marker then read_image_store_marker marker else None
     with
-    | Some (prepared_toplevel, prepared_size)
-      when prepared_toplevel = toplevel && prepared_size = size_mib ->
+    | Some Legacy ->
+        Log.fatal
+          "Nix store image %s uses a legacy filesystem layout or inode policy\n\n\
+           Run `ash rebuild-db` for this VM to recreate it with the current \
+           image layout."
+          image
+    | Some (Current prepared)
+      when prepared.toplevel = toplevel
+           && prepared.registration = registration
+           && prepared.size_mib = size_mib ->
         if not (Int64.equal (Unix.LargeFile.stat image).st_size bytes) then
           Log.fatal
             "Nix store image %s has an unexpected backing-file size\n\n\
@@ -96,8 +126,11 @@ let prepare_image_store ?nix_executable ?e2fsck ?mke2fs ?resize2fs ?unshare
         Log.debug
           "image-backed Nix store already has the requested size: %d MiB at %s"
           size_mib image
-    | Some (prepared_toplevel, prepared_size)
-      when prepared_toplevel = toplevel && prepared_size < size_mib ->
+    | Some (Current prepared)
+      when prepared.toplevel = toplevel
+           && prepared.registration = registration
+           && prepared.size_mib < size_mib ->
+        let prepared_size = prepared.size_mib in
         if not resize_allowed then
           Log.fatal "VM is running; stop it before growing its Nix store image";
         let current_bytes = (Unix.LargeFile.stat image).st_size in
@@ -132,11 +165,14 @@ let prepare_image_store ?nix_executable ?e2fsck ?mke2fs ?resize2fs ?unshare
         if code <> 0 then
           Log.fatal "failed to grow Nix store image %s with resize2fs" image;
         Util.atomic_write_file marker
-          (image_store_marker_content ~toplevel ~size_mib);
+          (image_store_marker_content ~toplevel ~size_mib ~registration);
         Log.info "grew image-backed Nix store from %d MiB to %d MiB at %s"
           prepared_size size_mib image
-    | Some (prepared_toplevel, prepared_size)
-      when prepared_toplevel = toplevel && prepared_size > size_mib ->
+    | Some (Current prepared)
+      when prepared.toplevel = toplevel
+           && prepared.registration = registration
+           && prepared.size_mib > size_mib ->
+        let prepared_size = prepared.size_mib in
         Log.fatal
           "shrinking the Nix store image is not supported\n\n\
            Increase global.nix_store.image_size_mib to at least %d, or run \
@@ -148,71 +184,31 @@ let prepare_image_store ?nix_executable ?e2fsck ?mke2fs ?resize2fs ?unshare
            Run `ash rebuild-db` for this VM to recreate the image."
           image
   else
-    let nix =
-      Util.get_exe
-        ~hint:"nix is required to populate an image-backed Nix store."
-        nix_executable "nix"
-    in
-    let mke2fs =
-      Util.get_exe
-        ~hint:"mke2fs is required to create an image-backed Nix store." mke2fs
-        "mke2fs"
-    in
-    let unshare =
-      Util.get_exe
-        ~hint:
-          "unshare is required to preserve root ownership in an image-backed \
-           Nix store."
-        unshare "unshare"
-    in
-    let temporary_root = Printf.sprintf "%s.root-%d" image (Unix.getpid ()) in
     let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
-    Util.remove_tree ~force:true temporary_root;
     (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
-    Util.ensure_dir temporary_root;
-    (* Populate a rooted local store so the staging tree contains both the
-       selected closure under nix/store and its Nix database under nix/var. *)
-    let store = image_store_uri temporary_root in
-    let copy_command =
-      Printf.sprintf "%s copy --no-check-sigs --to %s %s" (Util.shell_quote nix)
-        (Util.shell_quote store)
-        (Util.shell_quote toplevel)
-    in
     try
-      ignore (Util.command_output copy_command);
-      let source = Filename.concat temporary_root "nix" in
-      if not (Sys.is_directory source) then
-        failwith ("Nix copy did not create " ^ source);
-      Out_channel.with_open_bin temporary_image (fun _ -> ());
-      Unix.LargeFile.truncate temporary_image bytes;
-      (* mke2fs -d records the ownership visible to its process. Map the host
-         user to namespace root so store paths become root-owned in the guest
-         filesystem without requiring host root privileges. *)
-      let code =
-        Util.run_foreground unshare
-          [
-            "--user";
-            "--map-root-user";
-            mke2fs;
-            "-q";
-            "-t";
-            "ext4";
-            "-F";
-            "-L";
-            "nix-store";
-            "-d";
-            source;
-            temporary_image;
-          ]
+      let store_paths =
+        match store_paths with
+        | Some paths -> paths
+        | None ->
+            resolve_store_paths ?nix_executable
+              [ toplevel; Filename.dirname registration ]
       in
-      if code <> 0 then failwith "mke2fs failed";
+      let metrics = Image_import_core.Metrics.create () in
+      let entries =
+        Image_import_core.Scan.scan_closure ~reporter:image_import_reporter
+          ~jobs:1 ~closure_paths:store_paths ~target_root:"/store"
+          ~total_bytes:None metrics
+      in
+      Image_import_core.Import.write_image ~size:bytes ~label:"nix-store"
+        ~reporter:image_import_reporter ~path:temporary_image ~metrics entries;
+      Image_import_core.Metrics.log ~prefix:"ash image store"
+        ~reporter:image_import_reporter metrics;
       Unix.rename temporary_image image;
       Util.atomic_write_file marker
-        (image_store_marker_content ~toplevel ~size_mib);
-      Util.remove_tree ~force:true temporary_root;
+        (image_store_marker_content ~toplevel ~size_mib ~registration);
       Log.info "created %d MiB image-backed Nix store at %s" size_mib image
     with exn ->
-      Util.remove_tree ~force:true temporary_root;
       (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
       Log.fatal "failed to prepare image-backed Nix store %s: %s" image
         (Printexc.to_string exn)

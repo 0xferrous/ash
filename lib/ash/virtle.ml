@@ -5,6 +5,15 @@ let string_of_kernel_serial = function
   | Print -> "print"
   | Console -> "console"
 
+let nix_store_kernel_param = function
+  | Ash_config.Shared -> "ash.nix-store=shared"
+  | Ash_config.Image -> "ash.nix-store=image"
+
+let is_nix_store_kernel_param value =
+  let prefix = "ash.nix-store=" in
+  String.length value >= String.length prefix
+  && String.sub value 0 (String.length prefix) = prefix
+
 let kernel_serial_of_string ~field = function
   | "off" -> Off
   | "print" -> Print
@@ -2255,6 +2264,10 @@ let render_resolved_manifest inputs =
         ]
     | _ -> assert false
   in
+  let kernel_params =
+    List.filter (Fun.negate is_nix_store_kernel_param) boot.kernel_params
+    @ [ nix_store_kernel_param store_strategy ]
+  in
   let mounts =
     [
       space_mount ~bin:inputs.virtiofsd workspace_mount;
@@ -2281,8 +2294,7 @@ let render_resolved_manifest inputs =
     [
       write_space_mount_ssh_wrapper ~name:inputs.name ~virtle:inputs.virtle
         ~manifest_path:(manifest_path ~name:inputs.name)
-        ~registration_path:boot.registration
-        ~load_registration:(store_strategy = Ash_config.Shared)
+        ~registration_path:boot.registration ~load_registration:true
         ~ssh_exec:real_ssh_exec ssh_mounts;
     ]
   in
@@ -2291,8 +2303,7 @@ let render_resolved_manifest inputs =
       write_space_mount_ssh_wrapper ~kitty:true ~name:inputs.name
         ~virtle:inputs.virtle
         ~manifest_path:(manifest_path ~name:inputs.name)
-        ~registration_path:boot.registration
-        ~load_registration:(store_strategy = Ash_config.Shared)
+        ~registration_path:boot.registration ~load_registration:true
         ~ssh_exec:kitty_ssh_exec ssh_mounts;
     ]
   in
@@ -2334,8 +2345,8 @@ let render_resolved_manifest inputs =
                  Otoml.string (string_of_kernel_serial inputs.kernel_serial) );
              ]
             @
-            if boot.kernel_params = [] then []
-            else [ ("params", string_array boot.kernel_params) ]) );
+            if kernel_params = [] then []
+            else [ ("params", string_array kernel_params) ]) );
         ( "ssh",
           Otoml.table
             [
@@ -2604,6 +2615,7 @@ let render_manifest (inputs : manifest_inputs) =
         ~registration:boot.registration ~state:lower_store_state
   | Ash_config.Image ->
       Nix.prepare_image_store ~nix_executable:boot.nix ~toplevel:boot.toplevel
+        ~registration:boot.registration
         ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
         ~size_mib:store_image_size_mib
         ~resize_allowed:
@@ -2741,27 +2753,10 @@ let registration_for_inputs (inputs : manifest_inputs) =
         inputs.name
         (Util.shell_quote inputs.name)
 
-let manifest_uses_image_store path =
-  let doc = load_manifest_doc path in
-  match Otoml.find_opt doc Otoml.get_value [ "mounts" ] with
-  | Some (Otoml.TomlTableArray mounts) ->
-      List.exists
-        (function
-          | Otoml.TomlTable fields -> (
-              match List.assoc_opt "image" fields with
-              | Some (Otoml.TomlTable image | Otoml.TomlInlineTable image) ->
-                  List.assoc_opt "label" image
-                  = Some (Otoml.TomlString "nix-store")
-              | _ -> false)
-          | _ -> false)
-        mounts
-  | _ -> false
-
 let wait_and_mount (inputs : manifest_inputs) path =
   let registration = registration_for_inputs inputs in
   wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name;
-  if not (manifest_uses_image_store path) then
-    execute_nix_registration ~virtle:inputs.virtle ~path registration;
+  execute_nix_registration ~virtle:inputs.virtle ~path registration;
   execute_space_mounts ~virtle:inputs.virtle ~path
     (space_mounts_for_inputs inputs);
   restore_hotmounts ~virtle:inputs.virtle ~manifest_path:path ~name:inputs.name
