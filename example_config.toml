@@ -1,5 +1,6 @@
-# Copy this file to $XDG_CONFIG_HOME/ash/config.toml. If XDG_CONFIG_HOME is
-# unset, use ~/.config/ash/config.toml. You can also pass `ash spawn --config PATH`.
+# Copy this file to $XDG_CONFIG_HOME/$ASH_NAME/config.toml. ASH_NAME defaults
+# to ash; if XDG_CONFIG_HOME is unset, use ~/.config/$ASH_NAME/config.toml.
+# You can also pass `ash spawn --config PATH`.
 
 [global]
 # VM memory in MiB. Defaults to 4096.

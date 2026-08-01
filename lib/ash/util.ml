@@ -1,5 +1,13 @@
 let home_dir () = Sys.getenv_opt "HOME" |> Option.value ~default:"."
 
+let application_name () =
+  match Sys.getenv_opt "ASH_NAME" with
+  | Some name when name <> "" ->
+      if name = "." || name = ".." || String.contains name '/' then
+        invalid_arg "ASH_NAME must be a single directory name"
+      else name
+  | _ -> "ash"
+
 let config_home_dir () =
   match Sys.getenv_opt "XDG_CONFIG_HOME" with
   | Some path when path <> "" -> path
@@ -17,9 +25,7 @@ let expand_home path =
   else path
 
 let ash_config_dir () =
-  match Sys.getenv_opt "ASH_CONFIG_HOME" with
-  | Some path when path <> "" -> expand_home path
-  | _ -> Filename.concat (config_home_dir ()) "ash"
+  Filename.concat (config_home_dir ()) (application_name ())
 
 let default_ash_config_path () =
   Filename.concat (ash_config_dir ()) "config.toml"

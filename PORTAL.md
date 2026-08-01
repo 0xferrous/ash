@@ -64,9 +64,11 @@ to host CID 2. Ash can also manage this automatically as described below.
 Portal clients and wrappers resolve configuration in this order:
 
 1. `AGENT_PORTAL_CONFIG`
-2. `$XDG_CONFIG_HOME/ash/config.toml`
-3. `~/.config/ash/config.toml`
+2. `$XDG_CONFIG_HOME/$ASH_NAME/config.toml`
+3. `~/.config/$ASH_NAME/config.toml`
 4. legacy `~/.agent-box.toml`
+
+`ASH_NAME` defaults to `ash`.
 
 `AGENT_PORTAL_SOCKET` overrides the configured socket for clients and wrappers.
 It may also contain a `vsock:CID:PORT` endpoint. `AGENT_PORTAL_VSOCK=CID:PORT`
@@ -133,7 +135,7 @@ The host:
 - limits concurrent requests, prompt concurrency, request rate, and payload size
 - applies request and prompt timeouts
 - writes an append-only log under
-  `${XDG_STATE_HOME:-~/.local/state}/ash/logs/`
+  `${XDG_STATE_HOME:-~/.local/state}/${ASH_NAME:-ash}/logs/`
 - refuses to replace a non-socket filesystem entry at the configured path
 
 Prompt commands follow the dmenu convention: choices are written to stdin and

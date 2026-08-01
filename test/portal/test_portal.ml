@@ -65,22 +65,36 @@ let temp_dir prefix =
   Unix.mkdir path 0o700;
   path
 
-let test_config_home_override () =
+let test_application_name_paths () =
   let old_home = Sys.getenv_opt "HOME" in
-  let old_ash = Sys.getenv_opt "ASH_CONFIG_HOME" in
+  let old_config = Sys.getenv_opt "XDG_CONFIG_HOME" in
+  let old_state = Sys.getenv_opt "XDG_STATE_HOME" in
+  let old_name = Sys.getenv_opt "ASH_NAME" in
   let old_portal = Sys.getenv_opt "AGENT_PORTAL_CONFIG" in
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "HOME" (Option.value old_home ~default:"");
-      Unix.putenv "ASH_CONFIG_HOME" (Option.value old_ash ~default:"");
+      Unix.putenv "XDG_CONFIG_HOME" (Option.value old_config ~default:"");
+      Unix.putenv "XDG_STATE_HOME" (Option.value old_state ~default:"");
+      Unix.putenv "ASH_NAME" (Option.value old_name ~default:"");
       Unix.putenv "AGENT_PORTAL_CONFIG" (Option.value old_portal ~default:""))
     (fun () ->
+      let config_home = temp_dir "portal-xdg-config" in
+      let config_dir = Filename.concat config_home "nash" in
+      let config_path = Filename.concat config_dir "config.toml" in
+      Unix.mkdir config_dir 0o700;
+      let oc = open_out config_path in
+      close_out oc;
       Unix.putenv "HOME" "/home/tester";
       Unix.putenv "AGENT_PORTAL_CONFIG" "";
-      Unix.putenv "ASH_CONFIG_HOME" "~/.config/nash";
-      assert_equal "Portal Ash config home override"
-        "/home/tester/.config/nash/config.toml"
-        (Portal.Config.default_path ()))
+      Unix.putenv "ASH_NAME" "nash";
+      Unix.putenv "XDG_CONFIG_HOME" config_home;
+      Unix.putenv "XDG_STATE_HOME" "/tmp/test-state";
+      assert_equal "Portal named config path" config_path
+        (Portal.Config.default_path ());
+      assert_equal "Portal named log path"
+        "/tmp/test-state/nash/logs/portal.log"
+        (Portal.Logging.default_path "/tmp/portal.sock"))
 
 let test_config () =
   let directory = temp_dir "portal-config" in
@@ -183,7 +197,7 @@ let run name test =
 let () =
   run "protocol roundtrip" test_protocol_roundtrip;
   run "Rust u128 timestamp compatibility" test_rust_u128_timestamp;
-  run "Portal Ash config home override" test_config_home_override;
+  run "Portal application name paths" test_application_name_paths;
   run "portal config" test_config;
   run "host roundtrip" test_host_roundtrip;
   run "transport parsing" test_transport;

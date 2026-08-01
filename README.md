@@ -109,11 +109,12 @@ ash attach --spawn work
 
 ## Configuration
 
-Ash reads `$XDG_CONFIG_HOME/ash/config.toml`, falling back to
-`~/.config/ash/config.toml`. `ASH_CONFIG_HOME` overrides the application
-configuration directory directly, so `ASH_CONFIG_HOME=~/.config/nash` selects
-`~/.config/nash/config.toml`. `ASH_STATE_HOME` similarly overrides the complete
-VM state root instead of appending `ash`.
+Ash uses `ASH_NAME` as its XDG application namespace, defaulting to `ash`.
+It reads `$XDG_CONFIG_HOME/$ASH_NAME/config.toml`, falling back to
+`~/.config/$ASH_NAME/config.toml`, and stores VM state and caches below the
+matching `XDG_STATE_HOME` and `XDG_CACHE_HOME` namespaces. For example,
+`ASH_NAME=nash` selects `~/.config/nash`, `~/.local/state/nash`, and
+`~/.cache/nash`. `--config` overrides the configuration file directly.
 
 See [`example_config.toml`](./example_config.toml) for the global and space
 mount formats. Set `global.memory` to configure VM memory in MiB; it defaults
@@ -150,8 +151,8 @@ The overrides are saved as `nix_store_strategy` and
 spawns and regeneration.
 
 Ash caches one closure-sized ext4 base image for each selected closure and
-registration output under `$XDG_CACHE_HOME/ash/nix-store-images` (or
-`~/.cache/ash/nix-store-images`). New VM state uses a sparse reflink/CoW clone
+registration output under `$XDG_CACHE_HOME/$ASH_NAME/nix-store-images` (or
+`~/.cache/$ASH_NAME/nix-store-images`, with `ASH_NAME` defaulting to `ash`). New VM state uses a sparse reflink/CoW clone
 of that base image when the host filesystem supports it, then grows the clone
 to the VM's configured capacity. Different image-size settings therefore reuse
 the same cached closure without rebuilding or fully copying the store image. The writable clone is labeled `nix-store` and does not expose the

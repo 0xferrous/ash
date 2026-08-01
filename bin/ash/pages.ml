@@ -21,11 +21,10 @@ let main =
            manages spawn, attach, copy, mount, stop, and cleanup flows.";
         `S "STATE";
         `P
-          "Named VMs keep ash state under ASH_STATE_HOME/NAME/ when \
-           ASH_STATE_HOME is set. Otherwise they use XDG_STATE_HOME/ash/NAME/ \
-           or ~/.local/state/ash/NAME/. State includes the saved ash config, \
-           generated virtle manifest, SSH keys, hotmount staging data, and VM \
-           runtime data.";
+          "Named VMs keep ash state under XDG_STATE_HOME/ASH_NAME/NAME/ or \
+           ~/.local/state/ASH_NAME/NAME/. ASH_NAME defaults to ash. State \
+           includes the saved ash config, generated virtle manifest, SSH keys, \
+           hotmount staging data, and VM runtime data.";
         `S "GLOBAL OPTIONS";
         `P
           "The options --debug, --virtle=PATH, and -v/--verbose are shared by \
@@ -161,9 +160,8 @@ let spawn =
            --user overrides the evaluated value.";
         `S "SPACE CONFIGURATION";
         `P
-          "The config defaults to ASH_CONFIG_HOME/config.toml when \
-           ASH_CONFIG_HOME is set. Otherwise it uses \
-           XDG_CONFIG_HOME/ash/config.toml or ~/.config/ash/config.toml. \
+          "The config defaults to XDG_CONFIG_HOME/ASH_NAME/config.toml or \
+           ~/.config/ASH_NAME/config.toml. ASH_NAME defaults to ash, and \
            --config overrides every default. Each [spaces.NAME] table may \
            define rw_mounts and ro_mounts arrays, plus an extends array naming \
            other spaces. Extended spaces are evaluated recursively before the \
@@ -227,10 +225,10 @@ let spawn =
         `P
           "Ash keeps one read-only, closure-sized base image for each NixOS \
            toplevel and registration output under \
-           $XDG_CACHE_HOME/ash/nix-store-images, falling back to \
-           ~/.cache/ash/nix-store-images. Writable capacity is not part of the \
-           cache identity, so VMs with different image_size_mib values reuse \
-           the same base.";
+           $XDG_CACHE_HOME/$ASH_NAME/nix-store-images, falling back to \
+           ~/.cache/$ASH_NAME/nix-store-images. ASH_NAME defaults to ash. \
+           Writable capacity is not part of the cache identity, so VMs with \
+           different image_size_mib values reuse the same base.";
         `P
           "For a new VM image, Ash clones the cached base with cp \
            --reflink=auto --sparse=always and grows the writable clone with \
@@ -400,8 +398,9 @@ let ls =
       [
         `S Manpage.s_description;
         `P
-          "Lists ash VM state directories under XDG_STATE_HOME/ash when \
-           XDG_STATE_HOME is set, or ~/.local/state/ash otherwise.";
+          "Lists ash VM state directories under XDG_STATE_HOME/ASH_NAME when \
+           XDG_STATE_HOME is set, or ~/.local/state/ASH_NAME otherwise. \
+           ASH_NAME defaults to ash.";
         `S "OUTPUT";
         `P
           "Shows VM name, status, private IPv4 address and vsock CID when \
@@ -502,9 +501,9 @@ let rebuild_db =
            including local-overlay metadata, upper, and work directories. For \
            strategy=image, it removes nix-store.img and its closure marker but \
            preserves the closure base under \
-           $XDG_CACHE_HOME/ash/nix-store-images. The replacement image reuses \
-           that cache when the closure matches. In either case, \
-           guest-installed store paths are discarded.";
+           $XDG_CACHE_HOME/$ASH_NAME/nix-store-images. ASH_NAME defaults to \
+           ash. The replacement image reuses that cache when the closure \
+           matches. In either case, guest-installed store paths are discarded.";
         `S "SAFETY";
         `P
           "The VM must be stopped. persist.img, workspace, SSH keys, \

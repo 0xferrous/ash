@@ -437,60 +437,70 @@ let assert_mount_parse_error label ~host_home ~guest_user spec =
 let test_xdg_config_path () =
   let old_home = Sys.getenv_opt "HOME" in
   let old_xdg = Sys.getenv_opt "XDG_CONFIG_HOME" in
-  let old_ash = Sys.getenv_opt "ASH_CONFIG_HOME" in
+  let old_name = Sys.getenv_opt "ASH_NAME" in
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "HOME" (Option.value old_home ~default:"");
       Unix.putenv "XDG_CONFIG_HOME" (Option.value old_xdg ~default:"");
-      Unix.putenv "ASH_CONFIG_HOME" (Option.value old_ash ~default:""))
+      Unix.putenv "ASH_NAME" (Option.value old_name ~default:""))
     (fun () ->
       Unix.putenv "HOME" "/home/tester";
-      Unix.putenv "ASH_CONFIG_HOME" "";
+      Unix.putenv "ASH_NAME" "";
       Unix.putenv "XDG_CONFIG_HOME" "/tmp/test-config";
       assert_equal "XDG config path" "/tmp/test-config/ash/config.toml"
         (Util.default_ash_config_path ());
-      Unix.putenv "XDG_CONFIG_HOME" "";
-      assert_equal "fallback config path" "/home/tester/.config/ash/config.toml"
+      Unix.putenv "ASH_NAME" "nash";
+      assert_equal "named XDG config path" "/tmp/test-config/nash/config.toml"
         (Util.default_ash_config_path ());
-      Unix.putenv "ASH_CONFIG_HOME" "~/dev-config";
-      assert_equal "Ash config home override"
-        "/home/tester/dev-config/config.toml"
+      Unix.putenv "XDG_CONFIG_HOME" "";
+      assert_equal "named fallback config path"
+        "/home/tester/.config/nash/config.toml"
         (Util.default_ash_config_path ()))
 
 let test_xdg_cache_home () =
   let old_home = Sys.getenv_opt "HOME" in
   let old_xdg = Sys.getenv_opt "XDG_CACHE_HOME" in
+  let old_name = Sys.getenv_opt "ASH_NAME" in
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "HOME" (Option.value old_home ~default:"");
-      Unix.putenv "XDG_CACHE_HOME" (Option.value old_xdg ~default:""))
+      Unix.putenv "XDG_CACHE_HOME" (Option.value old_xdg ~default:"");
+      Unix.putenv "ASH_NAME" (Option.value old_name ~default:""))
     (fun () ->
       Unix.putenv "HOME" "/home/tester";
+      Unix.putenv "ASH_NAME" "";
       Unix.putenv "XDG_CACHE_HOME" "/tmp/test-cache";
       assert_equal "XDG image cache path" "/tmp/test-cache/ash/nix-store-images"
         (Virtle.nix_store_image_cache_dir ());
+      Unix.putenv "ASH_NAME" "nash";
+      assert_equal "named XDG image cache path"
+        "/tmp/test-cache/nash/nix-store-images"
+        (Virtle.nix_store_image_cache_dir ());
       Unix.putenv "XDG_CACHE_HOME" "";
-      assert_equal "fallback image cache path"
-        "/home/tester/.cache/ash/nix-store-images"
+      assert_equal "named fallback image cache path"
+        "/home/tester/.cache/nash/nix-store-images"
         (Virtle.nix_store_image_cache_dir ()))
 
-let test_ash_state_home () =
+let test_xdg_state_path () =
   let old_home = Sys.getenv_opt "HOME" in
   let old_xdg = Sys.getenv_opt "XDG_STATE_HOME" in
-  let old_ash = Sys.getenv_opt "ASH_STATE_HOME" in
+  let old_name = Sys.getenv_opt "ASH_NAME" in
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "HOME" (Option.value old_home ~default:"");
       Unix.putenv "XDG_STATE_HOME" (Option.value old_xdg ~default:"");
-      Unix.putenv "ASH_STATE_HOME" (Option.value old_ash ~default:""))
+      Unix.putenv "ASH_NAME" (Option.value old_name ~default:""))
     (fun () ->
       Unix.putenv "HOME" "/home/tester";
-      Unix.putenv "ASH_STATE_HOME" "";
+      Unix.putenv "ASH_NAME" "";
       Unix.putenv "XDG_STATE_HOME" "/tmp/test-state";
       assert_equal "XDG state path" "/tmp/test-state/ash"
         (Virtle.state_base_dir ());
-      Unix.putenv "ASH_STATE_HOME" "~/.local/state/nash";
-      assert_equal "Ash state home override" "/home/tester/.local/state/nash"
+      Unix.putenv "ASH_NAME" "nash";
+      assert_equal "named XDG state path" "/tmp/test-state/nash"
+        (Virtle.state_base_dir ());
+      Unix.putenv "XDG_STATE_HOME" "";
+      assert_equal "named fallback state path" "/home/tester/.local/state/nash"
         (Virtle.state_base_dir ()))
 
 let test_space_mount_spec_parsing () =
@@ -1577,7 +1587,7 @@ let () =
   run "image-backed Nix store manifest" test_image_backed_nix_store_manifest;
   run "XDG config path" test_xdg_config_path;
   run "XDG cache home" test_xdg_cache_home;
-  run "Ash state home" test_ash_state_home;
+  run "XDG state path" test_xdg_state_path;
   run "space mount spec parsing" test_space_mount_spec_parsing;
   run "space extension graph traversal" test_space_extension_graph_traversal;
   run "space extension evaluation" test_space_extension_evaluation;

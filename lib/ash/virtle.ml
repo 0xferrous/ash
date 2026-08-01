@@ -135,20 +135,19 @@ let default_name () =
   Util.name_slug (base ^ "-" ^ timestamp ())
 
 let state_base_dir () =
-  match Sys.getenv_opt "ASH_STATE_HOME" with
-  | Some path when path <> "" -> Util.expand_home path
-  | _ ->
-      let base =
-        match Sys.getenv_opt "XDG_STATE_HOME" with
-        | Some path when path <> "" -> path
-        | _ -> Filename.concat (Util.home_dir ()) ".local/state"
-      in
-      Filename.concat base "ash"
+  let base =
+    match Sys.getenv_opt "XDG_STATE_HOME" with
+    | Some path when path <> "" -> path
+    | _ -> Filename.concat (Util.home_dir ()) ".local/state"
+  in
+  Filename.concat base (Util.application_name ())
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
 
 let nix_store_image_cache_dir () =
-  Filename.concat (Util.cache_home_dir ()) "ash/nix-store-images"
+  Filename.concat
+    (Filename.concat (Util.cache_home_dir ()) (Util.application_name ()))
+    "nix-store-images"
 
 let nix_store_image_cache_path ~toplevel ~registration =
   let key = Nix.image_store_cache_key ~toplevel ~registration in

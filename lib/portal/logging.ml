@@ -3,12 +3,12 @@ let channel : out_channel option ref = ref None
 let visible = ref true
 
 let state_home () =
-  match Sys.getenv_opt "ASH_STATE_HOME" with
-  | Some path when path <> "" -> Config.expand_home path
-  | _ -> (
-      match Sys.getenv_opt "XDG_STATE_HOME" with
-      | Some path when path <> "" -> Filename.concat path "ash"
-      | _ -> Filename.concat (Config.home_dir ()) ".local/state/ash")
+  let base =
+    match Sys.getenv_opt "XDG_STATE_HOME" with
+    | Some path when path <> "" -> path
+    | _ -> Filename.concat (Config.home_dir ()) ".local/state"
+  in
+  Filename.concat base (Config.application_name ())
 
 let default_path socket_path =
   let name = Filename.basename socket_path in

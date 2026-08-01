@@ -25,6 +25,14 @@ type t = {
 
 let home_dir () = Sys.getenv_opt "HOME" |> Option.value ~default:"."
 
+let application_name () =
+  match Sys.getenv_opt "ASH_NAME" with
+  | Some name when name <> "" ->
+      if name = "." || name = ".." || String.contains name '/' then
+        invalid_arg "ASH_NAME must be a single directory name"
+      else name
+  | _ -> "ash"
+
 let config_home_dir () =
   match Sys.getenv_opt "XDG_CONFIG_HOME" with
   | Some path when path <> "" -> path
@@ -37,9 +45,7 @@ let expand_home path =
   else path
 
 let ash_config_dir () =
-  match Sys.getenv_opt "ASH_CONFIG_HOME" with
-  | Some path when path <> "" -> expand_home path
-  | _ -> Filename.concat (config_home_dir ()) "ash"
+  Filename.concat (config_home_dir ()) (application_name ())
 
 let default_socket_path () =
   Printf.sprintf "/run/user/%d/agent-portal/portal.sock" (Unix.getuid ())
@@ -70,14 +76,10 @@ let defaults () =
 let default_path () =
   match Sys.getenv_opt "AGENT_PORTAL_CONFIG" with
   | Some path when path <> "" -> path
-  | _ -> (
-      match Sys.getenv_opt "ASH_CONFIG_HOME" with
-      | Some path when path <> "" ->
-          Filename.concat (expand_home path) "config.toml"
-      | _ ->
-          let ash = Filename.concat (ash_config_dir ()) "config.toml" in
-          if Sys.file_exists ash then ash
-          else Filename.concat (home_dir ()) ".agent-box.toml")
+  | _ ->
+      let ash = Filename.concat (ash_config_dir ()) "config.toml" in
+      if Sys.file_exists ash then ash
+      else Filename.concat (home_dir ()) ".agent-box.toml"
 
 let get document getter path default =
   Otoml.find_opt document getter path |> Option.value ~default
