@@ -877,6 +877,8 @@ let test_qga_load_nix_registration_action () =
     "store*=*local-overlay://*) exit 42";
   assert_string_contains "registration marker" script
     "/run/ash/nix-registration";
+  assert_string_contains "image store creates Nix database directory" script
+    "mkdir -p /nix/var/nix/db";
   assert_string_contains "marker written after import" script
     "nix-store --load-db < \"$registration\"\ntouch \"$marker\"";
   assert_equal "registration argument" registration (List.nth action.args 3)

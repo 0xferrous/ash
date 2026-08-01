@@ -153,6 +153,14 @@ if ! command -v nix-store >/dev/null 2>&1; then
 fi
 
 mkdir -p "$marker_dir"
+
+# Fresh image-backed stores initially contain only /nix/store. Create Nix's
+# state database directory before the first registration import; SQLite cannot
+# create db.sqlite when its parent directory does not exist.
+if [ "$image_store" = true ]; then
+  mkdir -p /nix/var/nix/db
+fi
+
 nix-store --load-db < "$registration"
 touch "$marker"
 |sh}
