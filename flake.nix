@@ -12,6 +12,42 @@
       nixpkgs,
       flake-utils,
     }:
+    let
+      testSystem = "x86_64-linux";
+      mkImageReconcileConfiguration =
+        version:
+        nixpkgs.lib.nixosSystem {
+          system = testSystem;
+          modules = [
+            (nixpkgs + "/nixos/modules/profiles/minimal.nix")
+            (nixpkgs + "/nixos/modules/profiles/bashless.nix")
+            (
+              { lib, pkgs, ... }:
+              let
+                marker = pkgs.writeText "ash-image-reconcile-${version}" version;
+              in
+              {
+                networking.hostName = "ash-image-${version}";
+                system.stateVersion = "26.05";
+                boot.kernel.enable = false;
+                boot.initrd.enable = false;
+                boot.loader.grub.enable = false;
+                system.disableInstallerTools = true;
+                system.forbiddenDependenciesRegexes = lib.mkForce [ ];
+                fileSystems."/" = {
+                  device = "none";
+                  fsType = "tmpfs";
+                };
+                documentation.enable = false;
+                environment.defaultPackages = [ ];
+                environment.etc."ash-image-reconcile-version".source = marker;
+              }
+            )
+          ];
+        };
+      imageReconcileFirst = mkImageReconcileConfiguration "first";
+      imageReconcileSecond = mkImageReconcileConfiguration "second";
+    in
     flake-utils.lib.eachDefaultSystem (
       system:
       let
@@ -78,6 +114,27 @@
             runHook postInstall
           '';
         };
+
+        imageReconcileCheck =
+          let
+            firstToplevel = imageReconcileFirst.config.system.build.toplevel;
+            secondToplevel = imageReconcileSecond.config.system.build.toplevel;
+            firstClosure = pkgs.closureInfo { rootPaths = [ firstToplevel ]; };
+            secondClosure = pkgs.closureInfo { rootPaths = [ secondToplevel ]; };
+          in
+          pkgs.runCommand "ash-image-store-reconcile-test"
+            {
+              nativeBuildInputs = [ pkgs.e2fsprogs ];
+            }
+            ''
+              total_bytes=$(($(cat ${firstClosure}/total-nar-size) + $(cat ${secondClosure}/total-nar-size)))
+              size_mib=$(((total_bytes * 2 + 1048575) / 1048576 + 256))
+              ${ashBuild}/bin/ash-image-reconcile-test \
+                "$TMPDIR/nix-store.img" "$size_mib" \
+                ${firstToplevel} ${firstClosure}/registration ${firstClosure}/store-paths \
+                ${secondToplevel} ${secondClosure}/registration ${secondClosure}/store-paths
+              touch "$out"
+            '';
       in
       {
         packages = {
@@ -89,6 +146,10 @@
           "nix-ext4-image" = nixExt4Image;
           command-pages = ash-command-pages;
           ash-command-pages = ash-command-pages;
+        };
+
+        checks = pkgs.lib.optionalAttrs (system == testSystem) {
+          image-store-reconcile = imageReconcileCheck;
         };
 
         apps = {
@@ -116,5 +177,11 @@
           ];
         };
       }
-    );
+    )
+    // {
+      nixosConfigurations = {
+        image-reconcile-first = imageReconcileFirst;
+        image-reconcile-second = imageReconcileSecond;
+      };
+    };
 }

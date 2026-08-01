@@ -1,0 +1,5 @@
+(executable
+ (name image_reconcile)
+ (public_name ash-image-reconcile-test)
+ (package ash)
+ (libraries ash image_import_core unix))
