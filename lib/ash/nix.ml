@@ -220,6 +220,44 @@ let clone_cached_image ?copy_executable ?resize2fs ~cache_image ~cache_size_mib
     (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
     raise exn
 
+let check_existing_image ?e2fsck image =
+  let e2fsck =
+    Util.get_exe
+      ~hint:
+        "e2fsck is required before modifying an existing image-backed Nix \
+         store."
+      e2fsck "e2fsck"
+  in
+  let code = Util.run_foreground e2fsck [ "-f"; "-p"; image ] in
+  if code <> 0 && code <> 1 then
+    Log.fatal "failed to check Nix store image %s with e2fsck" image
+
+let grow_existing_image ?resize2fs ~image ~from_size_mib ~size_mib () =
+  if from_size_mib < size_mib then (
+    let resize2fs =
+      Util.get_exe
+        ~hint:"resize2fs is required to grow an image-backed Nix store."
+        resize2fs "resize2fs"
+    in
+    Log.info "growing image-backed Nix store from %d MiB to %d MiB at %s"
+      from_size_mib size_mib image;
+    Unix.LargeFile.truncate image (bytes_of_mib size_mib);
+    let code = Util.run_foreground resize2fs [ image ] in
+    if code <> 0 then
+      Log.fatal "failed to grow Nix store image %s with resize2fs" image)
+
+let append_image_store ?nix_executable ?store_paths ~toplevel ~registration
+    ~image ~size_mib () =
+  let entries, metrics =
+    scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
+  in
+  Image_import_core.Import.append_image ~reporter:image_import_reporter
+    ~path:image ~metrics entries;
+  Image_import_core.Metrics.log ~prefix:"ash image store update"
+    ~reporter:image_import_reporter metrics;
+  Util.atomic_write_file (image ^ ".toplevel")
+    (image_store_marker_content ~toplevel ~size_mib ~registration)
+
 let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
     ?copy_executable ?cache_image ?(resize_allowed = true) ~toplevel
     ~registration ~image ~size_mib () =
@@ -251,44 +289,23 @@ let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
       when prepared.toplevel = toplevel
            && prepared.registration = registration
            && prepared.size_mib < size_mib ->
-        let prepared_size = prepared.size_mib in
         if not resize_allowed then
           Log.fatal "VM is running; stop it before growing its Nix store image";
-        let current_bytes = (Unix.LargeFile.stat image).st_size in
-        if Int64.compare current_bytes bytes > 0 then
+        if
+          not
+            (Int64.equal (Unix.LargeFile.stat image).st_size
+               (bytes_of_mib prepared.size_mib))
+        then
           Log.fatal
-            "Nix store image %s is larger than its recorded size\n\n\
+            "Nix store image %s has an unexpected backing-file size\n\n\
              Run `ash rebuild-db` for this VM to recreate the image."
             image;
-        let e2fsck =
-          Util.get_exe
-            ~hint:
-              "e2fsck is required to check an image-backed Nix store before \
-               growing it."
-            e2fsck "e2fsck"
-        in
-        let resize2fs =
-          Util.get_exe
-            ~hint:"resize2fs is required to grow an image-backed Nix store."
-            resize2fs "resize2fs"
-        in
-        Log.info "growing image-backed Nix store from %d MiB to %d MiB at %s"
-          prepared_size size_mib image;
-        if Int64.compare current_bytes bytes < 0 then
-          Unix.LargeFile.truncate image bytes;
-        (* ext4 requires an offline forced check before resize2fs when the image
-           has been mounted since its previous check. Exit 1 means e2fsck
-           corrected errors and is safe to continue. *)
-        let check_code = Util.run_foreground e2fsck [ "-f"; "-p"; image ] in
-        if check_code <> 0 && check_code <> 1 then
-          Log.fatal "failed to check Nix store image %s with e2fsck" image;
-        let code = Util.run_foreground resize2fs [ image ] in
-        if code <> 0 then
-          Log.fatal "failed to grow Nix store image %s with resize2fs" image;
+        check_existing_image ?e2fsck image;
+        grow_existing_image ?resize2fs ~image ~from_size_mib:prepared.size_mib
+          ~size_mib ();
         Util.atomic_write_file marker
           (image_store_marker_content ~toplevel ~size_mib ~registration);
-        Log.info "grew image-backed Nix store from %d MiB to %d MiB at %s"
-          prepared_size size_mib image
+        Log.info "grew image-backed Nix store to %d MiB at %s" size_mib image
     | Some (Current prepared)
       when prepared.toplevel = toplevel
            && prepared.registration = registration
@@ -299,9 +316,43 @@ let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
            Increase global.nix_store.image_size_mib to at least %d, or run \
            `ash rebuild-db` to recreate the image at the smaller size."
           prepared_size
-    | _ ->
+    | Some (Current prepared) -> (
+        if not resize_allowed then
+          Log.fatal
+            "VM is running; stop it before updating its image-backed Nix store";
+        if prepared.size_mib > size_mib then
+          Log.fatal
+            "shrinking the Nix store image is not supported\n\n\
+             Increase global.nix_store.image_size_mib to at least %d."
+            prepared.size_mib;
+        if
+          not
+            (Int64.equal (Unix.LargeFile.stat image).st_size
+               (bytes_of_mib prepared.size_mib))
+        then
+          Log.fatal
+            "Nix store image %s has an unexpected backing-file size\n\n\
+             Run `ash rebuild-db` for this VM to recreate the image."
+            image;
+        check_existing_image ?e2fsck image;
+        grow_existing_image ?resize2fs ~image ~from_size_mib:prepared.size_mib
+          ~size_mib ();
+        try
+          append_image_store ?nix_executable ?store_paths ~toplevel
+            ~registration ~image ~size_mib ();
+          Log.info
+            "updated image-backed Nix store from %s to %s while retaining \
+             existing store paths"
+            prepared.toplevel toplevel
+        with exn ->
+          Log.fatal
+            "failed to update image-backed Nix store %s: %s\n\n\
+             Increase image_size_mib and retry; already imported immutable \
+             store paths will be reused."
+            image (Printexc.to_string exn))
+    | None ->
         Log.fatal
-          "Nix store image %s was prepared for a different system closure\n\n\
+          "Nix store image %s has no valid closure marker\n\n\
            Run `ash rebuild-db` for this VM to recreate the image."
           image
   else

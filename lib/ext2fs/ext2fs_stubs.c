@@ -330,10 +330,57 @@ CAMLprim value ash_ext2fs_create(value path_value, value size_value,
   CAMLreturn(result);
 }
 
+CAMLprim value ash_ext2fs_open_existing(value path_value) {
+  CAMLparam1(path_value);
+  CAMLlocal1(result);
+  const char *path = String_val(path_value);
+  ext2_filsys fs = NULL;
+  errcode_t error = ext2fs_open(path, EXT2_FLAG_RW | EXT2_FLAG_64BITS, 0, 0,
+                                unix_io_manager, &fs);
+  if (error)
+    raise_error("opening ext4 image", error);
+  error = ext2fs_read_bitmaps(fs);
+  if (error) {
+    ext2fs_close_free(&fs);
+    raise_error("reading ext4 allocation bitmaps", error);
+  }
+  struct ash_ext2fs_handle *handle = calloc(1, sizeof(*handle));
+  if (handle == NULL) {
+    ext2fs_close_free(&fs);
+    caml_raise_out_of_memory();
+  }
+  handle->fs = fs;
+  handle->path = strdup(path);
+  if (handle->path == NULL) {
+    ext2fs_close_free(&fs);
+    free(handle);
+    caml_raise_out_of_memory();
+  }
+  result = caml_alloc_custom(&handle_ops, sizeof(handle), 0, 1);
+  Handle_val(result) = handle;
+  CAMLreturn(result);
+}
+
 CAMLprim value ash_ext2fs_close(value handle_value) {
   CAMLparam1(handle_value);
   close_handle(get_handle(handle_value), 1);
   CAMLreturn(Val_unit);
+}
+
+CAMLprim value ash_ext2fs_exists(value handle_value, value path_value) {
+  CAMLparam2(handle_value, path_value);
+  struct ash_ext2fs_handle *handle = get_handle(handle_value);
+  validate_path(String_val(path_value));
+  ext2_ino_t ino;
+  errcode_t error =
+      ext2fs_namei(handle->fs, EXT2_ROOT_INO, EXT2_ROOT_INO,
+                   String_val(path_value), &ino);
+  if (!error)
+    CAMLreturn(Val_true);
+  if (error == EXT2_ET_FILE_NOT_FOUND)
+    CAMLreturn(Val_false);
+  raise_error("looking up ext4 path", error);
+  CAMLreturn(Val_false);
 }
 
 CAMLprim value ash_ext2fs_mkdir(value handle_value, value path_value,

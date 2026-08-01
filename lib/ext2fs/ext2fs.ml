@@ -4,7 +4,9 @@ external create_raw :
   path:string -> size:int64 -> inodes:int -> label:string -> block_size:int -> t
   = "ash_ext2fs_create"
 
+external open_existing : path:string -> t = "ash_ext2fs_open_existing"
 external close : t -> unit = "ash_ext2fs_close"
+external exists_raw : t -> string -> bool = "ash_ext2fs_exists"
 
 external mkdir_raw : t -> string -> int -> int -> int -> float -> unit
   = "ash_ext2fs_mkdir_bytecode" "ash_ext2fs_mkdir"
@@ -24,6 +26,7 @@ let create ~path ~size ~inodes ?(label = "root") ?(block_size = 4096) () =
     invalid_arg "Ext2fs.create: at least 128 inodes are required";
   create_raw ~path ~size ~inodes ~label ~block_size
 
+let exists t ~path = exists_raw t path
 let mkdir t ~path ~mode ~uid ~gid ~mtime = mkdir_raw t path mode uid gid mtime
 
 let write_file t ~path ~source ~mode ~uid ~gid ~mtime =

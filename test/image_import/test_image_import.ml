@@ -94,6 +94,34 @@ let test_ext4_image () =
       Import.write_image ~size:67_108_864L ~label:"ash-test" ~path:image
         ~metrics entries;
       assert_bool "image should exist" (Sys.file_exists image);
+      let fs = Ash_ext2fs.Ext2fs.open_existing ~path:image in
+      assert_bool "existing file should be found"
+        (Ash_ext2fs.Ext2fs.exists fs ~path:"/etc/hello.txt");
+      assert_bool "missing file should not be found"
+        (not (Ash_ext2fs.Ext2fs.exists fs ~path:"/etc/missing.txt"));
+      Ash_ext2fs.Ext2fs.close fs;
+      let appended_source = Filename.concat root "appended.txt" in
+      let oc = open_out_bin appended_source in
+      output_string oc "appended through libext2fs\n";
+      close_out oc;
+      let oc = open_out_bin source in
+      output_string oc "changed source must not replace immutable target\n";
+      close_out oc;
+      let appended_entries =
+        [
+          entry ~source:root ~target:"/etc" ~kind:Plan.Dir ~size:0L ~mode:0o755
+            ~link_target:None;
+          entry ~source ~target:"/etc/hello.txt" ~kind:Plan.File
+            ~size:(Int64.of_int (Unix.stat source).Unix.st_size)
+            ~mode:0o640 ~link_target:None;
+          entry ~source:appended_source ~target:"/etc/appended.txt"
+            ~kind:Plan.File
+            ~size:(Int64.of_int (Unix.stat appended_source).Unix.st_size)
+            ~mode:0o640 ~link_target:None;
+        ]
+      in
+      Import.append_image ~path:image ~metrics:(Metrics.create ())
+        appended_entries;
       let e2fsck = "e2fsck -fn " ^ Filename.quote image ^ " 2>&1" in
       ignore (command_output e2fsck);
       let contents =
@@ -102,7 +130,16 @@ let test_ext4_image () =
           ^ Filename.quote "cat /etc/hello.txt"
           ^ " " ^ Filename.quote image ^ " 2>/dev/null")
       in
-      assert_equal "file contents" "hello from libext2fs\n" contents;
+      assert_equal "existing immutable file contents" "hello from libext2fs\n"
+        contents;
+      let appended_contents =
+        command_output
+          ("debugfs -R "
+          ^ Filename.quote "cat /etc/appended.txt"
+          ^ " " ^ Filename.quote image ^ " 2>/dev/null")
+      in
+      assert_equal "appended file contents" "appended through libext2fs\n"
+        appended_contents;
       let listing =
         command_output
           ("debugfs -R " ^ Filename.quote "ls -l /" ^ " " ^ Filename.quote image

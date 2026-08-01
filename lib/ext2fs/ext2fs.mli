@@ -9,7 +9,9 @@ val create :
   unit ->
   t
 
+val open_existing : path:string -> t
 val close : t -> unit
+val exists : t -> path:string -> bool
 
 val mkdir :
   t -> path:string -> mode:int -> uid:int -> gid:int -> mtime:float -> unit

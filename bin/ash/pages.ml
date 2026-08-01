@@ -241,13 +241,15 @@ let spawn =
         `P
           "Cache entries are disposable. A missing, malformed, mismatched, or \
            incorrectly sized cache entry is rebuilt from the selected closure. \
-           Existing VM images are not replaced from cache because they may \
-           contain guest-added store paths.";
+           Existing VM images are updated in place rather than replaced \
+           because they may contain guest-added store paths.";
         `P
           "Increasing image_size_mib grows a stopped VM's filesystem \
-           automatically. Shrinking it or changing the selected closure \
-           requires ash rebuild-db, which recreates the image and discards \
-           guest-added store paths.";
+           automatically. If the selected closure changes, Ash retains \
+           existing paths and imports only missing immutable store paths. A \
+           failed import can be retried, optionally after increasing the image \
+           size. Shrinking the filesystem still requires ash rebuild-db and \
+           discards guest-added store paths.";
         `S "ASSUMED MOUNTS";
         `P
           "Every generated virtle.toml includes workspace, hotmounts, and a \

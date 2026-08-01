@@ -160,9 +160,10 @@ host store to the guest. Ash appends `ash.nix-store=image` or
 matching stage-1 mount layout. Image-capable guests must mount the `nix-store`
 label at `/nix`; Ash loads the Nix database through QGA after boot. Increasing
 `image_size_mib` grows an existing stopped VM's filesystem automatically.
-Shrinking it, changing the selected system closure, or migrating a legacy
-image created with `mke2fs -d` requires `ash rebuild-db NAME`, which discards
-guest-added store paths.
+When the selected closure changes, Ash imports only missing immutable store
+paths into the stopped VM's existing image and retains guest-added and older
+paths. Shrinking the image or migrating a legacy image created with `mke2fs
+-d` requires `ash rebuild-db NAME`, which discards guest-added store paths.
 
 Select a space with a repeatable `--space`/`-s` option:
 

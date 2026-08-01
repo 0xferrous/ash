@@ -36,7 +36,10 @@ let estimate_inode_count ~size entries =
   let estimated = max required by_size in
   (estimated + 4095) / 4096 * 4096
 
-let ext2fs_backend fs =
+let ext2fs_backend ?(skip_existing = false) fs =
+  let missing (entry : Plan.entry) =
+    (not skip_existing) || not (Ash_ext2fs.Ext2fs.exists fs ~path:entry.target)
+  in
   {
     mkdir =
       (fun (entry : Plan.entry) ->
@@ -44,13 +47,16 @@ let ext2fs_backend fs =
           ~uid:entry.uid ~gid:entry.gid ~mtime:entry.mtime);
     write_file =
       (fun (entry : Plan.entry) ->
-        Ash_ext2fs.Ext2fs.write_file fs ~path:entry.target ~source:entry.source
-          ~mode:entry.mode ~uid:entry.uid ~gid:entry.gid ~mtime:entry.mtime);
+        if missing entry then
+          Ash_ext2fs.Ext2fs.write_file fs ~path:entry.target
+            ~source:entry.source ~mode:entry.mode ~uid:entry.uid ~gid:entry.gid
+            ~mtime:entry.mtime);
     symlink =
       (fun (entry : Plan.entry) ->
-        Ash_ext2fs.Ext2fs.symlink fs ~path:entry.target
-          ~target:(Option.value entry.link_target ~default:"")
-          ~mode:entry.mode ~uid:entry.uid ~gid:entry.gid ~mtime:entry.mtime);
+        if missing entry then
+          Ash_ext2fs.Ext2fs.symlink fs ~path:entry.target
+            ~target:(Option.value entry.link_target ~default:"")
+            ~mode:entry.mode ~uid:entry.uid ~gid:entry.gid ~mtime:entry.mtime);
   }
 
 let import_entries ~reporter ~backend ~metrics (entries : Plan.entry list) =
@@ -67,6 +73,16 @@ let import_entries ~reporter ~backend ~metrics (entries : Plan.entry list) =
       | Plan.Symlink -> backend.symlink entry)
     entries;
   Metrics.mark_mut_finished metrics
+
+let append_image ?(reporter = Reporter.silent) ~path ~metrics entries =
+  Reporter.info reporter "image append path=%s entries=%d" path
+    (List.length entries);
+  let fs = Ash_ext2fs.Ext2fs.open_existing ~path in
+  Fun.protect
+    ~finally:(fun () -> Ash_ext2fs.Ext2fs.close fs)
+    (fun () ->
+      let backend = ext2fs_backend ~skip_existing:true fs in
+      import_entries ~reporter ~backend ~metrics entries)
 
 let write_image ?size ?(label = "nix-store") ?(reporter = Reporter.silent) ~path
     ~metrics entries =

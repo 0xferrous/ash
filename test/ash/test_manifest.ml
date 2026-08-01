@@ -1470,7 +1470,40 @@ let test_prepare_image_store () =
     ("-f\n-p\n" ^ image ^ "\n")
     (In_channel.with_open_text e2fsck_args In_channel.input_all);
   assert_equal "resize2fs receives image path" (image ^ "\n")
-    (In_channel.with_open_text resize2fs_args In_channel.input_all)
+    (In_channel.with_open_text resize2fs_args In_channel.input_all);
+  let updated_system_source = Filename.concat sources "system-v2" in
+  let updated_registration_source = Filename.concat sources "closure-info-v2" in
+  write_file
+    (Filename.concat updated_system_source "bin/init")
+    "updated-system-init\n";
+  write_file
+    (Filename.concat updated_registration_source "registration")
+    "updated-registration-data\n";
+  Unix.putenv "ASH_TEST_SYSTEM_SOURCE" updated_system_source;
+  Unix.putenv "ASH_TEST_REGISTRATION_SOURCE" updated_registration_source;
+  Nix.prepare_image_store ~nix_executable:nix ~e2fsck ~resize2fs
+    ~toplevel:"/nix/store/system-v2"
+    ~registration:"/nix/store/closure-info-v2/registration" ~image ~size_mib:512
+    ();
+  assert_equal "updated image store marker"
+    "4\n/nix/store/system-v2\n512\n/nix/store/closure-info-v2/registration\n"
+    (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
+  let retained_contents =
+    Util.command_output
+      ("debugfs -R "
+      ^ Filename.quote "cat /store/system/bin/init"
+      ^ " " ^ Filename.quote image ^ " 2>/dev/null")
+  in
+  assert_equal "closure update retains old store paths" "system-init"
+    retained_contents;
+  let updated_contents =
+    Util.command_output
+      ("debugfs -R "
+      ^ Filename.quote "cat /store/system-v2/bin/init"
+      ^ " " ^ Filename.quote image ^ " 2>/dev/null")
+  in
+  assert_equal "closure update imports new store paths" "updated-system-init"
+    updated_contents
 
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
