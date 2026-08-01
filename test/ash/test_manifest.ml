@@ -481,6 +481,51 @@ let test_xdg_cache_home () =
         "/home/tester/.cache/nash/nix-store-images"
         (Virtle.nix_store_image_cache_dir ()))
 
+let test_cached_images_for_removal () =
+  let root = temp_dir "ash-test-cached-images" in
+  let old_cache = Sys.getenv_opt "XDG_CACHE_HOME" in
+  let old_name = Sys.getenv_opt "ASH_NAME" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "XDG_CACHE_HOME" (Option.value old_cache ~default:"");
+      Unix.putenv "ASH_NAME" (Option.value old_name ~default:"");
+      Util.remove_tree ~force:true root)
+    (fun () ->
+      Unix.putenv "XDG_CACHE_HOME" root;
+      Unix.putenv "ASH_NAME" "test-ash";
+      let cache = Virtle.nix_store_image_cache_dir () in
+      mkdir_p cache;
+      let first =
+        Filename.concat cache "11111111111111111111111111111111.img"
+      in
+      let second =
+        Filename.concat cache "22222222222222222222222222222222.img"
+      in
+      write_file first "first image";
+      write_file (first ^ ".toplevel")
+        "4\n/nix/store/first-system\n128\n/nix/store/registration\n";
+      write_file second "second image";
+      write_file (second ^ ".toplevel") "invalid marker\n";
+      write_file (Filename.concat cache "ignored.txt") "not an image";
+      match Virtle.list_cached_images () with
+      | [ first_info; second_info ] ->
+          assert_equal "first cached image key"
+            "11111111111111111111111111111111" first_info.cache_key;
+          assert_equal "first cached image toplevel" "/nix/store/first-system"
+            (Option.value first_info.toplevel ~default:"");
+          assert_bool "invalid cached image marker" true
+            (Option.is_none second_info.toplevel);
+          Virtle.remove_cached_image first_info;
+          assert_bool "cached image removed" false (Sys.file_exists first);
+          assert_bool "cached image marker removed" false
+            (Sys.file_exists (first ^ ".toplevel"));
+          assert_bool "other cached image retained" true
+            (Sys.file_exists second)
+      | images ->
+          fail
+            (Printf.sprintf "expected two cached images, got %d"
+               (List.length images)))
+
 let test_xdg_state_path () =
   let old_home = Sys.getenv_opt "HOME" in
   let old_xdg = Sys.getenv_opt "XDG_STATE_HOME" in
@@ -1587,6 +1632,7 @@ let () =
   run "image-backed Nix store manifest" test_image_backed_nix_store_manifest;
   run "XDG config path" test_xdg_config_path;
   run "XDG cache home" test_xdg_cache_home;
+  run "cached images for removal" test_cached_images_for_removal;
   run "XDG state path" test_xdg_state_path;
   run "space mount spec parsing" test_space_mount_spec_parsing;
   run "space extension graph traversal" test_space_extension_graph_traversal;

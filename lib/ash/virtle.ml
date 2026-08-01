@@ -540,6 +540,18 @@ type vm_info = {
   path : string;
 }
 
+type cached_image_info = {
+  cache_key : string;
+  toplevel : string option;
+  disk_bytes : int64;
+  apparent_bytes : int64;
+  modified : float;
+  path : string;
+  marker : string;
+}
+
+type rm_target = Vm_state of vm_info | Cached_image of cached_image_info
+
 let control_socket_path dir = Filename.concat dir "virtle.sock"
 
 let socket_accepts_connection path =
@@ -768,36 +780,96 @@ let print_vm_list () =
         (format_time vm.modified) vm.path)
     vms
 
-let rm_item vm =
-  Printf.sprintf "%-32s %-8s %10s  %s" vm.name (status_string vm.status)
-    (human_size vm.disk_bytes) vm.path
+let list_cached_images () =
+  let base = nix_store_image_cache_dir () in
+  if not (Sys.file_exists base) then []
+  else
+    Sys.readdir base |> Array.to_list |> List.sort String.compare
+    |> List.filter_map (fun name ->
+        if not (Filename.check_suffix name ".img") then None
+        else
+          let path = Filename.concat base name in
+          let marker = path ^ ".toplevel" in
+          try
+            let stat = Unix.LargeFile.stat path in
+            if stat.st_kind <> Unix.S_REG then None
+            else
+              let toplevel =
+                try
+                  match Nix.read_image_store_marker marker with
+                  | Some (Nix.Current prepared) -> Some prepared.toplevel
+                  | Some Nix.Legacy | None -> None
+                with Sys_error _ | Unix.Unix_error _ -> None
+              in
+              Some
+                {
+                  cache_key = Filename.chop_suffix name ".img";
+                  toplevel;
+                  disk_bytes = disk_usage path;
+                  apparent_bytes = stat.st_size;
+                  modified = stat.st_mtime;
+                  path;
+                  marker;
+                }
+          with Unix.Unix_error _ | Sys_error _ -> None)
+
+let short_cache_key key =
+  if String.length key <= 12 then key else String.sub key 0 12
+
+let rm_item = function
+  | Vm_state vm ->
+      Printf.sprintf "%-6s %-32s %-8s %10s  %s" "VM" vm.name
+        (status_string vm.status) (human_size vm.disk_bytes) vm.path
+  | Cached_image image ->
+      let closure =
+        image.toplevel
+        |> Option.map Filename.basename
+        |> Option.value ~default:"unknown-closure"
+      in
+      Printf.sprintf "%-6s %-32s %-8s %10s  %s  %s" "CACHE"
+        (short_cache_key image.cache_key)
+        "cached"
+        (human_size image.disk_bytes)
+        closure image.path
 
 let attach_item vm =
   Printf.sprintf "%-32s %-8s %5s  %s" vm.name (status_string vm.status)
     (cid_string vm.cid) vm.path
 
+let remove_cached_image image =
+  Log.info "deleting cached Nix store image %s (%s)" image.cache_key image.path;
+  Util.remove_tree ~force:true image.path;
+  Util.remove_tree ~force:true image.marker
+
 let rm_vms () =
-  let vms =
-    list_vms () |> List.filter (fun vm -> vm.status = Stopped) |> Array.of_list
+  let targets =
+    (list_vms ()
+    |> List.filter_map (fun vm ->
+        if vm.status = Stopped then Some (Vm_state vm) else None))
+    @ (list_cached_images () |> List.map (fun image -> Cached_image image))
+    |> Array.of_list
   in
-  if Array.length vms = 0 then Log.info "no stopped VM states found"
+  if Array.length targets = 0 then
+    Log.info "no stopped VM states or cached images found"
   else
-    let items = Array.map rm_item vms in
+    let items = Array.map rm_item targets in
     let selected =
-      Tui.multi_select ~title:"Select VM states to delete"
+      Tui.multi_select ~title:"Select VM states and cached images to delete"
         ~help:
           "↑/k ↓/j move  space select  a select all/none  enter delete  q \
            cancel"
         ~items
     in
     match selected with
-    | [] -> Log.info "no VM states selected"
+    | [] -> Log.info "no VM states or cached images selected"
     | selected ->
         selected
         |> List.iter (fun idx ->
-            let vm = vms.(idx) in
-            Log.info "deleting VM state %s (%s)" vm.name vm.path;
-            Util.remove_tree ~force:true vm.path)
+            match targets.(idx) with
+            | Vm_state vm ->
+                Log.info "deleting VM state %s (%s)" vm.name vm.path;
+                Util.remove_tree ~force:true vm.path
+            | Cached_image image -> remove_cached_image image)
 
 let attach_picker vms =
   let items = Array.map attach_item vms in

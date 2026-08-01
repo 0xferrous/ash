@@ -13,7 +13,7 @@ nix build
 ./result/bin/ash rm
 ```
 
-`ash rm` opens an interactive multi-select TUI for deleting VM state directories. State lives under `~/.local/state/$ASH_NAME/<name>/`, with `ASH_NAME` defaulting to `ash`.
+`ash rm` opens an interactive multi-select TUI for deleting stopped VM state directories or cached image-backed Nix store bases. Removing a cached base deletes its adjacent closure marker but does not affect writable VM clones; a later spawn rebuilds the base if needed. State lives under `~/.local/state/$ASH_NAME/<name>/`, with `ASH_NAME` defaulting to `ash`.
 
 ## Interface
 

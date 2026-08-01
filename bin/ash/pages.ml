@@ -766,21 +766,23 @@ let rm =
   {
     file = "ash-rm";
     command = Some "rm";
-    summary = "select and delete ash VM state directories";
+    summary = "select and delete VM state or cached images";
     man =
       [
         `S Manpage.s_description;
         `P
           "Opens an interactive multi-select picker for deleting stopped ash \
-           VM state directories.";
+           VM state directories and cached image-backed Nix store bases.";
         `S "SAFETY";
         `P
           "Only stopped VM states are shown. Running VMs are not selectable \
-           for deletion.";
+           for deletion. Cached bases are safe to remove while VMs are running \
+           because each VM uses its own writable clone.";
         `P
-          "Deletion removes the selected VM state directory, including \
-           generated manifests, SSH keys, hotmount staging data, workspace \
-           data, and persistent images.";
+          "Deleting a VM removes its state directory, including generated \
+           manifests, SSH keys, hotmount staging data, workspace data, and \
+           persistent images. Deleting a cache entry removes its base image \
+           and closure marker; a later spawn rebuilds the base if needed.";
         `S Manpage.s_examples;
         `Pre "ash rm";
       ];

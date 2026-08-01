@@ -549,7 +549,8 @@ let rm_man = Pages.rm.man
 
 let rm_cmd =
   Cmd.v
-    (Cmd.info "rm" ~doc:"select and delete ash VM state directories" ~man:rm_man)
+    (Cmd.info "rm" ~doc:"select and delete VM state or cached images"
+       ~man:rm_man)
     Term.(const rm_vms $ global_opts_arg)
 
 let main_cmd =

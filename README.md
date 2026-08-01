@@ -91,7 +91,7 @@ Stop a background VM:
 ash stop work
 ```
 
-Inspect, list, and delete VM state:
+Inspect and list VM state, or interactively delete stopped VM state and cached store images:
 
 ```sh
 ash inspect work
