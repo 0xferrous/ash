@@ -94,6 +94,10 @@
           install -Dm755 ${ashBuild}/bin/agent-portal-host "$out/bin/agent-portal-host"
         '';
 
+        agentPortalCli = pkgs.runCommand "agent-portal-cli" { } ''
+          install -Dm755 ${ashBuild}/bin/agent-portal-cli "$out/bin/agent-portal-cli"
+        '';
+
         nixExt4Image = pkgs.runCommand "nix-ext4-image" { } ''
           install -Dm755 ${ashBuild}/bin/nix-ext4-image "$out/bin/nix-ext4-image"
         '';
@@ -141,6 +145,7 @@
           default = ash;
           ash = ash;
           all = ashBuild;
+          "agent-portal-cli" = agentPortalCli;
           "agent-portal-host" = agentPortalHost;
           "agent-portal-wrappers" = agentPortalWrappers;
           "nix-ext4-image" = nixExt4Image;
