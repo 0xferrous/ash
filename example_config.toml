@@ -10,6 +10,14 @@
 # network_bridge = "ash0"
 # qemu_bridge_helper = "/run/wrappers/bin/qemu-bridge-helper"
 
+# Shared Vulkan GPU acceleration. Ash keeps the physical GPU attached to the
+# host and exposes a headless VirtIO-GPU device to the guest through QEMU's
+# virglrenderer/Venus backend. memory_mib controls the host-visible GPU memory
+# window and defaults to 8192 MiB.
+# [global.gpu]
+# mode = "shared"
+# memory_mib = 8192
+
 # Nix store strategy. "shared" is the default and exposes the host store
 # read-only through virtiofs. "image" creates a private ext4 image mounted at
 # /nix by a compatible guest configuration.
@@ -41,6 +49,15 @@ gh_exec = "ask_for_writes"
 ro_mounts = [
   "~/.config/git:~/.config/git",
 ]
+
+# A local-model space can expose host model caches to selected agent VMs.
+# Use rw_mounts when the guest should download or update models, or ro_mounts
+# when the host cache must remain immutable.
+# [spaces.local-models]
+# rw_mounts = [
+#   "~/.cache/huggingface:~/.cache/huggingface",
+#   "~/.ollama/models:~/.ollama/models",
+# ]
 
 [spaces.ash]
 # Extended spaces are evaluated first. Composition is recursive, and each space

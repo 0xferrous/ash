@@ -9,6 +9,8 @@ type mount = {
 
 type space_resources = { mounts : mount list }
 type nix_store_strategy = Shared | Image
+type gpu_mode = Shared_gpu
+type gpu = { mode : gpu_mode; memory_mib : int }
 
 let load path : config =
   let path = Util.expand_home path in
@@ -38,6 +40,23 @@ let global_network_bridge config =
 let global_qemu_bridge_helper config =
   Otoml.find_opt config Otoml.get_string [ "global"; "qemu_bridge_helper" ]
   |> Option.value ~default:"/run/wrappers/bin/qemu-bridge-helper"
+
+let global_gpu config =
+  match Otoml.find_opt config Otoml.get_string [ "global"; "gpu"; "mode" ] with
+  | None -> None
+  | Some "shared" ->
+      let memory_mib =
+        Otoml.find_opt config Otoml.get_integer
+          [ "global"; "gpu"; "memory_mib" ]
+        |> Option.value ~default:8192
+      in
+      if memory_mib < 256 || memory_mib > 8192 then
+        Log.fatal
+          "global.gpu.memory_mib must be between 256 and 8192 for shared GPU \
+           mode";
+      Some { mode = Shared_gpu; memory_mib }
+  | Some mode ->
+      Log.fatal "invalid global.gpu.mode %S (expected \"shared\")" mode
 
 let nix_store_strategy_of_string ~field = function
   | "shared" -> Shared

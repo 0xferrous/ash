@@ -355,6 +355,8 @@ Every generated manifest disables virtle's default user-mode network and appends
 
 Ash also appends `ash.mdns-host=<dns-label>` and `ash.mdns-mac=<stable-mac>` to the guest kernel command line. A compatible guest reads these boot-time values and publishes `<dns-label>.ash.local`; the agent NixOS configuration generates an Avahi runtime configuration restricted to the interface matching the stable MAC. Avahi owns address discovery, lease changes, conflict handling, announcements, query responses, and goodbye records, so Ash requires no host-side publisher, QGA mDNS action, or guest responder executable. DNS-safe lowercase names up to 63 characters are preserved; transformed names receive an eight-hex digest suffix to avoid normalization collisions.
 
+When `global.gpu.mode = "shared"`, Ash selects QEMU's `egl-headless` display backend and appends a `virtio-gpu-gl` device with host blobs and the Venus Vulkan capability set. `global.gpu.memory_mib` becomes the device's `hostmem` window. The physical GPU remains owned by the host; guest Vulkan commands are forwarded through VirtIO-GPU and virglrenderer rather than through PCI passthrough. This mode intentionally does not expose native ROCm or CUDA APIs. Ash uses Venus instead of rutabaga/gfxstream because the latter currently fails Linux guest context teardown with `invalid context id` errors.
+
 Plain `ash spawn` starts `virtle launch` under a transient user systemd unit:
 
 ```sh

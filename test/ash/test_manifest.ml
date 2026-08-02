@@ -293,6 +293,39 @@ qemu_bridge_helper = "/custom/qemu-bridge-helper"
   assert_string_contains "configured bridge helper" (List.nth qemu_exec 2)
     "helper=/custom/qemu-bridge-helper"
 
+let test_global_shared_gpu () =
+  let root = temp_dir "ash-test-global-shared-gpu" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config = parse_toml {|[global.gpu]
+mode = "shared"
+memory_mib = 6144
+|} in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"shared-gpu" ()
+  in
+  let doc = parse_toml manifest in
+  let qemu_exec = find_strings doc [ "qemu"; "exec" ] in
+  assert_equal "shared GPU display option" "-display" (List.nth qemu_exec 5);
+  assert_equal "shared GPU headless display" "egl-headless"
+    (List.nth qemu_exec 6);
+  assert_equal "shared GPU QEMU option" "-device" (List.nth qemu_exec 7);
+  assert_equal "shared GPU device"
+    "virtio-gpu-gl,hostmem=6144M,blob=true,venus=true" (List.nth qemu_exec 8)
+
+let test_global_shared_gpu_default_memory () =
+  let config = parse_toml {|[global.gpu]
+mode = "shared"
+|} in
+  match Ash_config.global_gpu config with
+  | Some ({ mode = Ash_config.Shared_gpu; memory_mib } : Ash_config.gpu) ->
+      assert_int "default shared GPU memory" 8192 memory_mib
+  | None -> fail "shared GPU config was not parsed"
+
 let test_no_spaces_selected_by_default () =
   let root = temp_dir "ash-test-no-spaces" in
   let home = Filename.concat root "home" in
@@ -1654,6 +1687,8 @@ let () =
   run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
   run "global memory config" test_global_memory_config;
   run "global network config" test_global_network_config;
+  run "global shared GPU" test_global_shared_gpu;
+  run "global shared GPU default memory" test_global_shared_gpu_default_memory;
   run "no spaces selected by default" test_no_spaces_selected_by_default;
   run "image-backed Nix store manifest" test_image_backed_nix_store_manifest;
   run "XDG config path" test_xdg_config_path;

@@ -15,6 +15,17 @@ let has_prefix ~prefix value =
 
 let is_nix_store_kernel_param = has_prefix ~prefix:"ash.nix-store="
 
+let gpu_qemu_args = function
+  | None -> []
+  | Some ({ mode = Ash_config.Shared_gpu; memory_mib } : Ash_config.gpu) ->
+      [
+        "-display";
+        "egl-headless";
+        "-device";
+        Printf.sprintf "virtio-gpu-gl,hostmem=%dM,blob=true,venus=true"
+          memory_mib;
+      ]
+
 let is_mdns_kernel_param value =
   has_prefix ~prefix:"ash.mdns-host=" value
   || has_prefix ~prefix:"ash.mdns-mac=" value
@@ -2269,6 +2280,7 @@ let render_resolved_manifest inputs =
   let vcpu = Util.command_output "nproc" |> int_of_string in
   let network_bridge = Ash_config.global_network_bridge config in
   let qemu_bridge_helper = Ash_config.global_qemu_bridge_helper config in
+  let gpu_args = Ash_config.global_gpu config |> gpu_qemu_args in
   let network_mac = network_mac inputs.name in
   let user = Option.value inputs.user ~default:inputs.target.host_name in
   let target = inputs.target in
@@ -2410,15 +2422,16 @@ let render_resolved_manifest inputs =
             [
               ( "exec",
                 string_array
-                  [
-                    "qemu-system-{{.HostArch}}";
-                    "-netdev";
-                    Printf.sprintf "bridge,id=ashnet0,br=%s,helper=%s"
-                      network_bridge qemu_bridge_helper;
-                    "-device";
-                    Printf.sprintf "virtio-net-pci,netdev=ashnet0,mac=%s"
-                      network_mac;
-                  ] );
+                  ([
+                     "qemu-system-{{.HostArch}}";
+                     "-netdev";
+                     Printf.sprintf "bridge,id=ashnet0,br=%s,helper=%s"
+                       network_bridge qemu_bridge_helper;
+                     "-device";
+                     Printf.sprintf "virtio-net-pci,netdev=ashnet0,mac=%s"
+                       network_mac;
+                   ]
+                  @ gpu_args) );
             ] );
         ( "machine",
           Otoml.table

@@ -132,6 +132,45 @@ Names that are not already lowercase DNS labels receive an eight-hex digest
 suffix after normalization. The host must have `.local` mDNS resolution
 enabled, and multicast UDP 5353 must pass over the VM bridge.
 
+Enable experimental shared Vulkan GPU acceleration with:
+
+```toml
+[global.gpu]
+mode = "shared"
+memory_mib = 8192
+```
+
+Ash keeps the physical GPU attached to the host and adds a headless VirtIO-GPU
+device backed by QEMU's virglrenderer/Venus Vulkan renderer. The host and agent
+VMs can therefore use the GPU concurrently; this is paravirtualized Vulkan,
+not PCI passthrough and not a native ROCm/CUDA device. `memory_mib` configures
+the host-visible GPU memory window, defaults to 8192, and must be between 256
+and 8192 MiB.
+
+The host needs Linux 6.13 or newer, a working Vulkan driver, a QEMU build with
+`virtio-gpu-gl`, Venus, and virglrenderer support, and permission for the QEMU
+process to use the host render node such as `/dev/dri/renderD128`. The guest
+needs a kernel with `CONFIG_DRM_VIRTIO_GPU`, Linux 5.16 or newer, Mesa 24.2 or newer,
+and the Vulkan loader. Use a Vulkan-capable inference backend such as
+llama.cpp's Vulkan backend; ROCm/HIP software will not see this virtual GPU.
+Import [`examples/nixos/shared-gpu-agent.nix`](./examples/nixos/shared-gpu-agent.nix)
+into the guest NixOS configuration to enable the VirtIO-GPU kernel module and
+install `vulkaninfo` plus Vulkan-enabled llama.cpp. Inside the guest,
+`vulkaninfo --summary` can verify acceleration.
+
+Host model caches can be exposed only to selected agent VMs with a space:
+
+```toml
+[spaces.local-models]
+rw_mounts = [
+  "~/.cache/huggingface:~/.cache/huggingface",
+  "~/.ollama/models:~/.ollama/models",
+]
+```
+
+Then spawn the model sandbox with `--space local-models`. Use `ro_mounts`
+instead if agents should not modify the host cache.
+
 The default Nix store strategy is `shared`: Ash exposes the host `/nix/store`
 read-only through virtiofs. Pass `--ro-store-socket PATH` to reuse an existing
 virtiofsd. Ash also provides lower-store metadata and writable overlay
