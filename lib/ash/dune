@@ -1,6 +1,3 @@
 (library
  (name ash)
- (libraries agent_portal image_import_core unix base64 otoml yojson)
- (foreign_stubs
-  (language c)
-  (names mdns_socket_stubs)))
+ (libraries agent_portal image_import_core unix base64 otoml yojson))

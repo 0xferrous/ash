@@ -202,23 +202,17 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     "helper=/run/wrappers/bin/qemu-bridge-helper";
   assert_string_contains "stable VM MAC" (List.nth qemu_exec 4)
     ("mac=" ^ Virtle.network_mac "unit-test");
-  let runs = table_array doc "run" in
-  assert_int "default mDNS publisher run count" 1 (List.length runs);
-  let mdns_exec = strings_field (List.hd runs) "exec" in
-  assert_bool "mDNS publisher internal command" true
-    (List.mem "__mdns-publisher" mdns_exec);
-  assert_bool "mDNS publisher responder handoff" true
-    (List.mem "--responder" mdns_exec);
-  assert_bool "mDNS publisher standalone responder" true
-    (List.exists (fun path -> Filename.basename path = "ash-mdns") mdns_exec);
-  assert_bool "mDNS publisher name" true
-    (List.mem "unit-test.ash.local" mdns_exec);
-  assert_bool "mDNS publisher MAC" true
-    (List.mem (Virtle.network_mac "unit-test") mdns_exec);
   assert_equal "kernel serial" "console"
     (find_string doc [ "kernel"; "serial" ]);
-  assert_equal "shared store kernel parameter"
-    "init=/nix/store/system/init,root=fstab,ash.nix-store=shared"
+  assert_equal "Ash kernel parameters"
+    (String.concat ","
+       [
+         "init=/nix/store/system/init";
+         "root=fstab";
+         "ash.nix-store=shared";
+         "ash.mdns-host=unit-test";
+         "ash.mdns-mac=" ^ Virtle.network_mac "unit-test";
+       ])
     (String.concat "," (find_strings doc [ "kernel"; "params" ]));
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
@@ -371,8 +365,15 @@ image_size_mib = 12288
   in
   let doc = parse_toml manifest in
   let mounts = table_array doc "mounts" in
-  assert_equal "image store kernel parameter"
-    "init=/nix/store/system/init,root=fstab,ash.nix-store=image"
+  assert_equal "image store kernel parameters"
+    (String.concat ","
+       [
+         "init=/nix/store/system/init";
+         "root=fstab";
+         "ash.nix-store=image";
+         "ash.mdns-host=image-store";
+         "ash.mdns-mac=" ^ Virtle.network_mac "image-store";
+       ])
     (String.concat "," (find_strings doc [ "kernel"; "params" ]));
   assert_int "fixed mount count with image store" 4 (List.length mounts);
   assert_bool "image store omits ro-store" false
@@ -736,14 +737,8 @@ vsock_cid = 2
   in
   let doc = parse_toml manifest in
   let runs = table_array doc "run" in
-  assert_int "managed portal plus mDNS run count" 2 (List.length runs);
-  let portal_run =
-    List.find
-      (fun run ->
-        strings_field run "exec" |> List.exists (( = ) "/bin/agent-portal-host"))
-      runs
-  in
-  let exec = strings_field portal_run "exec" in
+  assert_int "managed portal run count" 1 (List.length runs);
+  let exec = strings_field (List.hd runs) "exec" in
   assert_equal "managed portal executable" "/bin/agent-portal-host"
     (List.hd exec);
   assert_bool "managed portal config flag" true (List.mem "-c" exec);
@@ -786,7 +781,7 @@ vsock_port = 44050
     render ~config ~flake:"../my-nix#agent" ~name:"global-portal" ()
   in
   let doc = parse_toml manifest in
-  assert_int "global portal has only mDNS run" 1
+  assert_int "global portal has no managed run" 0
     (List.length (table_array doc "run"));
   let files = table_array doc "write_files" in
   assert_int "global portal environment file count" 2 (List.length files);
@@ -803,8 +798,7 @@ let test_disabled_portal_manifest () =
     render ~config ~flake:"../my-nix#agent" ~name:"disabled-portal" ()
   in
   let doc = parse_toml manifest in
-  assert_int "disabled portal has only mDNS run" 1
-    (List.length (table_array doc "run"));
+  assert_int "disabled portal run count" 0 (List.length (table_array doc "run"));
   let files = table_array doc "write_files" in
   assert_int "disabled portal cleanup file count" 2 (List.length files);
   assert_string_contains "disabled portal clears stale endpoint"
@@ -923,29 +917,6 @@ let test_qga_vm_stats_action () =
   match Virtle.parse_vm_stats "- 0 0\n" with
   | Some (None, 0, 0) -> ()
   | _ -> fail "missing VM IP should parse"
-
-let test_qga_mdns_actions () =
-  let action =
-    Qga.mdns_start_action ~responder:"/nix/store/ash/bin/ash-mdns"
-      ~name:"work.ash.local" ~address:"192.168.127.101" ~mac:"02:12:34:56:78:9a"
-  in
-  let script = List.nth action.args 1 in
-  assert_string_contains "mDNS action finds interface by MAC" script
-    "/sys/class/net/*/address";
-  assert_string_contains "mDNS action uses transient guest service" script
-    "systemd-run --quiet --collect --unit=ash-mdns";
-  assert_string_contains "mDNS action starts standalone responder" script
-    "\"$responder\" --interface";
-  assert_string_contains "mDNS action finds guest-installed responder" script
-    "command -v ash-mdns";
-  assert_equal "mDNS action MAC" "02:12:34:56:78:9a" (List.nth action.args 3);
-  assert_equal "mDNS action responder" "/nix/store/ash/bin/ash-mdns"
-    (List.nth action.args 4);
-  assert_equal "mDNS action name" "work.ash.local" (List.nth action.args 5);
-  assert_equal "mDNS action address" "192.168.127.101" (List.nth action.args 6);
-  let stop = Qga.mdns_stop_action () in
-  assert_string_contains "mDNS stop action" (List.nth stop.args 1)
-    "systemctl stop ash-mdns.service"
 
 let test_active_ssh_warning () =
   let warning = Virtle.active_ssh_warning ~name:"work" (Some (2, 6)) in
@@ -1664,32 +1635,15 @@ let test_state_sizes_ignore_hotmounts () =
   assert_bool "apparent size ignores hotmounts and shares" true
     (Virtle.state_path_size root < 524288L)
 
-let test_mdns_names_and_packets () =
-  assert_equal "simple mDNS label" "work" (Mdns.dns_label "work");
-  assert_equal "simple mDNS FQDN" "work.ash.local" (Mdns.fqdn "work");
-  let transformed = Mdns.dns_label "Work_VM" in
-  assert_bool "transformed mDNS label is bounded" true
+let test_mdns_dns_labels () =
+  assert_equal "simple DNS label" "work" (Util.dns_label "work");
+  let transformed = Util.dns_label "Work_VM" in
+  assert_bool "transformed DNS label is bounded" true
     (String.length transformed <= 63);
-  assert_string_contains "transformed mDNS label carries readable prefix"
-    transformed "work-vm-";
-  let announcement =
-    Mdns.response ~ttl:120l ~name:"work.ash.local" "192.168.127.101"
-    |> Bytes.of_string
-  in
-  assert_bool "matching mDNS record is not a conflict" false
-    (Mdns.conflicting_a_record announcement ~name:"work.ash.local"
-       ~address:"192.168.127.101");
-  assert_bool "different mDNS address conflicts" true
-    (Mdns.conflicting_a_record announcement ~name:"work.ash.local"
-       ~address:"192.168.127.102");
-  let probe =
-    Mdns.probe ~name:"work.ash.local" "192.168.127.101" |> Bytes.of_string
-  in
-  match Mdns.questions probe with
-  | [ (name, record_type, false) ] ->
-      assert_equal "mDNS probe name" "work.ash.local" name;
-      assert_int "mDNS probe type" 255 record_type
-  | _ -> fail "mDNS probe question should parse"
+  assert_string_contains "transformed DNS label has readable prefix" transformed
+    "work-vm-";
+  assert_bool "normalization avoids collisions" true
+    (Util.dns_label "Work_VM" <> Util.dns_label "work-vm")
 
 let run name test =
   Printf.printf "test %s ... %!" name;
@@ -1721,7 +1675,6 @@ let () =
   run "qga output data decodes base64" test_qga_output_data_decodes_base64;
   run "qga loads Nix registration" test_qga_load_nix_registration_action;
   run "qga VM stats action" test_qga_vm_stats_action;
-  run "qga mDNS actions" test_qga_mdns_actions;
   run "stop warns about active ssh" test_active_ssh_warning;
   run "qga unmount removes empty mountpoint"
     test_qga_unmount_removes_empty_mountpoint;
@@ -1762,4 +1715,4 @@ let () =
   run "scp arguments" test_scp_args;
   run "remove Nix store state" test_remove_nix_store_state;
   run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts;
-  run "mDNS names and packets" test_mdns_names_and_packets
+  run "mDNS DNS labels" test_mdns_dns_labels

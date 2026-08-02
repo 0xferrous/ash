@@ -237,6 +237,53 @@ let name_slug s =
     s;
   Buffer.contents b
 
+let dns_label name =
+  let lowered = String.lowercase_ascii name in
+  let changed = ref (lowered <> name) in
+  let buffer = Buffer.create (String.length lowered) in
+  String.iter
+    (function
+      | ('a' .. 'z' | '0' .. '9' | '-') as character ->
+          Buffer.add_char buffer character
+      | _ ->
+          changed := true;
+          Buffer.add_char buffer '-')
+    lowered;
+  let value = Buffer.contents buffer in
+  let length = String.length value in
+  let rec first i =
+    if i < length && value.[i] = '-' then first (i + 1) else i
+  in
+  let rec last i = if i >= 0 && value.[i] = '-' then last (i - 1) else i in
+  let start = first 0 in
+  let stop = last (length - 1) in
+  let normalized =
+    if stop < start then "" else String.sub value start (stop - start + 1)
+  in
+  if normalized <> lowered then changed := true;
+  let normalized = if normalized = "" then "vm" else normalized in
+  if (not !changed) && String.length normalized <= 63 then normalized
+  else
+    let suffix =
+      "-"
+      ^ ( Digest.string name |> Digest.to_hex |> fun value ->
+          String.sub value 0 8 )
+    in
+    let maximum_base = 63 - String.length suffix in
+    let base =
+      if String.length normalized <= maximum_base then normalized
+      else String.sub normalized 0 maximum_base
+    in
+    let base_length = String.length base in
+    let rec last_base i =
+      if i >= 0 && base.[i] = '-' then last_base (i - 1) else i
+    in
+    let base_stop = last_base (base_length - 1) in
+    let base =
+      if base_stop < 0 then "vm" else String.sub base 0 (base_stop + 1)
+    in
+    base ^ suffix
+
 let rec remove_tree ?(force = false) path =
   if Sys.file_exists path then
     if force then (

@@ -3,23 +3,6 @@ open Ash
 
 let version = "0.1.5"
 
-let run_internal_mdns_publisher () =
-  match Array.to_list Sys.argv with
-  | [
-   _;
-   "__mdns-publisher";
-   "--control-socket";
-   control_socket;
-   "--responder";
-   responder;
-   "--name";
-   name;
-   "--mac";
-   mac;
-  ] ->
-      Some (Virtle.run_mdns_publisher ~control_socket ~responder ~name ~mac)
-  | _ -> None
-
 type global_opts = { debug : bool }
 
 type virtle_opts = {
@@ -593,7 +576,4 @@ let main_cmd =
       rm_cmd;
     ]
 
-let () =
-  match run_internal_mdns_publisher () with
-  | Some code -> exit code
-  | None -> exit (Cmd.eval main_cmd)
+let () = exit (Cmd.eval main_cmd)

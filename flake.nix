@@ -88,11 +88,6 @@
 
         ash = pkgs.runCommand "${ashBuild.pname}-${ashBuild.version}" { } ''
           install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
-          install -Dm755 ${ashBuild}/bin/ash-mdns "$out/bin/ash-mdns"
-        '';
-
-        ashMdns = pkgs.runCommand "ash-mdns-${ashBuild.version}" { } ''
-          install -Dm755 ${ashBuild}/bin/ash-mdns "$out/bin/ash-mdns"
         '';
 
         agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
@@ -150,7 +145,6 @@
           default = ash;
           ash = ash;
           all = ashBuild;
-          "ash-mdns" = ashMdns;
           "agent-portal-cli" = agentPortalCli;
           "agent-portal-host" = agentPortalHost;
           "agent-portal-wrappers" = agentPortalWrappers;
@@ -167,11 +161,6 @@
           default = {
             type = "app";
             program = "${ash}/bin/ash";
-          };
-
-          "ash-mdns" = {
-            type = "app";
-            program = "${ashMdns}/bin/ash-mdns";
           };
 
           "nix-ext4-image" = {

@@ -125,14 +125,12 @@ VMs attach to the private host bridge `ash0` through
 `global.network_bridge` and `global.qemu_bridge_helper`. The host must create
 the bridge and authorize it in `/etc/qemu/bridge.conf`.
 
-Each running VM publishes `<name>.ash.local` over mDNS. Ash normalizes names
-that are not already lowercase DNS labels, discovers the guest IPv4 address
-through QGA, and starts the standalone `ash-mdns` responder as a transient
-guest systemd service. The shared Nix store exposes the responder beside `ash`;
-image-store guests can instead install `ash-mdns` in `PATH`. No Avahi, dnsmasq
-DNS, host resolver route, guest hostname, or guest NixOS module is required.
-The host must have `.local` mDNS resolution enabled, and multicast UDP 5353
-must pass over the VM bridge. `ash-mdns --help` documents manual standalone use.
+Ash passes `ash.mdns-host=<dns-label>` and `ash.mdns-mac=<stable-mac>` on the
+guest kernel command line. A compatible guest can use these values to publish
+`<dns-label>.ash.local`; the agent NixOS configuration uses Avahi for this.
+Names that are not already lowercase DNS labels receive an eight-hex digest
+suffix after normalization. The host must have `.local` mDNS resolution
+enabled, and multicast UDP 5353 must pass over the VM bridge.
 
 The default Nix store strategy is `shared`: Ash exposes the host `/nix/store`
 read-only through virtiofs. Pass `--ro-store-socket PATH` to reuse an existing
