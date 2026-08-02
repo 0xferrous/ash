@@ -1,7 +1,7 @@
 open Cmdliner
 open Ash
 
-let version = "0.1.5"
+let version = "0.1.6"
 
 type global_opts = { debug : bool }
 

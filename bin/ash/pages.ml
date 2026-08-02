@@ -940,7 +940,7 @@ let render_page ?base_href page =
 <p class="summary">%s - %s</p>
 %s
 <p class="generated">Generated from ash Cmdliner manpage metadata.</p>
-<div class="foot"><span>%s</span><span class="center">ash 0.1.5</span><span class="right">%s</span></div>
+<div class="foot"><span>%s</span><span class="center">ash 0.1.6</span><span class="right">%s</span></div>
 </body>
 </html>
 |}
@@ -974,7 +974,7 @@ li { margin: 0.35rem 0; }
 <div class="top"><span>ash(1)</span><span class="center">Ash Manual</span><span class="right">ash(1)</span></div>
 <h1>ash command pages</h1>
 <ul>%s</ul>
-<div class="foot"><span>ash(1)</span><span class="center">ash 0.1.5</span><span class="right">ash(1)</span></div>
+<div class="foot"><span>ash(1)</span><span class="center">ash 0.1.6</span><span class="right">ash(1)</span></div>
 </body>
 </html>
 |}
