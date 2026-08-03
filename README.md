@@ -131,7 +131,8 @@ matching `XDG_STATE_HOME` and `XDG_CACHE_HOME` namespaces. For example,
 
 See [`example_config.toml`](./example_config.toml) for the global and space
 mount formats. Set `global.memory` to configure VM memory in MiB; it defaults
-to 4096.
+to 4096. Set `global.kitty = true` to use `kitten ssh` by default for spawned
+and attached sessions; an explicit `--kitty` also enables it.
 
 VMs attach to the private host bridge `ash0` through
 `/run/wrappers/bin/qemu-bridge-helper`; override these with

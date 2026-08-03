@@ -169,8 +169,9 @@ let spawn =
            inheritance cycles are errors.";
         `P
           "The [global] table may set memory to the VM memory in MiB; the \
-           default is 4096. network_bridge and qemu_bridge_helper configure \
-           the host bridge used for VM networking.";
+           default is 4096. Set kitty = true to use kitten ssh by default for \
+           spawn and attach sessions. network_bridge and qemu_bridge_helper \
+           configure the host bridge used for VM networking.";
         `P
           "Each mount or file is HOST_PATH or HOST_PATH:GUEST_PATH. Host ~ \
            resolves against the host user's home; guest ~ resolves against the \
@@ -301,7 +302,8 @@ let spawn =
         `P
           "Pass --kitty to spawn to use kitten ssh instead of ssh for attached \
            spawn sessions and save that choice in ash-state.toml for later \
-           regenerated launches.";
+           regenerated launches. Set global.kitty = true in the Ash config to \
+           make Kitty the default without saving a per-VM override.";
         `P
           "Pass --waypipe to wrap the attached SSH session with Waypipe. The \
            guest must provide waypipe and xwayland-satellite in PATH, and the \
@@ -371,7 +373,8 @@ let attach =
            key through virtle guest-exec, and passes that identity to ssh.";
         `P
           "Pass --kitty to use kitten ssh instead of ssh for this attached \
-           session.";
+           session. The current config's global.kitty setting also provides \
+           the default for the VM.";
         `P
           "Pass --waypipe to forward guest Wayland and X11 applications to the \
            host compositor. Waypipe uses Ash's generated SSH wrapper, enables \

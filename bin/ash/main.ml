@@ -262,7 +262,9 @@ let kitty_flag =
   Arg.(
     value & flag
     & info [ "kitty" ]
-        ~doc:"Use `kitten ssh` instead of ssh for the attached session.")
+        ~doc:
+          "Use `kitten ssh` instead of ssh for the attached session. Also \
+           enabled by global.kitty in the Ash config.")
 
 let waypipe_flag =
   Arg.(

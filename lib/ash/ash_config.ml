@@ -39,6 +39,10 @@ let global_memory config =
   Otoml.find_opt config Otoml.get_integer [ "global"; "memory" ]
   |> Option.value ~default:4096
 
+let global_kitty config =
+  Otoml.find_opt config Otoml.get_boolean [ "global"; "kitty" ]
+  |> Option.value ~default:false
+
 let global_network_bridge config =
   Otoml.find_opt config Otoml.get_string [ "global"; "network_bridge" ]
   |> Option.value ~default:"ash0"

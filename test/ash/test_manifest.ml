@@ -275,6 +275,28 @@ memory = 8192
   let doc = parse_toml manifest in
   assert_int "configured memory" 8192 (find_int doc [ "machine"; "memory" ])
 
+let test_global_kitty_config () =
+  let root = temp_dir "ash-test-global-kitty" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config = parse_toml "[global]\nkitty = true\n" in
+  assert_bool "configured global Kitty default" true
+    (Ash_config.global_kitty config);
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"global-kitty" ()
+  in
+  let kitty_wrapper =
+    Filename.concat state "ash/global-kitty/ssh-with-space-mounts-kitty"
+  in
+  assert_equal "global Kitty selects kitten SSH wrapper" kitty_wrapper
+    (List.hd (find_strings (parse_toml manifest) [ "ssh"; "exec" ]));
+  assert_bool "Kitty defaults to disabled" false
+    (Ash_config.global_kitty (parse_toml "[global]\n"))
+
 let test_global_network_config () =
   let root = temp_dir "ash-test-global-network" in
   let home = Filename.concat root "home" in
@@ -1962,6 +1984,7 @@ let run name test =
 let () =
   run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
   run "global memory config" test_global_memory_config;
+  run "global Kitty config" test_global_kitty_config;
   run "global network config" test_global_network_config;
   run "no spaces selected by default" test_no_spaces_selected_by_default;
   run "image-backed Nix store manifest" test_image_backed_nix_store_manifest;

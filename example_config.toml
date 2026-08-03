@@ -6,6 +6,9 @@
 # VM memory in MiB. Defaults to 4096.
 # memory = 8192
 
+# Use `kitten ssh` by default for spawn and attach sessions.
+# kitty = true
+
 # Private host bridge used for VM networking. Defaults shown below.
 # network_bridge = "ash0"
 # qemu_bridge_helper = "/run/wrappers/bin/qemu-bridge-helper"

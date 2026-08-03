@@ -2565,6 +2565,7 @@ let render_resolved_manifest inputs =
   let resources =
     Ash_config.resources_for_spaces ~guest_user:user config spaces
   in
+  let kitty = inputs.kitty || Ash_config.global_kitty config in
   let ssh = inputs.ssh in
   let systemd_ssh_proxy = inputs.systemd_ssh_proxy in
   let ssh_options =
@@ -2683,15 +2684,13 @@ let render_resolved_manifest inputs =
       ~registration_path:boot.registration ~load_registration:true
       ~ssh_exec:kitty_ssh_exec ssh_mounts
   in
-  let selected_ssh_wrapper =
-    if inputs.kitty then kitty_wrapper else ssh_wrapper
-  in
+  let selected_ssh_wrapper = if kitty then kitty_wrapper else ssh_wrapper in
   let selected_ssh_exec =
     match inputs.waypipe with
     | Some waypipe ->
         [
           write_waypipe_ssh_wrapper ~waypipe ~ssh_wrapper:selected_ssh_wrapper
-            ~kitty:inputs.kitty ~name:inputs.name;
+            ~kitty ~name:inputs.name;
         ]
     | None -> [ selected_ssh_wrapper ]
   in
@@ -3024,6 +3023,8 @@ let render_manifest (inputs : manifest_inputs) =
                 (control_socket_path (virtle_state_dir inputs.name))))
         ());
   let ssh = Option.value inputs.ssh ~default:boot.ssh in
+  let kitty = inputs.kitty || Ash_config.global_kitty config in
+  if kitty then ignore (find_kitten ());
   let systemd_ssh_proxy =
     Option.value inputs.systemd_ssh_proxy ~default:boot.systemd_ssh_proxy
   in
@@ -3044,7 +3045,7 @@ let render_manifest (inputs : manifest_inputs) =
         nix_store_image_size_mib = store_image_size_mib;
         ro_store_socket = inputs.ro_store_socket;
         ssh;
-        kitty = inputs.kitty;
+        kitty;
         waypipe = inputs.waypipe;
         systemd_ssh_proxy;
         portal_host;
@@ -3288,8 +3289,10 @@ let select_stopped_vm_for_spawn ?name stopped =
       | [] -> Log.fatal "no stopped VM state to spawn; pass a NAME"
       | _ -> Log.fatal "multiple stopped VM states; pass a NAME")
 
+let config_default_kitty (inputs : manifest_inputs) =
+  Ash_config.load_for_spaces inputs.config_path [] |> Ash_config.global_kitty
+
 let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~verbose =
-  if kitty then ignore (find_kitten ());
   let saved = saved_inputs ?virtle ~name () in
   let inputs =
     {
@@ -3307,13 +3310,9 @@ let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
   let stopped = List.filter (fun vm -> vm.status = Stopped) vms in
   match select_running_vm ?name running with
   | Some vm ->
-      let kitty, waypipe =
-        if not (kitty || waypipe) then (false, None)
-        else
-          let saved = load_ash_config ~name:vm.name in
-          ( kitty || saved.kitty,
-            if waypipe then Some (find_waypipe ()) else saved.waypipe )
-      in
+      let saved = load_ash_config ~name:vm.name in
+      let kitty = kitty || saved.kitty || config_default_kitty saved in
+      let waypipe = if waypipe then Some (find_waypipe ()) else saved.waypipe in
       attach_running ?virtle ~name:vm.name
         ~path:(Filename.concat vm.path "virtle.toml")
         ~kitty ~waypipe ~verbose ()
