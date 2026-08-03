@@ -837,7 +837,7 @@ let list_cached_images () =
   let base = nix_store_image_cache_dir () in
   if not (Sys.file_exists base) then []
   else
-    Sys.readdir base |> Array.to_list |> List.sort String.compare
+    Sys.readdir base |> Array.to_list
     |> List.filter_map (fun name ->
         if not (Filename.check_suffix name ".img") then None
         else
@@ -865,25 +865,101 @@ let list_cached_images () =
                   marker;
                 }
           with Unix.Unix_error _ | Sys_error _ -> None)
+    |> List.sort (fun left right ->
+        match Float.compare right.modified left.modified with
+        | 0 -> String.compare left.cache_key right.cache_key
+        | order -> order)
 
 let short_cache_key key =
   if String.length key <= 12 then key else String.sub key 0 12
 
-let rm_item = function
+let cached_image_closure image =
+  image.toplevel
+  |> Option.map Filename.basename
+  |> Option.value ~default:"unknown-closure"
+
+let rm_item_label = function
   | Vm_state vm ->
-      Printf.sprintf "%-6s %-32s %-8s %10s  %s" "VM" vm.name
-        (status_string vm.status) (human_size vm.disk_bytes) vm.path
+      Printf.sprintf "%-32s %10s  %s" vm.name (human_size vm.disk_bytes)
+        (format_time vm.modified)
   | Cached_image image ->
-      let closure =
-        image.toplevel
-        |> Option.map Filename.basename
-        |> Option.value ~default:"unknown-closure"
-      in
-      Printf.sprintf "%-6s %-32s %-8s %10s  %s  %s" "CACHE"
+      Printf.sprintf "%-12s %10s  %s  %s"
         (short_cache_key image.cache_key)
-        "cached"
         (human_size image.disk_bytes)
-        closure image.path
+        (format_time image.modified)
+        (cached_image_closure image)
+
+let rm_item_detail = function
+  | Vm_state vm -> vm.path
+  | Cached_image image ->
+      Printf.sprintf "%s  %s" (cached_image_closure image) image.path
+
+let rm_item_disk_bytes = function
+  | Vm_state vm -> vm.disk_bytes
+  | Cached_image image -> image.disk_bytes
+
+let rm_selection_summary targets =
+  targets
+  |> List.fold_left
+       (fun total target -> Int64.add total (rm_item_disk_bytes target))
+       0L
+  |> human_size
+
+let vm_target = function
+  | Vm_state vm -> vm
+  | Cached_image _ -> invalid_arg "expected VM removal target"
+
+let cache_target = function
+  | Cached_image image -> image
+  | Vm_state _ -> invalid_arg "expected cached image removal target"
+
+let compare_then compare tie left right =
+  match compare left right with 0 -> tie left right | order -> order
+
+let vm_sort compare left right =
+  compare_then compare
+    (fun left right -> String.compare left.name right.name)
+    (vm_target left) (vm_target right)
+
+let cache_sort compare left right =
+  compare_then compare
+    (fun left right -> String.compare left.cache_key right.cache_key)
+    (cache_target left) (cache_target right)
+
+let vm_rm_sorts : rm_target Tui.sort array =
+  [|
+    {
+      name = "name";
+      compare = vm_sort (fun left right -> String.compare left.name right.name);
+    };
+    {
+      name = "modified";
+      compare =
+        vm_sort (fun left right -> Float.compare left.modified right.modified);
+    };
+    {
+      name = "size";
+      compare =
+        vm_sort (fun left right ->
+            Int64.compare left.disk_bytes right.disk_bytes);
+    };
+  |]
+
+let cache_rm_sorts : rm_target Tui.sort array =
+  [|
+    {
+      name = "modified";
+      compare =
+        cache_sort (fun left right ->
+            Float.compare left.modified right.modified);
+    };
+    {
+      name = "size";
+      compare =
+        cache_sort (fun left right ->
+            Int64.compare left.disk_bytes right.disk_bytes);
+    };
+  |]
 
 let attach_item vm =
   Printf.sprintf "%-32s %-8s %5s  %s" vm.name (status_string vm.status)
@@ -895,40 +971,66 @@ let remove_cached_image image =
   Util.remove_tree ~force:true image.marker
 
 let rm_vms () =
-  let targets =
-    (list_vms ()
+  let vm_targets =
+    list_vms ()
     |> List.filter_map (fun vm ->
-        if vm.status = Stopped then Some (Vm_state vm) else None))
-    @ (list_cached_images () |> List.map (fun image -> Cached_image image))
+        if vm.status = Stopped then Some (Vm_state vm) else None)
     |> Array.of_list
   in
-  if Array.length targets = 0 then
+  let cache_targets =
+    list_cached_images ()
+    |> List.map (fun image -> Cached_image image)
+    |> Array.of_list
+  in
+  if Array.length vm_targets + Array.length cache_targets = 0 then
     Log.info "no stopped VM states or cached images found"
   else
-    let items = Array.map rm_item targets in
+    let panes : rm_target Tui.pane array =
+      [|
+        {
+          title = "VM states";
+          columns = Printf.sprintf "%-32s %10s  %-19s" "NAME" "SIZE" "MODIFIED";
+          items = vm_targets;
+          label = rm_item_label;
+          detail = rm_item_detail;
+          selection_summary = rm_selection_summary;
+          sorts = vm_rm_sorts;
+          initial_descending = false;
+        };
+        {
+          title = "Cached images";
+          columns =
+            Printf.sprintf "%-12s %10s  %-19s  %s" "KEY" "SIZE" "MODIFIED"
+              "CLOSURE";
+          items = cache_targets;
+          label = rm_item_label;
+          detail = rm_item_detail;
+          selection_summary = rm_selection_summary;
+          sorts = cache_rm_sorts;
+          initial_descending = true;
+        };
+      |]
+    in
     let selected =
-      Tui.multi_select ~title:"Select VM states and cached images to delete"
+      Tui.select_panes ~title:"Select VM states and cached images to delete"
         ~help:
-          "↑/k ↓/j move  space select  a select all/none  enter delete  q \
-           cancel"
-        ~items
+          "←/→/tab pane  ↑/k ↓/j move  space select  a all/none  s sort  r \
+           reverse  enter delete  q cancel"
+        ~panes
     in
     match selected with
     | [] -> Log.info "no VM states or cached images selected"
     | selected ->
         selected
-        |> List.iter (fun idx ->
-            match targets.(idx) with
-            | Vm_state vm ->
-                Log.info "deleting VM state %s (%s)" vm.name vm.path;
-                Util.remove_tree ~force:true vm.path
-            | Cached_image image -> remove_cached_image image)
+        |> List.iter (function
+          | Vm_state vm ->
+              Log.info "deleting VM state %s (%s)" vm.name vm.path;
+              Util.remove_tree ~force:true vm.path
+          | Cached_image image -> remove_cached_image image)
 
 let attach_picker vms =
-  let items = Array.map attach_item vms in
-  Tui.single_select ~title:"Select VM to attach"
-    ~help:"↑/k ↓/j move  enter attach  q cancel" ~items
-  |> Option.map (fun idx -> vms.(idx))
+  Tui.select_one ~title:"Select VM to attach"
+    ~help:"↑/k ↓/j move  enter attach  q cancel" ~items:vms ~label:attach_item
 
 let manifest_string doc path =
   match Otoml.find_opt doc Otoml.get_string path with

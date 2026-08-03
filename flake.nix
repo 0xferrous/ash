@@ -79,7 +79,9 @@
             ocamlPackages.base64
             ocamlPackages.cmdliner
             ocamlPackages.msgpck
+            ocamlPackages.notty-community
             ocamlPackages.otoml
+            ocamlPackages.uutf
             ocamlPackages.yojson
           ];
 
@@ -198,8 +200,10 @@
             ocamlPackages.dune_3
             ocamlPackages.ocamlformat
             ocamlPackages.msgpck
+            ocamlPackages.notty-community
             ocamlPackages.otoml
             ocamlPackages.utop
+            ocamlPackages.uutf
             pkgs.e2fsprogs
             pkgs.waypipe
           ];

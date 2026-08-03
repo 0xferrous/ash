@@ -12,6 +12,15 @@ and this project uses its existing Git tags for version history.
 - `ash attach --waypipe` display forwarding for Wayland and X11 applications, including composition with `--kitty` and persisted attach settings.
 - Experimental filtered D-Bus/vsock proxy for forwarding host desktop notifications into VMs.
 
+### Changed
+
+- Replaced the hand-written interactive selector terminal handling with Notty, including resize-aware list viewports and safe Unicode rendering.
+- Redesigned `ash rm` with separate VM-state and cached-image panes, labeled columns, independent selection with per-pane selected-size totals, selectable sort fields and directions, and modification times for cache entries.
+
+### Fixed
+
+- Preserved the selected sort direction when cycling between sort fields in `ash rm`.
+
 ### Documentation
 
 - Host-backed guest FileChooser portal design covering Documents portal integration, filesystem exposure, security boundaries, and implementation phases.

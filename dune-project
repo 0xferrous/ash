@@ -21,6 +21,8 @@
   base64
   cmdliner
   msgpck
+  notty-community
   otoml
   threads
+  uutf
   yojson))

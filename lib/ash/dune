@@ -1,3 +1,12 @@
 (library
  (name ash)
- (libraries agent_portal image_import_core unix base64 otoml yojson))
+ (libraries
+  agent_portal
+  image_import_core
+  unix
+  base64
+  notty-community
+  notty-community.unix
+  otoml
+  uutf
+  yojson))

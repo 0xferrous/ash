@@ -503,6 +503,10 @@ let test_xdg_cache_home () =
         (Virtle.nix_store_image_cache_dir ()))
 
 let test_cached_images_for_removal () =
+  assert_equal "cached image sort fields" "modified,size"
+    (Virtle.cache_rm_sorts |> Array.to_list
+    |> List.map (fun (sort : Virtle.rm_target Tui.sort) -> sort.name)
+    |> String.concat ",");
   let root = temp_dir "ash-test-cached-images" in
   let old_cache = Sys.getenv_opt "XDG_CACHE_HOME" in
   let old_name = Sys.getenv_opt "ASH_NAME" in
@@ -527,15 +531,26 @@ let test_cached_images_for_removal () =
         "4\n/nix/store/first-system\n128\n/nix/store/registration\n";
       write_file second "second image";
       write_file (second ^ ".toplevel") "invalid marker\n";
+      Unix.utimes first 100. 100.;
+      Unix.utimes second 200. 200.;
       write_file (Filename.concat cache "ignored.txt") "not an image";
       match Virtle.list_cached_images () with
-      | [ first_info; second_info ] ->
-          assert_equal "first cached image key"
-            "11111111111111111111111111111111" first_info.cache_key;
+      | [ second_info; first_info ] ->
+          assert_equal "cached images sorted newest first"
+            "22222222222222222222222222222222,11111111111111111111111111111111"
+            (String.concat "," [ second_info.cache_key; first_info.cache_key ]);
           assert_equal "first cached image toplevel" "/nix/store/first-system"
             (Option.value first_info.toplevel ~default:"");
           assert_bool "invalid cached image marker" true
             (Option.is_none second_info.toplevel);
+          assert_string_contains "cached image removal item modification time"
+            (Virtle.rm_item_label (Virtle.Cached_image first_info))
+            (Virtle.format_time first_info.modified);
+          assert_equal "cached image selected-size summary"
+            (Virtle.human_size
+               (Int64.add first_info.disk_bytes second_info.disk_bytes))
+            (Virtle.rm_selection_summary
+               [ Virtle.Cached_image first_info; Cached_image second_info ]);
           Virtle.remove_cached_image first_info;
           assert_bool "cached image removed" false (Sys.file_exists first);
           assert_bool "cached image marker removed" false
@@ -1741,6 +1756,54 @@ let test_mdns_dns_labels () =
   assert_bool "normalization avoids collisions" true
     (Util.dns_label "Work_VM" <> Util.dns_label "work-vm")
 
+let test_tui_text_sanitization () =
+  assert_equal "valid UTF-8 is preserved" "café" (Tui.sanitize_text "café");
+  assert_equal "invalid and control characters are replaced" "��"
+    (Tui.sanitize_text "\255\n")
+
+let test_tui_visible_range () =
+  let start, stop = Tui.visible_range ~length:20 ~cursor:0 ~height:10 in
+  assert_int "initial TUI viewport start" 0 start;
+  assert_int "initial TUI viewport stop" 6 stop;
+  let start, stop = Tui.visible_range ~length:20 ~cursor:9 ~height:10 in
+  assert_int "scrolled TUI viewport start" 4 start;
+  assert_int "scrolled TUI viewport stop" 10 stop;
+  let start, stop = Tui.visible_range ~length:3 ~cursor:2 ~height:20 in
+  assert_int "short TUI viewport start" 0 start;
+  assert_int "short TUI viewport stop" 3 stop
+
+let test_tui_pane_sorting_preserves_selection () =
+  let pane : string Tui.pane =
+    {
+      title = "items";
+      columns = "VALUE";
+      items = [| "b"; "aaa"; "cc" |];
+      label = Fun.id;
+      detail = Fun.id;
+      selection_summary = (fun selected -> string_of_int (List.length selected));
+      sorts =
+        [|
+          {
+            name = "length";
+            compare =
+              (fun left right ->
+                Int.compare (String.length left) (String.length right));
+          };
+          { name = "name"; compare = String.compare };
+        |];
+      initial_descending = true;
+    }
+  in
+  let state = Tui.make_pane_state pane in
+  assert_equal "descending pane sort" "aaa" state.rows.(0).item;
+  state.rows.(0).selected <- true;
+  Tui.next_sort state;
+  assert_bool "cycling sort preserves direction" true state.descending;
+  state.descending <- false;
+  Tui.sort_pane state;
+  assert_equal "ascending pane sort" "aaa" state.rows.(0).item;
+  assert_bool "selection follows sorted item" true state.rows.(0).selected
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -1813,4 +1876,8 @@ let () =
   run "scp arguments" test_scp_args;
   run "remove Nix store state" test_remove_nix_store_state;
   run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts;
+  run "TUI text sanitization" test_tui_text_sanitization;
+  run "TUI visible range" test_tui_visible_range;
+  run "TUI pane sorting preserves selection"
+    test_tui_pane_sorting_preserves_selection;
   run "mDNS DNS labels" test_mdns_dns_labels
