@@ -418,19 +418,21 @@ let ls =
   {
     file = "ash-ls";
     command = Some "ls";
-    summary = "list ash VM state directories";
+    summary = "list ash VM state directories or cached images";
     man =
       [
         `S Manpage.s_description;
         `P
           "Lists ash VM state directories under XDG_STATE_HOME/ASH_NAME when \
            XDG_STATE_HOME is set, or ~/.local/state/ASH_NAME otherwise. \
-           ASH_NAME defaults to ash.";
+           ASH_NAME defaults to ash. With --cache, lists cached image-backed \
+           Nix store bases instead.";
         `S "OUTPUT";
         `P
-          "Shows VM name, status, private IPv4 address and vsock CID when \
-           running, active SSH connection and PTY counts, host disk usage, \
-           apparent virtual size, last modification time, and state path.";
+          "The default output shows VM name, status, private IPv4 address and \
+           vsock CID when running, active SSH connection and PTY counts, host \
+           disk usage, apparent virtual size, last modification time, and \
+           state path.";
         `P
           "IP is the first global IPv4 address on the guest interface whose \
            MAC matches the stable address generated for the VM name. SSH \
@@ -442,8 +444,14 @@ let ls =
           "DISK is host storage currently used. VIRTUAL is apparent size, \
            including sparse files such as persist.img. Both exclude ash's \
            hotmounts staging directory.";
+        `P
+          "With --cache, output shows each cache key, host disk usage, sparse \
+           virtual size, modification time, logical VM reference count, \
+           closure name, and image path. Cache entries remain safe to delete \
+           because VM store images are independent clones.";
         `S Manpage.s_examples;
         `Pre "ash ls";
+        `Pre "ash ls --cache";
       ];
   }
 

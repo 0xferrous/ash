@@ -596,6 +596,7 @@ type vm_info = {
 type cached_image_info = {
   cache_key : string;
   toplevel : string option;
+  references : string list;
   disk_bytes : int64;
   apparent_bytes : int64;
   modified : float;
@@ -833,7 +834,30 @@ let print_vm_list () =
         (format_time vm.modified) vm.path)
     vms
 
-let list_cached_images () =
+let cache_reference_table vms =
+  let references = Hashtbl.create (List.length vms) in
+  List.iter
+    (fun (vm : vm_info) ->
+      let marker = Filename.concat vm.path "nix-store.img.toplevel" in
+      try
+        match Nix.read_image_store_marker marker with
+        | Some (Nix.Current prepared) ->
+            let key =
+              Nix.image_store_cache_key ~toplevel:prepared.toplevel
+                ~registration:prepared.registration
+            in
+            let names =
+              Hashtbl.find_opt references key |> Option.value ~default:[]
+            in
+            Hashtbl.replace references key (vm.name :: names)
+        | Some Nix.Legacy | None -> ()
+      with Sys_error _ | Unix.Unix_error _ -> ())
+    vms;
+  references
+
+let list_cached_images ?vms () =
+  let vms = Option.value vms ~default:(list_vms ()) in
+  let references = cache_reference_table vms in
   let base = nix_store_image_cache_dir () in
   if not (Sys.file_exists base) then []
   else
@@ -858,6 +882,10 @@ let list_cached_images () =
                 {
                   cache_key = Filename.chop_suffix name ".img";
                   toplevel;
+                  references =
+                    Hashtbl.find_opt references
+                      (Filename.chop_suffix name ".img")
+                    |> Option.value ~default:[] |> List.rev;
                   disk_bytes = disk_usage path;
                   apparent_bytes = stat.st_size;
                   modified = stat.st_mtime;
@@ -878,21 +906,51 @@ let cached_image_closure image =
   |> Option.map Filename.basename
   |> Option.value ~default:"unknown-closure"
 
+let cached_image_list_header =
+  Printf.sprintf "%-32s %10s %10s  %-19s %4s  %-32s %s" "KEY" "DISK" "VIRTUAL"
+    "MODIFIED" "REFS" "CLOSURE" "PATH"
+
+let cached_image_list_item image =
+  Printf.sprintf "%-32s %10s %10s  %-19s %4d  %-32s %s" image.cache_key
+    (human_size image.disk_bytes)
+    (human_size image.apparent_bytes)
+    (format_time image.modified)
+    (List.length image.references)
+    (cached_image_closure image)
+    image.path
+
+let print_cached_image_list () =
+  Printf.printf "%s\n" cached_image_list_header;
+  list_cached_images ()
+  |> List.iter (fun image ->
+      Printf.printf "%s\n" (cached_image_list_item image))
+
 let rm_item_label = function
   | Vm_state vm ->
       Printf.sprintf "%-32s %10s  %s" vm.name (human_size vm.disk_bytes)
         (format_time vm.modified)
   | Cached_image image ->
-      Printf.sprintf "%-12s %10s  %s  %s"
+      Printf.sprintf "%-12s %10s  %s  %4d  %s"
         (short_cache_key image.cache_key)
         (human_size image.disk_bytes)
         (format_time image.modified)
+        (List.length image.references)
         (cached_image_closure image)
 
 let rm_item_detail = function
   | Vm_state vm -> vm.path
   | Cached_image image ->
-      Printf.sprintf "%s  %s" (cached_image_closure image) image.path
+      let references =
+        match image.references with
+        | [] -> "no VM references"
+        | names ->
+            Printf.sprintf "%d VM reference%s: %s" (List.length names)
+              (if List.length names = 1 then "" else "s")
+              (String.concat ", " names)
+      in
+      Printf.sprintf "%s  %s  %s" references
+        (cached_image_closure image)
+        image.path
 
 let rm_item_disk_bytes = function
   | Vm_state vm -> vm.disk_bytes
@@ -971,14 +1029,15 @@ let remove_cached_image image =
   Util.remove_tree ~force:true image.marker
 
 let rm_vms () =
+  let vms = list_vms () in
   let vm_targets =
-    list_vms ()
+    vms
     |> List.filter_map (fun vm ->
         if vm.status = Stopped then Some (Vm_state vm) else None)
     |> Array.of_list
   in
   let cache_targets =
-    list_cached_images ()
+    list_cached_images ~vms ()
     |> List.map (fun image -> Cached_image image)
     |> Array.of_list
   in
@@ -1000,8 +1059,8 @@ let rm_vms () =
         {
           title = "Cached images";
           columns =
-            Printf.sprintf "%-12s %10s  %-19s  %s" "KEY" "SIZE" "MODIFIED"
-              "CLOSURE";
+            Printf.sprintf "%-12s %10s  %-19s  %4s  %s" "KEY" "SIZE" "MODIFIED"
+              "REFS" "CLOSURE";
           items = cache_targets;
           label = rm_item_label;
           detail = rm_item_detail;

@@ -108,6 +108,7 @@ Inspect and list VM state, or interactively delete stopped VM state and cached s
 ```sh
 ash inspect work
 ash ls
+ash ls --cache
 ash rm
 ```
 

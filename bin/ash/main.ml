@@ -26,9 +26,9 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     ~config_path:config ?flake ~override_inputs ~spaces ~kernel_serial
     ~mount_cwd ~ephemeral ~attach ~keep ~kitty ~waypipe ~verbose:opts.verbose ()
 
-let list_vms global =
+let list_vms global cache =
   Log.set_debug global.debug;
-  Virtle.print_vm_list ()
+  if cache then Virtle.print_cached_image_list () else Virtle.print_vm_list ()
 
 let inspect_vm global json name =
   Log.set_debug global.debug;
@@ -333,12 +333,18 @@ let resume_cmd =
     Term.(
       const resume $ virtle_opts_arg $ resume_name_arg $ attach_flag $ keep_flag)
 
+let ls_cache_flag =
+  Arg.(
+    value & flag
+    & info [ "cache" ] ~doc:"List cached image-backed Nix store bases.")
+
 let ls_man = Pages.ls.man
 
 let ls_cmd =
   Cmd.v
-    (Cmd.info "ls" ~doc:"list ash VM state directories" ~man:ls_man)
-    Term.(const list_vms $ global_opts_arg)
+    (Cmd.info "ls" ~doc:"list ash VM state directories or cached images"
+       ~man:ls_man)
+    Term.(const list_vms $ global_opts_arg $ ls_cache_flag)
 
 let inspect_name_arg =
   Arg.(

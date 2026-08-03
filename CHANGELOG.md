@@ -9,13 +9,14 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- `ash ls --cache` for a non-interactive inventory of cached image-backed Nix store bases, including sizes, modification times, VM reference counts, closures, and paths.
 - `ash attach --waypipe` display forwarding for Wayland and X11 applications, including composition with `--kitty` and persisted attach settings.
 - Experimental filtered D-Bus/vsock proxy for forwarding host desktop notifications into VMs.
 
 ### Changed
 
 - Replaced the hand-written interactive selector terminal handling with Notty, including resize-aware list viewports and safe Unicode rendering.
-- Redesigned `ash rm` with separate VM-state and cached-image panes, labeled columns, independent selection with per-pane selected-size totals, selectable sort fields and directions, and modification times for cache entries.
+- Redesigned `ash rm` with separate VM-state and cached-image panes, labeled columns, independent selection with per-pane selected-size totals, selectable sort fields and directions, and cache modification times and VM reference counts.
 
 ### Fixed
 

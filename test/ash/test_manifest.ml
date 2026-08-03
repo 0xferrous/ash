@@ -509,20 +509,25 @@ let test_cached_images_for_removal () =
     |> String.concat ",");
   let root = temp_dir "ash-test-cached-images" in
   let old_cache = Sys.getenv_opt "XDG_CACHE_HOME" in
+  let old_state = Sys.getenv_opt "XDG_STATE_HOME" in
   let old_name = Sys.getenv_opt "ASH_NAME" in
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "XDG_CACHE_HOME" (Option.value old_cache ~default:"");
+      Unix.putenv "XDG_STATE_HOME" (Option.value old_state ~default:"");
       Unix.putenv "ASH_NAME" (Option.value old_name ~default:"");
       Util.remove_tree ~force:true root)
     (fun () ->
       Unix.putenv "XDG_CACHE_HOME" root;
+      Unix.putenv "XDG_STATE_HOME" root;
       Unix.putenv "ASH_NAME" "test-ash";
       let cache = Virtle.nix_store_image_cache_dir () in
       mkdir_p cache;
-      let first =
-        Filename.concat cache "11111111111111111111111111111111.img"
+      let first_key =
+        Nix.image_store_cache_key ~toplevel:"/nix/store/first-system"
+          ~registration:"/nix/store/registration"
       in
+      let first = Filename.concat cache (first_key ^ ".img") in
       let second =
         Filename.concat cache "22222222222222222222222222222222.img"
       in
@@ -533,16 +538,34 @@ let test_cached_images_for_removal () =
       write_file (second ^ ".toplevel") "invalid marker\n";
       Unix.utimes first 100. 100.;
       Unix.utimes second 200. 200.;
+      let vm_dir = Filename.concat (Virtle.state_base_dir ()) "vm-one" in
+      mkdir_p vm_dir;
+      write_file (Filename.concat vm_dir "virtle.toml") "";
+      write_file
+        (Filename.concat vm_dir "nix-store.img.toplevel")
+        "4\n/nix/store/first-system\n256\n/nix/store/registration\n";
       write_file (Filename.concat cache "ignored.txt") "not an image";
       match Virtle.list_cached_images () with
       | [ second_info; first_info ] ->
           assert_equal "cached images sorted newest first"
-            "22222222222222222222222222222222,11111111111111111111111111111111"
+            (String.concat ","
+               [ "22222222222222222222222222222222"; first_key ])
             (String.concat "," [ second_info.cache_key; first_info.cache_key ]);
           assert_equal "first cached image toplevel" "/nix/store/first-system"
             (Option.value first_info.toplevel ~default:"");
           assert_bool "invalid cached image marker" true
             (Option.is_none second_info.toplevel);
+          assert_equal "matching VM cache references" "vm-one"
+            (String.concat "," first_info.references);
+          assert_int "invalid cache has no VM references" 0
+            (List.length second_info.references);
+          assert_string_contains "cache list header reference column"
+            Virtle.cached_image_list_header "REFS";
+          let cache_row = Virtle.cached_image_list_item first_info in
+          assert_string_contains "cache list row key" cache_row first_key;
+          assert_string_contains "cache list row closure" cache_row
+            "first-system";
+          assert_string_contains "cache list row path" cache_row first;
           assert_string_contains "cached image removal item modification time"
             (Virtle.rm_item_label (Virtle.Cached_image first_info))
             (Virtle.format_time first_info.modified);
