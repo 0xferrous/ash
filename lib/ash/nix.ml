@@ -69,8 +69,8 @@ type image_store_marker =
 let image_store_marker_content ~toplevel ~size_mib ~registration =
   Printf.sprintf "4\n%s\n%d\n%s\n" toplevel size_mib registration
 
-let image_store_cache_key ~toplevel ~registration =
-  Printf.sprintf "base-image-v1\n%s\n%s\n" toplevel registration
+let image_store_cache_key ~toplevel =
+  Printf.sprintf "base-image-v2\n%s\n" toplevel
   |> Digest.string |> Digest.to_hex
 
 let read_image_store_marker path =

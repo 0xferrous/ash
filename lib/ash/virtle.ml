@@ -172,8 +172,8 @@ let nix_store_image_cache_dir () =
     (Filename.concat (Util.cache_home_dir ()) (Util.application_name ()))
     "nix-store-images"
 
-let nix_store_image_cache_path ~toplevel ~registration =
-  let key = Nix.image_store_cache_key ~toplevel ~registration in
+let nix_store_image_cache_path ~toplevel =
+  let key = Nix.image_store_cache_key ~toplevel in
   Filename.concat (nix_store_image_cache_dir ()) (key ^ ".img")
 
 let network_mac name =
@@ -842,10 +842,7 @@ let cache_reference_table vms =
       try
         match Nix.read_image_store_marker marker with
         | Some (Nix.Current prepared) ->
-            let key =
-              Nix.image_store_cache_key ~toplevel:prepared.toplevel
-                ~registration:prepared.registration
-            in
+            let key = Nix.image_store_cache_key ~toplevel:prepared.toplevel in
             let names =
               Hashtbl.find_opt references key |> Option.value ~default:[]
             in
@@ -3012,9 +3009,7 @@ let render_manifest (inputs : manifest_inputs) =
   | Ash_config.Image ->
       Nix.prepare_image_store ~nix_executable:boot.nix ~toplevel:boot.toplevel
         ~registration:boot.registration
-        ~cache_image:
-          (nix_store_image_cache_path ~toplevel:boot.toplevel
-             ~registration:boot.registration)
+        ~cache_image:(nix_store_image_cache_path ~toplevel:boot.toplevel)
         ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
         ~size_mib:store_image_size_mib
         ~resize_allowed:

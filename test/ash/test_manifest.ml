@@ -547,8 +547,11 @@ let test_cached_images_for_removal () =
       mkdir_p cache;
       let first_key =
         Nix.image_store_cache_key ~toplevel:"/nix/store/first-system"
-          ~registration:"/nix/store/registration"
       in
+      assert_equal "cache key contains only format and toplevel"
+        (Digest.string "base-image-v2\n/nix/store/first-system\n"
+        |> Digest.to_hex)
+        first_key;
       let first = Filename.concat cache (first_key ^ ".img") in
       let second =
         Filename.concat cache "22222222222222222222222222222222.img"

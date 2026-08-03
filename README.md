@@ -171,8 +171,8 @@ The overrides are saved as `nix_store_strategy` and
 `nix_store_image_size_mib` in that VM's `ash-state.toml` and reused by later
 spawns and regeneration.
 
-Ash caches one closure-sized ext4 base image for each selected closure and
-generated registration store object under `$XDG_CACHE_HOME/$ASH_NAME/nix-store-images` (or
+Ash caches one closure-sized ext4 base image for each selected toplevel under
+`$XDG_CACHE_HOME/$ASH_NAME/nix-store-images` (or
 `~/.cache/$ASH_NAME/nix-store-images`, with `ASH_NAME` defaulting to `ash`). New VM state uses a sparse reflink/CoW clone
 of that base image when the host filesystem supports it, then grows the clone
 to the VM's configured capacity. Different image-size settings therefore reuse
