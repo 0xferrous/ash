@@ -595,13 +595,14 @@ type vm_info = {
 
 type cached_image_info = {
   cache_key : string;
+  metadata : Image_metadata.t option;
   toplevel : string option;
   references : string list;
   disk_bytes : int64;
   apparent_bytes : int64;
   modified : float;
   path : string;
-  marker : string;
+  sidecar : string;
 }
 
 type rm_target = Vm_state of vm_info | Cached_image of cached_image_info
@@ -838,16 +839,19 @@ let cache_reference_table vms =
   let references = Hashtbl.create (List.length vms) in
   List.iter
     (fun (vm : vm_info) ->
-      let marker = Filename.concat vm.path "nix-store.img.toplevel" in
+      let image = Filename.concat vm.path "nix-store.img" in
       try
-        match Nix.read_image_store_marker marker with
-        | Some (Nix.Current prepared) ->
+        match Image_metadata.read image with
+        | Image_metadata.Current prepared when prepared.kind = Image_metadata.Vm
+          ->
             let key = Nix.image_store_cache_key ~toplevel:prepared.toplevel in
             let names =
               Hashtbl.find_opt references key |> Option.value ~default:[]
             in
             Hashtbl.replace references key (vm.name :: names)
-        | Some Nix.Legacy | None -> ()
+        | Image_metadata.Current _ | Image_metadata.Legacy
+        | Image_metadata.Invalid | Image_metadata.Missing ->
+            ()
       with Sys_error _ | Unix.Unix_error _ -> ())
     vms;
   references
@@ -863,22 +867,30 @@ let list_cached_images ?vms () =
         if not (Filename.check_suffix name ".img") then None
         else
           let path = Filename.concat base name in
-          let marker = path ^ ".toplevel" in
+          let sidecar = Image_metadata.sidecar_path path in
           try
             let stat = Unix.LargeFile.stat path in
             if stat.st_kind <> Unix.S_REG then None
             else
-              let toplevel =
+              let metadata =
                 try
-                  match Nix.read_image_store_marker marker with
-                  | Some (Nix.Current prepared) -> Some prepared.toplevel
-                  | Some Nix.Legacy | None -> None
+                  match Image_metadata.read path with
+                  | Image_metadata.Current metadata
+                    when metadata.kind = Image_metadata.Cache ->
+                      Some metadata
+                  | Image_metadata.Current _ | Image_metadata.Legacy
+                  | Image_metadata.Invalid | Image_metadata.Missing ->
+                      None
                 with Sys_error _ | Unix.Unix_error _ -> None
               in
               Some
                 {
                   cache_key = Filename.chop_suffix name ".img";
-                  toplevel;
+                  metadata;
+                  toplevel =
+                    Option.map
+                      (fun metadata -> metadata.Image_metadata.toplevel)
+                      metadata;
                   references =
                     Hashtbl.find_opt references
                       (Filename.chop_suffix name ".img")
@@ -887,7 +899,7 @@ let list_cached_images ?vms () =
                   apparent_bytes = stat.st_size;
                   modified = stat.st_mtime;
                   path;
-                  marker;
+                  sidecar;
                 }
           with Unix.Unix_error _ | Sys_error _ -> None)
     |> List.sort (fun left right ->
@@ -1023,7 +1035,8 @@ let attach_item vm =
 let remove_cached_image image =
   Log.info "deleting cached Nix store image %s (%s)" image.cache_key image.path;
   Util.remove_tree ~force:true image.path;
-  Util.remove_tree ~force:true image.marker
+  Util.remove_tree ~force:true image.sidecar;
+  Util.remove_tree ~force:true (Image_metadata.legacy_path image.path)
 
 let rm_vms () =
   let vms = list_vms () in
@@ -3007,8 +3020,15 @@ let render_manifest (inputs : manifest_inputs) =
       Nix.prepare_lower_store ~nix_store:boot.nix_store
         ~registration:boot.registration ~state:lower_store_state
   | Ash_config.Image ->
+      let origin =
+        Nix.resolve_image_origin ~nix:boot.nix
+          ~override_inputs:inputs.override_inputs ~target
+      in
       Nix.prepare_image_store ~nix_executable:boot.nix ~toplevel:boot.toplevel
         ~registration:boot.registration
+        ~registration_sha256:boot.registration_sha256
+        ~closure_nar_size_bytes:boot.closure_nar_size_bytes
+        ~closure_path_count:boot.closure_path_count ~origin
         ~cache_image:(nix_store_image_cache_path ~toplevel:boot.toplevel)
         ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
         ~size_mib:store_image_size_mib
@@ -3428,7 +3448,7 @@ let remove_nix_store_state ~name =
   Log.debug "removing Nix store state for VM %s" name;
   Util.remove_tree ~force:true shares;
   (try Unix.unlink image with Unix.Unix_error _ -> ());
-  try Unix.unlink (image ^ ".toplevel") with Unix.Unix_error _ -> ()
+  Image_metadata.remove image
 
 let regenerate ?virtle ~name () =
   let name = Util.name_slug name in

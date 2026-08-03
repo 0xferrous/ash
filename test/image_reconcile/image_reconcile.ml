@@ -81,13 +81,16 @@ let () =
       assert_image_path fs "second toplevel" second_toplevel;
       assert_image_path fs "second registration output"
         (Filename.dirname second_registration));
-  let expected_marker =
-    Nix.image_store_marker_content ~toplevel:second_toplevel ~size_mib
-      ~registration:second_registration
-  in
-  let actual_marker =
-    In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all
-  in
-  if actual_marker <> expected_marker then
-    fail "unexpected reconciled image marker: %S" actual_marker;
+  (match Image_metadata.read image with
+  | Image_metadata.Current metadata ->
+      if metadata.toplevel <> second_toplevel then
+        fail "unexpected reconciled image toplevel: %S" metadata.toplevel;
+      if metadata.registration <> second_registration then
+        fail "unexpected reconciled registration: %S" metadata.registration;
+      if
+        metadata.virtual_size_bytes
+        <> Int64.mul (Int64.of_int size_mib) 1048576L
+      then fail "unexpected reconciled image size metadata"
+  | Image_metadata.Legacy | Image_metadata.Invalid | Image_metadata.Missing ->
+      fail "reconciled image has no valid TOML metadata");
   check_image image

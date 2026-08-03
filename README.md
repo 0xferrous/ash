@@ -176,7 +176,12 @@ Ash caches one closure-sized ext4 base image for each selected toplevel under
 `~/.cache/$ASH_NAME/nix-store-images`, with `ASH_NAME` defaulting to `ash`). New VM state uses a sparse reflink/CoW clone
 of that base image when the host filesystem supports it, then grows the clone
 to the VM's configured capacity. Different image-size settings therefore reuse
-the same cached closure without rebuilding or fully copying the store image. The writable clone is labeled `nix-store` and does not expose the
+the same cached closure without rebuilding or fully copying the store image.
+Each cached base has a neighboring `<cache-key>.toml` sidecar, and each writable
+VM image has `nix-store.toml`. These record the exact closure and registration,
+closure sizes, creation and last-use timestamps, cache lineage, and deduplicated
+flake URL, lock hash, and effective input-override provenance. Provenance is
+informational and does not affect cache identity. The writable clone is labeled `nix-store` and does not expose the
 host store to the guest. Ash appends `ash.nix-store=image` or
 `ash.nix-store=shared` to the kernel command line so guests can select the
 matching stage-1 mount layout. Image-capable guests must mount the `nix-store`

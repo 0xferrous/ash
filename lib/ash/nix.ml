@@ -6,6 +6,9 @@ type boot = {
   kernel_params : string list;
   toplevel : string;
   registration : string;
+  registration_sha256 : string;
+  closure_nar_size_bytes : int64;
+  closure_path_count : int;
   nix : string;
   nix_store : string;
   ssh : string;
@@ -62,28 +65,79 @@ let uri_encode value =
 let local_store_uri ~real ~state =
   Printf.sprintf "local?real=%s&state=%s" (uri_encode real) (uri_encode state)
 
-type image_store_marker =
-  | Current of { toplevel : string; size_mib : int; registration : string }
-  | Legacy
-
-let image_store_marker_content ~toplevel ~size_mib ~registration =
-  Printf.sprintf "4\n%s\n%d\n%s\n" toplevel size_mib registration
-
 let image_store_cache_key ~toplevel =
-  Printf.sprintf "base-image-v2\n%s\n" toplevel
+  Printf.sprintf "base-image-v3\n%s\n" toplevel
   |> Digest.string |> Digest.to_hex
 
-let read_image_store_marker path =
-  match
-    In_channel.with_open_text path In_channel.input_all
-    |> String.split_on_char '\n'
-  with
-  | "4" :: toplevel :: size :: registration :: _ -> (
-      match int_of_string_opt size with
-      | Some size_mib -> Some (Current { toplevel; size_mib; registration })
-      | None -> None)
-  | _toplevel :: _size :: _ -> Some Legacy
-  | _ -> None
+let image_store_size_mib metadata =
+  Int64.(to_int (div metadata.Image_metadata.virtual_size_bytes 1048576L))
+
+let image_store_metadata ?registration_sha256 ?closure_nar_size_bytes
+    ?closure_path_count ?origin ?cache_key ?configured_size_mib
+    ?initialized_from_cache_key ~kind ~toplevel ~registration ~size_mib () =
+  let now = Image_metadata.timestamp () in
+  {
+    Image_metadata.kind;
+    image_format = Image_metadata.current_image_format;
+    cache_key;
+    toplevel;
+    registration;
+    registration_sha256;
+    created_at = now;
+    last_used_at = now;
+    updated_at =
+      (match kind with
+      | Image_metadata.Cache -> None
+      | Image_metadata.Vm -> Some now);
+    virtual_size_bytes = Int64.mul (Int64.of_int size_mib) 1048576L;
+    closure_nar_size_bytes;
+    closure_path_count;
+    configured_size_mib;
+    initialized_from_cache_key;
+    origins = Option.to_list origin;
+  }
+
+let refresh_image_store_metadata ?registration_sha256 ?closure_nar_size_bytes
+    ?closure_path_count ?origin metadata ~toplevel ~registration ~size_mib =
+  let now = Image_metadata.timestamp () in
+  let same_closure = metadata.Image_metadata.toplevel = toplevel in
+  {
+    metadata with
+    toplevel;
+    registration;
+    registration_sha256 =
+      (match registration_sha256 with
+      | Some _ as value -> value
+      | None when same_closure -> metadata.registration_sha256
+      | None -> None);
+    last_used_at = now;
+    updated_at =
+      (match metadata.kind with
+      | Image_metadata.Cache -> None
+      | Image_metadata.Vm -> Some now);
+    virtual_size_bytes = Int64.mul (Int64.of_int size_mib) 1048576L;
+    closure_nar_size_bytes =
+      (match closure_nar_size_bytes with
+      | Some _ as value -> value
+      | None when same_closure -> metadata.closure_nar_size_bytes
+      | None -> None);
+    closure_path_count =
+      (match closure_path_count with
+      | Some _ as value -> value
+      | None when same_closure -> metadata.closure_path_count
+      | None -> None);
+    configured_size_mib =
+      (match metadata.kind with
+      | Image_metadata.Cache -> None
+      | Image_metadata.Vm -> Some size_mib);
+    origins =
+      (match origin with
+      | None -> if same_closure then metadata.origins else []
+      | Some origin ->
+          if same_closure then
+            Image_metadata.merge_origin metadata.origins origin
+          else [ origin ]);
+  }
 
 let image_import_reporter =
   Image_import_core.Reporter.make
@@ -126,9 +180,7 @@ let scan_image_store ?nix_executable ?store_paths ~toplevel ~registration () =
   in
   (entries, metrics)
 
-let write_image_store ~toplevel ~registration ~image ~size_mib ~bytes ~entries
-    ~metrics =
-  let marker = image ^ ".toplevel" in
+let write_image_store ~image ~bytes ~entries ~metrics ~metadata =
   let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
   Util.ensure_dir (Filename.dirname image);
   (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
@@ -138,69 +190,82 @@ let write_image_store ~toplevel ~registration ~image ~size_mib ~bytes ~entries
     Image_import_core.Metrics.log ~prefix:"ash image store"
       ~reporter:image_import_reporter metrics;
     Unix.rename temporary_image image;
-    Util.atomic_write_file marker
-      (image_store_marker_content ~toplevel ~size_mib ~registration)
+    Image_metadata.write image metadata;
+    try Unix.unlink (Image_metadata.legacy_path image)
+    with Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   with exn ->
     (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
     raise exn
 
 let create_image_store ?nix_executable ?store_paths ~toplevel ~registration
-    ~image ~size_mib ~bytes () =
+    ~image ~bytes ~metadata () =
   let entries, metrics =
     scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
   in
-  write_image_store ~toplevel ~registration ~image ~size_mib ~bytes ~entries
-    ~metrics
+  write_image_store ~image ~bytes ~entries ~metrics ~metadata
 
 let bytes_of_mib size_mib = Int64.mul (Int64.of_int size_mib) 1048576L
 let mib_of_bytes bytes = Int64.(to_int (div (add bytes 1048575L) 1048576L))
 
-let current_cached_image ~toplevel ~registration ~image =
-  let marker = image ^ ".toplevel" in
+let current_cached_image ~cache_key ~toplevel ~registration ~image =
   if not (Sys.file_exists image) then None
   else
-    match
-      if Sys.file_exists marker then read_image_store_marker marker else None
-    with
-    | Some (Current prepared)
-      when prepared.toplevel = toplevel
+    match Image_metadata.read image with
+    | Image_metadata.Current prepared
+      when prepared.kind = Image_metadata.Cache
+           && prepared.cache_key = Some cache_key
+           && prepared.toplevel = toplevel
            && prepared.registration = registration
            && Int64.equal (Unix.LargeFile.stat image).st_size
-                (bytes_of_mib prepared.size_mib) ->
-        Some prepared.size_mib
-    | Some (Current _) | Some Legacy | None -> None
+                prepared.virtual_size_bytes ->
+        Some prepared
+    | Image_metadata.Current _ | Image_metadata.Legacy | Image_metadata.Invalid
+    | Image_metadata.Missing ->
+        None
 
-let prepare_cached_image ?nix_executable ?store_paths ~toplevel ~registration
-    ~image () =
-  match current_cached_image ~toplevel ~registration ~image with
-  | Some size_mib ->
+let prepare_cached_image ?nix_executable ?store_paths ?registration_sha256
+    ?closure_nar_size_bytes ?closure_path_count ?origin ~cache_key ~toplevel
+    ~registration ~image () =
+  match current_cached_image ~cache_key ~toplevel ~registration ~image with
+  | Some prepared ->
+      let size_mib = image_store_size_mib prepared in
+      let prepared =
+        refresh_image_store_metadata ?registration_sha256
+          ?closure_nar_size_bytes ?closure_path_count ?origin prepared ~toplevel
+          ~registration ~size_mib
+      in
+      Image_metadata.write image prepared;
       Log.debug "reusing cached %d MiB image-backed Nix store at %s" size_mib
         image;
       size_mib
   | None ->
       (try Unix.unlink image with Unix.Unix_error _ -> ());
-      (try Unix.unlink (image ^ ".toplevel") with Unix.Unix_error _ -> ());
+      Image_metadata.remove image;
       let entries, metrics =
         scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
       in
       let bytes = Image_import_core.Import.estimate_image_size entries in
       let size_mib = mib_of_bytes bytes in
+      let metadata =
+        image_store_metadata ?registration_sha256 ?closure_nar_size_bytes
+          ?closure_path_count ?origin ~cache_key ~kind:Image_metadata.Cache
+          ~toplevel ~registration ~size_mib ()
+      in
       Log.info "building cached %d MiB image-backed Nix store at %s" size_mib
         image;
-      write_image_store ~toplevel ~registration ~image ~size_mib ~bytes ~entries
-        ~metrics;
+      write_image_store ~image ~bytes ~entries ~metrics ~metadata;
       Unix.chmod image 0o444;
       Log.info "cached %d MiB image-backed Nix store at %s" size_mib image;
       size_mib
 
-let clone_cached_image ?copy_executable ?resize2fs ~cache_image ~cache_size_mib
-    ~toplevel ~registration ~image ~size_mib () =
+let clone_cached_image ?copy_executable ?resize2fs ?registration_sha256
+    ?closure_nar_size_bytes ?closure_path_count ?origin ~cache_key ~cache_image
+    ~cache_size_mib ~toplevel ~registration ~image ~size_mib () =
   if cache_size_mib > size_mib then
     Log.fatal
       "configured Nix store image size is too small for this closure\n\n\
        Increase image_size_mib to at least %d."
       cache_size_mib;
-  let marker = image ^ ".toplevel" in
   let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
   Util.ensure_dir (Filename.dirname image);
   (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
@@ -220,8 +285,13 @@ let clone_cached_image ?copy_executable ?resize2fs ~cache_image ~cache_size_mib
           (Printf.sprintf "failed to grow cached Nix store image clone %s"
              temporary_image));
     Unix.rename temporary_image image;
-    Util.atomic_write_file marker
-      (image_store_marker_content ~toplevel ~size_mib ~registration);
+    image_store_metadata ?registration_sha256 ?closure_nar_size_bytes
+      ?closure_path_count ?origin ~configured_size_mib:size_mib
+      ~initialized_from_cache_key:cache_key ~kind:Image_metadata.Vm ~toplevel
+      ~registration ~size_mib ()
+    |> Image_metadata.write image;
+    (try Unix.unlink (Image_metadata.legacy_path image)
+     with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
     Log.info "cloned cached image-backed Nix store into VM state at %s" image
   with exn ->
     (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
@@ -254,7 +324,7 @@ let grow_existing_image ?resize2fs ~image ~from_size_mib ~size_mib () =
       Log.fatal "failed to grow Nix store image %s with resize2fs" image)
 
 let append_image_store ?nix_executable ?store_paths ~toplevel ~registration
-    ~image ~size_mib () =
+    ~image ~metadata () =
   let entries, metrics =
     scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
   in
@@ -262,91 +332,104 @@ let append_image_store ?nix_executable ?store_paths ~toplevel ~registration
     ~path:image ~metrics entries;
   Image_import_core.Metrics.log ~prefix:"ash image store update"
     ~reporter:image_import_reporter metrics;
-  Util.atomic_write_file (image ^ ".toplevel")
-    (image_store_marker_content ~toplevel ~size_mib ~registration)
+  Image_metadata.write image metadata
 
 let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
-    ?copy_executable ?cache_image ?(resize_allowed = true) ~toplevel
-    ~registration ~image ~size_mib () =
-  let marker = image ^ ".toplevel" in
+    ?copy_executable ?cache_image ?registration_sha256 ?closure_nar_size_bytes
+    ?closure_path_count ?origin ?(resize_allowed = true) ~toplevel ~registration
+    ~image ~size_mib () =
   let bytes = bytes_of_mib size_mib in
   if Sys.file_exists image then
-    match
-      if Sys.file_exists marker then read_image_store_marker marker else None
-    with
-    | Some Legacy ->
+    match Image_metadata.read image with
+    | Image_metadata.Legacy ->
         Log.fatal
-          "Nix store image %s uses a legacy filesystem layout or inode policy\n\n\
+          "Nix store image %s uses legacy .toplevel metadata\n\n\
            Run `ash rebuild-db` for this VM to recreate it with the current \
-           image layout."
+           image format."
           image
-    | Some (Current prepared)
-      when prepared.toplevel = toplevel
+    | Image_metadata.Current prepared
+      when prepared.kind = Image_metadata.Vm
+           && prepared.toplevel = toplevel
            && prepared.registration = registration
-           && prepared.size_mib = size_mib ->
+           && image_store_size_mib prepared = size_mib ->
         if not (Int64.equal (Unix.LargeFile.stat image).st_size bytes) then
           Log.fatal
             "Nix store image %s has an unexpected backing-file size\n\n\
              Run `ash rebuild-db` for this VM to recreate the image."
             image;
+        refresh_image_store_metadata ?registration_sha256
+          ?closure_nar_size_bytes ?closure_path_count ?origin prepared ~toplevel
+          ~registration ~size_mib
+        |> Image_metadata.write image;
         Log.debug
           "image-backed Nix store already has the requested size: %d MiB at %s"
           size_mib image
-    | Some (Current prepared)
-      when prepared.toplevel = toplevel
+    | Image_metadata.Current prepared
+      when prepared.kind = Image_metadata.Vm
+           && prepared.toplevel = toplevel
            && prepared.registration = registration
-           && prepared.size_mib < size_mib ->
+           && image_store_size_mib prepared < size_mib ->
         if not resize_allowed then
           Log.fatal "VM is running; stop it before growing its Nix store image";
+        let prepared_size_mib = image_store_size_mib prepared in
         if
           not
             (Int64.equal (Unix.LargeFile.stat image).st_size
-               (bytes_of_mib prepared.size_mib))
+               prepared.virtual_size_bytes)
         then
           Log.fatal
             "Nix store image %s has an unexpected backing-file size\n\n\
              Run `ash rebuild-db` for this VM to recreate the image."
             image;
         check_existing_image ?e2fsck image;
-        grow_existing_image ?resize2fs ~image ~from_size_mib:prepared.size_mib
+        grow_existing_image ?resize2fs ~image ~from_size_mib:prepared_size_mib
           ~size_mib ();
-        Util.atomic_write_file marker
-          (image_store_marker_content ~toplevel ~size_mib ~registration);
+        refresh_image_store_metadata ?registration_sha256
+          ?closure_nar_size_bytes ?closure_path_count ?origin prepared ~toplevel
+          ~registration ~size_mib
+        |> Image_metadata.write image;
         Log.info "grew image-backed Nix store to %d MiB at %s" size_mib image
-    | Some (Current prepared)
-      when prepared.toplevel = toplevel
+    | Image_metadata.Current prepared
+      when prepared.kind = Image_metadata.Vm
+           && prepared.toplevel = toplevel
            && prepared.registration = registration
-           && prepared.size_mib > size_mib ->
-        let prepared_size = prepared.size_mib in
+           && image_store_size_mib prepared > size_mib ->
         Log.fatal
           "shrinking the Nix store image is not supported\n\n\
            Increase global.nix_store.image_size_mib to at least %d, or run \
            `ash rebuild-db` to recreate the image at the smaller size."
-          prepared_size
-    | Some (Current prepared) -> (
+          (image_store_size_mib prepared)
+    | Image_metadata.Current prepared when prepared.kind = Image_metadata.Vm
+      -> (
         if not resize_allowed then
           Log.fatal
             "VM is running; stop it before updating its image-backed Nix store";
-        if prepared.size_mib > size_mib then
+        let prepared_size_mib = image_store_size_mib prepared in
+        if prepared_size_mib > size_mib then
           Log.fatal
             "shrinking the Nix store image is not supported\n\n\
              Increase global.nix_store.image_size_mib to at least %d."
-            prepared.size_mib;
+            prepared_size_mib;
         if
           not
             (Int64.equal (Unix.LargeFile.stat image).st_size
-               (bytes_of_mib prepared.size_mib))
+               prepared.virtual_size_bytes)
         then
           Log.fatal
             "Nix store image %s has an unexpected backing-file size\n\n\
              Run `ash rebuild-db` for this VM to recreate the image."
             image;
         check_existing_image ?e2fsck image;
-        grow_existing_image ?resize2fs ~image ~from_size_mib:prepared.size_mib
+        grow_existing_image ?resize2fs ~image ~from_size_mib:prepared_size_mib
           ~size_mib ();
+        let metadata =
+          refresh_image_store_metadata ?registration_sha256
+            ?closure_nar_size_bytes ?closure_path_count ?origin prepared
+            ~toplevel ~registration ~size_mib
+        in
         try
           append_image_store ?nix_executable ?store_paths ~toplevel
-            ~registration ~image ~size_mib ();
+            ~registration ~image ~metadata ();
           Log.info
             "updated image-backed Nix store from %s to %s while retaining \
              existing store paths"
@@ -357,25 +440,35 @@ let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
              Increase image_size_mib and retry; already imported immutable \
              store paths will be reused."
             image (Printexc.to_string exn))
-    | None ->
+    | Image_metadata.Current _ | Image_metadata.Invalid | Image_metadata.Missing
+      ->
         Log.fatal
-          "Nix store image %s has no valid closure marker\n\n\
+          "Nix store image %s has no valid TOML metadata sidecar\n\n\
            Run `ash rebuild-db` for this VM to recreate the image."
           image
   else
     try
       match cache_image with
       | None ->
+          let metadata =
+            image_store_metadata ?registration_sha256 ?closure_nar_size_bytes
+              ?closure_path_count ?origin ~configured_size_mib:size_mib
+              ~kind:Image_metadata.Vm ~toplevel ~registration ~size_mib ()
+          in
           create_image_store ?nix_executable ?store_paths ~toplevel
-            ~registration ~image ~size_mib ~bytes ();
+            ~registration ~image ~bytes ~metadata ();
           Log.info "created %d MiB image-backed Nix store at %s" size_mib image
       | Some cache_image ->
+          let cache_key = image_store_cache_key ~toplevel in
           let cache_size_mib =
-            prepare_cached_image ?nix_executable ?store_paths ~toplevel
-              ~registration ~image:cache_image ()
+            prepare_cached_image ?nix_executable ?store_paths
+              ?registration_sha256 ?closure_nar_size_bytes ?closure_path_count
+              ?origin ~cache_key ~toplevel ~registration ~image:cache_image ()
           in
-          clone_cached_image ?copy_executable ?resize2fs ~cache_image
-            ~cache_size_mib ~toplevel ~registration ~image ~size_mib ()
+          clone_cached_image ?copy_executable ?resize2fs ?registration_sha256
+            ?closure_nar_size_bytes ?closure_path_count ?origin ~cache_key
+            ~cache_image ~cache_size_mib ~toplevel ~registration ~image
+            ~size_mib ()
     with exn ->
       Log.fatal "failed to prepare image-backed Nix store %s: %s" image
         (Printexc.to_string exn)
@@ -552,7 +645,7 @@ let query_closure_info ~nix ~toplevel =
        Error: %s"
       toplevel message
 
-let add_registration_to_store ~nix_store ~out_link content =
+let add_registration_to_store ~nix ~nix_store ~out_link content =
   let temporary_dir = Filename.temp_file "ash-registration" "" in
   Sys.remove temporary_dir;
   Unix.mkdir temporary_dir 0o700;
@@ -561,6 +654,19 @@ let add_registration_to_store ~nix_store ~out_link content =
     (fun () ->
       let source = Filename.concat temporary_dir "registration" in
       Util.write_file source content;
+      let registration_sha256 =
+        Util.command_output
+          (String.concat " "
+             [
+               Util.shell_quote nix;
+               "hash";
+               "file";
+               "--type";
+               "sha256";
+               "--sri";
+               Util.shell_quote source;
+             ])
+      in
       let registration =
         Util.command_output
           (String.concat " "
@@ -587,12 +693,18 @@ let add_registration_to_store ~nix_store ~out_link content =
       if not (Sys.file_exists registration) then
         Log.fatal "native Nix registration was not added to the store: %s"
           registration;
-      registration)
+      (registration, registration_sha256))
 
 let resolve_registration ~nix ~nix_store ~toplevel ~out_link =
   let infos = query_closure_info ~nix ~toplevel in
   let content = registration_content infos in
-  add_registration_to_store ~nix_store ~out_link content
+  let registration, registration_sha256 =
+    add_registration_to_store ~nix ~nix_store ~out_link content
+  in
+  let closure_nar_size_bytes =
+    List.fold_left (fun total info -> Int64.add total info.nar_size) 0L infos
+  in
+  (registration, registration_sha256, closure_nar_size_bytes, List.length infos)
 
 let normalize_flake_path path = Util.expand_home path
 
@@ -654,6 +766,103 @@ let resolve_target ~flake =
       Log.fatal
         "--flake must include a host fragment\n\n\
          Hint: use --flake FLAKE#HOST, for example ../my-nix#agent."
+
+let rec canonical_json = function
+  | `Assoc fields ->
+      `Assoc
+        (fields
+        |> List.map (fun (name, value) -> (name, canonical_json value))
+        |> List.sort (fun (left, _) (right, _) -> String.compare left right))
+  | `List values -> `List (List.map canonical_json values)
+  | value -> value
+
+let sha256_text ~nix text =
+  let path = Filename.temp_file "ash-hash" ".txt" in
+  Fun.protect
+    ~finally:(fun () -> try Unix.unlink path with Unix.Unix_error _ -> ())
+    (fun () ->
+      Util.write_file path text;
+      Util.command_output
+        (String.concat " "
+           [
+             Util.shell_quote nix;
+             "hash";
+             "file";
+             "--type";
+             "sha256";
+             "--sri";
+             Util.shell_quote path;
+           ]))
+
+let sanitize_flake_url value =
+  match String.index_opt value ':' with
+  | Some colon
+    when colon + 2 < String.length value && String.sub value colon 3 = "://"
+    -> (
+      let authority_start = colon + 3 in
+      let authority_end =
+        let rec find index =
+          if index >= String.length value then String.length value
+          else
+            match value.[index] with
+            | '/' | '?' | '#' -> index
+            | _ -> find (index + 1)
+        in
+        find authority_start
+      in
+      let authority =
+        String.sub value authority_start (authority_end - authority_start)
+      in
+      match String.rindex_opt authority '@' with
+      | None -> value
+      | Some at ->
+          String.sub value 0 authority_start
+          ^ String.sub authority (at + 1) (String.length authority - at - 1)
+          ^ String.sub value authority_end (String.length value - authority_end)
+      )
+  | _ -> value
+
+let effective_override_inputs override_inputs =
+  List.fold_left
+    (fun effective (name, flake) ->
+      (name, flake) :: List.remove_assoc name effective)
+    [] override_inputs
+  |> List.rev
+
+let resolve_image_origin ~nix ~override_inputs ~target =
+  let flake_url, _ = split_flake_ref target.attr in
+  let command =
+    String.concat " "
+      ([ Util.shell_quote nix; "flake"; "metadata" ]
+      @ (override_inputs
+        |> List.concat_map (fun (name, flake) ->
+            [
+              "--override-input"; Util.shell_quote name; Util.shell_quote flake;
+            ]))
+      @ [ "--no-write-lock-file"; "--json"; Util.shell_quote flake_url ])
+  in
+  let metadata = Util.command_output command |> Yojson.Safe.from_string in
+  let locks =
+    match metadata with
+    | `Assoc fields ->
+        Option.value (List.assoc_opt "locks" fields) ~default:`Null
+    | _ -> `Null
+  in
+  let lock_hash =
+    canonical_json locks |> Yojson.Safe.to_string |> sha256_text ~nix
+  in
+  let now = Image_metadata.timestamp () in
+  {
+    Image_metadata.flake_url = storage_flake_ref flake_url |> sanitize_flake_url;
+    nixos_configuration = target.host_name;
+    lock_hash;
+    override_inputs =
+      effective_override_inputs override_inputs
+      |> List.map (fun (name, flake) ->
+          (name, storage_flake_ref flake |> sanitize_flake_url));
+    first_seen_at = now;
+    last_seen_at = now;
+  }
 
 let attr_segment segment =
   let b = Buffer.create (String.length segment + 8) in
@@ -725,7 +934,10 @@ let resolve_boot ~override_inputs ~target ~gcroots_dir =
   in
   let nix = Filename.concat nix_package "bin/nix" in
   let nix_store = Filename.concat nix_package "bin/nix-store" in
-  let registration =
+  let ( registration,
+        registration_sha256,
+        closure_nar_size_bytes,
+        closure_path_count ) =
     resolve_registration ~nix ~nix_store ~toplevel
       ~out_link:(root "registration")
   in
@@ -756,6 +968,9 @@ let resolve_boot ~override_inputs ~target ~gcroots_dir =
     kernel_params;
     toplevel;
     registration;
+    registration_sha256;
+    closure_nar_size_bytes;
+    closure_path_count;
     nix;
     nix_store;
     ssh = Filename.concat openssh "bin/ssh";

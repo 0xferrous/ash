@@ -99,6 +99,13 @@ let assert_int label expected actual =
   if expected <> actual then
     fail (Printf.sprintf "%s: expected %d, got %d" label expected actual)
 
+let current_image_metadata image =
+  match Image_metadata.read image with
+  | Image_metadata.Current metadata -> metadata
+  | Image_metadata.Legacy -> fail "expected current image metadata, got legacy"
+  | Image_metadata.Invalid -> fail "expected valid image metadata"
+  | Image_metadata.Missing -> fail "expected image metadata"
+
 let assert_string_contains label value needle =
   let value_len = String.length value in
   let needle_len = String.length needle in
@@ -117,6 +124,9 @@ let test_boot : Nix.boot =
     kernel_params = [ "init=/nix/store/system/init"; "root=fstab" ];
     toplevel = "/nix/store/system";
     registration = "/nix/store/closure-info/registration";
+    registration_sha256 = "sha256-test";
+    closure_nar_size_bytes = 1234L;
+    closure_path_count = 2;
     nix = "/nix/store/nix/bin/nix";
     nix_store = "/nix/store/nix/bin/nix-store";
     ssh = "/nix/store/openssh/bin/ssh";
@@ -549,16 +559,29 @@ let test_cached_images_for_removal () =
         Nix.image_store_cache_key ~toplevel:"/nix/store/first-system"
       in
       assert_equal "cache key contains only format and toplevel"
-        (Digest.string "base-image-v2\n/nix/store/first-system\n"
+        (Digest.string "base-image-v3\n/nix/store/first-system\n"
         |> Digest.to_hex)
         first_key;
       let first = Filename.concat cache (first_key ^ ".img") in
       let second =
         Filename.concat cache "22222222222222222222222222222222.img"
       in
+      let origin : Image_metadata.origin =
+        {
+          flake_url = "github:example/system";
+          nixos_configuration = "first";
+          lock_hash = "sha256-lock";
+          override_inputs = [ ("nixpkgs", "github:NixOS/nixpkgs") ];
+          first_seen_at = "2026-08-03T08:00:00Z";
+          last_seen_at = "2026-08-03T09:00:00Z";
+        }
+      in
       write_file first "first image";
-      write_file (first ^ ".toplevel")
-        "4\n/nix/store/first-system\n128\n/nix/store/registration\n";
+      Nix.image_store_metadata ~origin ~cache_key:first_key
+        ~closure_nar_size_bytes:1234L ~closure_path_count:2
+        ~kind:Image_metadata.Cache ~toplevel:"/nix/store/first-system"
+        ~registration:"/nix/store/registration" ~size_mib:128 ()
+      |> Image_metadata.write first;
       write_file second "second image";
       write_file (second ^ ".toplevel") "invalid marker\n";
       Unix.utimes first 100. 100.;
@@ -566,9 +589,11 @@ let test_cached_images_for_removal () =
       let vm_dir = Filename.concat (Virtle.state_base_dir ()) "vm-one" in
       mkdir_p vm_dir;
       write_file (Filename.concat vm_dir "virtle.toml") "";
-      write_file
-        (Filename.concat vm_dir "nix-store.img.toplevel")
-        "4\n/nix/store/first-system\n256\n/nix/store/registration\n";
+      let vm_image = Filename.concat vm_dir "nix-store.img" in
+      Nix.image_store_metadata ~origin ~configured_size_mib:256
+        ~kind:Image_metadata.Vm ~toplevel:"/nix/store/first-system"
+        ~registration:"/nix/store/registration" ~size_mib:256 ()
+      |> Image_metadata.write vm_image;
       write_file (Filename.concat cache "ignored.txt") "not an image";
       match Virtle.list_cached_images () with
       | [ second_info; first_info ] ->
@@ -578,7 +603,7 @@ let test_cached_images_for_removal () =
             (String.concat "," [ second_info.cache_key; first_info.cache_key ]);
           assert_equal "first cached image toplevel" "/nix/store/first-system"
             (Option.value first_info.toplevel ~default:"");
-          assert_bool "invalid cached image marker" true
+          assert_bool "legacy cached image metadata" true
             (Option.is_none second_info.toplevel);
           assert_equal "matching VM cache references" "vm-one"
             (String.concat "," first_info.references);
@@ -601,8 +626,8 @@ let test_cached_images_for_removal () =
                [ Virtle.Cached_image first_info; Cached_image second_info ]);
           Virtle.remove_cached_image first_info;
           assert_bool "cached image removed" false (Sys.file_exists first);
-          assert_bool "cached image marker removed" false
-            (Sys.file_exists (first ^ ".toplevel"));
+          assert_bool "cached image sidecar removed" false
+            (Sys.file_exists (Image_metadata.sidecar_path first));
           assert_bool "other cached image retained" true
             (Sys.file_exists second)
       | images ->
@@ -1678,6 +1703,50 @@ let test_native_closure_info () =
   assert_equal "native closure query result" "/nix/store/a"
     (List.hd queried : Nix.closure_path_info).path
 
+let test_image_origin_metadata () =
+  let root = temp_dir "ash-test-image-origin" in
+  let nix = Filename.concat root "nix" in
+  let args = Filename.concat root "args" in
+  write_file nix
+    "#!/bin/sh\n\
+     printf '%s\\n' \"$*\" >> \"$ASH_TEST_ORIGIN_ARGS\"\n\
+     if [ \"$1\" = flake ]; then\n\
+     printf '%s\\n' '{\"locks\":{\"root\":\"root\",\"nodes\":{}}}'\n\
+     else\n\
+     printf '%s\\n' 'sha256-lock'\n\
+     fi\n";
+  Unix.chmod nix 0o755;
+  Unix.putenv "ASH_TEST_ORIGIN_ARGS" args;
+  let target : Nix.target =
+    {
+      attr = "https://user:secret@example.com/system#nixosConfigurations.agent";
+      host_name = "agent";
+    }
+  in
+  let origin =
+    Nix.resolve_image_origin ~nix
+      ~override_inputs:
+        [
+          ("nixpkgs", "github:NixOS/nixpkgs/old");
+          ("nixpkgs", "https://token@example.com/nixpkgs?rev=123");
+        ]
+      ~target
+  in
+  assert_equal "origin strips flake credentials" "https://example.com/system"
+    origin.flake_url;
+  assert_equal "origin configuration" "agent" origin.nixos_configuration;
+  assert_equal "origin lock hash" "sha256-lock" origin.lock_hash;
+  assert_equal "origin strips override credentials"
+    "https://example.com/nixpkgs?rev=123"
+    (List.assoc "nixpkgs" origin.override_inputs);
+  assert_int "origin stores only effective overrides" 1
+    (List.length origin.override_inputs);
+  let calls = In_channel.with_open_text args In_channel.input_lines in
+  assert_int "origin resolves metadata and hashes the lock graph" 2
+    (List.length calls);
+  assert_string_contains "origin applies effective overrides" (List.hd calls)
+    "--override-input nixpkgs"
+
 let test_prepare_lower_store () =
   let root = temp_dir "ash-test-lower-store" in
   let bin = Filename.concat root "bin" in
@@ -1714,6 +1783,7 @@ let test_prepare_image_store () =
   let registration_source = Filename.concat sources "closure-info" in
   let image = Filename.concat root "nix-store.img" in
   let second_image = Filename.concat root "second/nix-store.img" in
+  let third_image = Filename.concat root "third/nix-store.img" in
   let cache_image = Filename.concat root "cache/nix-store.img" in
   let nix_args = Filename.concat root "nix-args" in
   let copy_args = Filename.concat root "copy-args" in
@@ -1748,17 +1818,51 @@ let test_prepare_image_store () =
   Unix.putenv "ASH_TEST_REGISTRATION_SOURCE" registration_source;
   Unix.putenv "ASH_TEST_E2FSCK_ARGS" e2fsck_args;
   Unix.putenv "ASH_TEST_RESIZE2FS_ARGS" resize2fs_args;
+  let origin : Image_metadata.origin =
+    {
+      flake_url = "path:/flake";
+      nixos_configuration = "system";
+      lock_hash = "sha256-lock";
+      override_inputs = [ ("nixpkgs", "github:NixOS/nixpkgs") ];
+      first_seen_at = "2026-08-03T08:00:00Z";
+      last_seen_at = "2026-08-03T08:00:00Z";
+    }
+  in
   Nix.prepare_image_store ~nix_executable:nix ~copy_executable:copy ~resize2fs
     ~toplevel:"/nix/store/system"
-    ~registration:"/nix/store/closure-info/registration" ~cache_image ~image
-    ~size_mib:256 ();
+    ~registration:"/nix/store/closure-info/registration"
+    ~registration_sha256:"sha256-registration" ~closure_nar_size_bytes:42L
+    ~closure_path_count:2 ~origin ~cache_image ~image ~size_mib:256 ();
   assert_bool "cached image store created" true (Sys.file_exists cache_image);
   assert_bool "image store created" true (Sys.file_exists image);
-  assert_bool "image store marker created" true
+  assert_bool "image store TOML sidecar created" true
+    (Sys.file_exists (Image_metadata.sidecar_path image));
+  let image_metadata = current_image_metadata image in
+  assert_equal "image metadata toplevel" "/nix/store/system"
+    image_metadata.toplevel;
+  assert_equal "image metadata registration hash" "sha256-registration"
+    (Option.value image_metadata.registration_sha256 ~default:"");
+  assert_int "image metadata configured size" 256
+    (Option.value image_metadata.configured_size_mib ~default:0);
+  assert_int "image metadata origin count" 1
+    (List.length image_metadata.origins);
+  let sidecar_content =
+    In_channel.with_open_text
+      (Image_metadata.sidecar_path image)
+      In_channel.input_all
+  in
+  assert_string_contains "image metadata uses TOML origin tables"
+    sidecar_content "[[origins]]";
+  assert_string_contains "image metadata stores override provenance"
+    sidecar_content "[[origins.override_inputs]]";
+  let cache_metadata = current_image_metadata cache_image in
+  assert_equal "cache metadata key"
+    (Nix.image_store_cache_key ~toplevel:"/nix/store/system")
+    (Option.value cache_metadata.cache_key ~default:"");
+  assert_int "cache metadata closure path count" 2
+    (Option.value cache_metadata.closure_path_count ~default:0);
+  assert_bool "legacy image marker is not written" false
     (Sys.file_exists (image ^ ".toplevel"));
-  assert_equal "image store marker"
-    "4\n/nix/store/system\n256\n/nix/store/closure-info/registration\n"
-    (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
   assert_bool "image store is correctly sized" true
     (Int64.equal (Unix.LargeFile.stat image).st_size 268435456L);
   assert_bool "cached base is smaller than writable VM image" true
@@ -1789,12 +1893,31 @@ let test_prepare_image_store () =
     registration_contents;
   Nix.prepare_image_store ~nix_executable:nix ~copy_executable:copy ~resize2fs
     ~toplevel:"/nix/store/system"
-    ~registration:"/nix/store/closure-info/registration" ~cache_image
-    ~image:second_image ~size_mib:384 ();
+    ~registration:"/nix/store/closure-info/registration"
+    ~registration_sha256:"sha256-registration" ~closure_nar_size_bytes:42L
+    ~closure_path_count:2 ~origin ~cache_image ~image:second_image ~size_mib:384
+    ();
   assert_bool "different-sized image store cloned from cache" true
     (Sys.file_exists second_image);
   assert_bool "different-sized image store is correctly sized" true
     (Int64.equal (Unix.LargeFile.stat second_image).st_size 402653184L);
+  let second_origin =
+    {
+      origin with
+      flake_url = "github:example/equivalent-system";
+      first_seen_at = "2026-08-03T09:00:00Z";
+      last_seen_at = "2026-08-03T09:00:00Z";
+    }
+  in
+  Nix.prepare_image_store ~nix_executable:nix ~copy_executable:copy ~resize2fs
+    ~toplevel:"/nix/store/system"
+    ~registration:"/nix/store/closure-info/registration"
+    ~registration_sha256:"sha256-registration" ~closure_nar_size_bytes:42L
+    ~closure_path_count:2 ~origin:second_origin ~cache_image ~image:third_image
+    ~size_mib:384 ();
+  let cache_metadata = current_image_metadata cache_image in
+  assert_int "equivalent cache records multiple origins" 2
+    (List.length cache_metadata.origins);
   let closure_resolutions =
     In_channel.with_open_text nix_args In_channel.input_lines
     |> List.filter (fun line -> line = "path-info")
@@ -1815,9 +1938,11 @@ let test_prepare_image_store () =
     ~registration:"/nix/store/closure-info/registration" ~image ~size_mib:512 ();
   assert_bool "image store grows backing file" true
     (Int64.equal (Unix.LargeFile.stat image).st_size 536870912L);
-  assert_equal "grown image store marker"
-    "4\n/nix/store/system\n512\n/nix/store/closure-info/registration\n"
-    (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
+  let grown_metadata = current_image_metadata image in
+  assert_bool "grown image metadata size" true
+    (Int64.equal grown_metadata.virtual_size_bytes 536870912L);
+  assert_equal "grow preserves registration hash" "sha256-registration"
+    (Option.value grown_metadata.registration_sha256 ~default:"");
   assert_equal "e2fsck receives forced preen arguments"
     ("-f\n-p\n" ^ image ^ "\n")
     (In_channel.with_open_text e2fsck_args In_channel.input_all);
@@ -1837,9 +1962,11 @@ let test_prepare_image_store () =
     ~toplevel:"/nix/store/system-v2"
     ~registration:"/nix/store/closure-info-v2/registration" ~image ~size_mib:512
     ();
-  assert_equal "updated image store marker"
-    "4\n/nix/store/system-v2\n512\n/nix/store/closure-info-v2/registration\n"
-    (In_channel.with_open_text (image ^ ".toplevel") In_channel.input_all);
+  let updated_metadata = current_image_metadata image in
+  assert_equal "updated image metadata toplevel" "/nix/store/system-v2"
+    updated_metadata.toplevel;
+  assert_equal "updated image metadata registration"
+    "/nix/store/closure-info-v2/registration" updated_metadata.registration;
   let retained_contents =
     Util.command_output
       ("debugfs -R "
@@ -1925,11 +2052,14 @@ let test_remove_nix_store_state () =
       let image = Filename.concat (Virtle.state_dir name) "nix-store.img" in
       write_file image "image";
       write_file (image ^ ".toplevel") "/nix/store/system\n";
+      write_file (Image_metadata.sidecar_path image) "schema_version = 1\n";
       Virtle.remove_nix_store_state ~name;
       assert_bool "Nix store shares removed" false (Sys.file_exists shares);
       assert_bool "Nix store image removed" false (Sys.file_exists image);
-      assert_bool "Nix store image marker removed" false
+      assert_bool "Nix store image legacy marker removed" false
         (Sys.file_exists (image ^ ".toplevel"));
+      assert_bool "Nix store image sidecar removed" false
+        (Sys.file_exists (Image_metadata.sidecar_path image));
       assert_bool "other VM state preserved" true (Sys.file_exists preserved))
 
 let test_state_sizes_ignore_hotmounts () =
@@ -2080,6 +2210,7 @@ let () =
   run "nix override input arguments" test_nix_override_input_args;
   run "nix local store URI" test_nix_local_store_uri;
   run "native closure info" test_native_closure_info;
+  run "image origin metadata" test_image_origin_metadata;
   run "prepare lower store" test_prepare_lower_store;
   run "prepare image store" test_prepare_image_store;
   run "launch arguments" test_launch_args;

@@ -9,6 +9,7 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- TOML metadata sidecars for cached and writable image-backed Nix stores, including closure metrics, creation and last-use timestamps, registration hashes, and deduplicated flake/lock/override provenance.
 - `global.kitty` configuration for using `kitten ssh` by default across spawn and attach sessions.
 - Per-space `files` configuration for embedding host files into generated Virtle `write_files` entries with preserved modes and guest-home ownership.
 - `ash ls --cache` for a non-interactive inventory of cached image-backed Nix store bases, including sizes, modification times, VM reference counts, closures, and paths.
