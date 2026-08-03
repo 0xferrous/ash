@@ -605,6 +605,10 @@ let test_cached_images_for_removal () =
             (Option.value first_info.toplevel ~default:"");
           assert_bool "legacy cached image metadata" true
             (Option.is_none second_info.toplevel);
+          assert_equal "cache metadata origin" "github:example/system#first"
+            (Virtle.cached_image_origin first_info);
+          assert_equal "cache metadata closure path count" "2"
+            (Virtle.cached_image_path_count first_info);
           assert_equal "matching VM cache references" "vm-one"
             (String.concat "," first_info.references);
           assert_int "invalid cache has no VM references" 0

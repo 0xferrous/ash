@@ -13,7 +13,7 @@ nix build
 ./result/bin/ash rm
 ```
 
-`ash rm` opens an interactive multi-pane TUI for deleting stopped VM state directories or cached image-backed Nix store bases. Cache entries show the number of VM states whose current image marker matches the cached closure, with the VM names in the detail footer; `u` selects every unreferenced cache entry in the active cache pane. `ash ls --cache` provides the same cache inventory non-interactively, including disk and virtual sizes, modification time, reference count, closure, and path. Removing a cached base deletes its adjacent closure marker but does not affect writable VM clones; a later spawn rebuilds the base if needed. State lives under `~/.local/state/$ASH_NAME/<name>/`, with `ASH_NAME` defaulting to `ash`.
+`ash rm` opens an interactive multi-pane TUI for deleting stopped VM state directories or cached image-backed Nix store bases. Cache entries show the number of VM states whose current image metadata matches the cached closure, with the VM names and provenance details in the detail footer; `u` selects every unreferenced cache entry in the active cache pane. `ash ls --cache` provides the same cache inventory non-interactively, including disk and virtual sizes, modification and last-use times, reference and closure-path counts, NAR size, closure, origin, and path. Removing a cached base deletes its adjacent TOML sidecar but does not affect writable VM clones; a later spawn rebuilds the base if needed. State lives under `~/.local/state/$ASH_NAME/<name>/`, with `ASH_NAME` defaulting to `ash`.
 
 ## Interface
 

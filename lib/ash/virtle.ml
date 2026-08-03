@@ -915,17 +915,49 @@ let cached_image_closure image =
   |> Option.map Filename.basename
   |> Option.value ~default:"unknown-closure"
 
+let cached_image_last_used image =
+  image.metadata
+  |> Option.map (fun metadata -> metadata.Image_metadata.last_used_at)
+  |> Option.value ~default:"legacy"
+
+let cached_image_path_count image =
+  Option.bind image.metadata (fun metadata ->
+      metadata.Image_metadata.closure_path_count)
+  |> Option.map string_of_int |> Option.value ~default:"-"
+
+let cached_image_nar_size image =
+  Option.bind image.metadata (fun metadata ->
+      metadata.Image_metadata.closure_nar_size_bytes)
+  |> Option.map human_size |> Option.value ~default:"-"
+
+let cached_image_origin image =
+  match image.metadata with
+  | Some { Image_metadata.origins = origin :: rest; _ } ->
+      let value =
+        Printf.sprintf "%s#%s" origin.flake_url origin.nixos_configuration
+      in
+      if rest = [] then value
+      else Printf.sprintf "%s (+%d)" value (List.length rest)
+  | Some _ -> "unknown"
+  | None -> "legacy"
+
 let cached_image_list_header =
-  Printf.sprintf "%-32s %10s %10s  %-19s %4s  %-32s %s" "KEY" "DISK" "VIRTUAL"
-    "MODIFIED" "REFS" "CLOSURE" "PATH"
+  Printf.sprintf "%-32s %10s %10s  %-19s %-20s %4s %7s %10s  %-32s %-32s %s"
+    "KEY" "DISK" "VIRTUAL" "MODIFIED" "LAST USED" "REFS" "PATHS" "NAR" "CLOSURE"
+    "ORIGIN" "PATH"
 
 let cached_image_list_item image =
-  Printf.sprintf "%-32s %10s %10s  %-19s %4d  %-32s %s" image.cache_key
+  Printf.sprintf "%-32s %10s %10s  %-19s %-20s %4d %7s %10s  %-32s %-32s %s"
+    image.cache_key
     (human_size image.disk_bytes)
     (human_size image.apparent_bytes)
     (format_time image.modified)
+    (cached_image_last_used image)
     (List.length image.references)
+    (cached_image_path_count image)
+    (cached_image_nar_size image)
     (cached_image_closure image)
+    (cached_image_origin image)
     image.path
 
 let print_cached_image_list () =
@@ -957,9 +989,16 @@ let rm_item_detail = function
               (if List.length names = 1 then "" else "s")
               (String.concat ", " names)
       in
-      Printf.sprintf "%s  %s  %s" references
+      let metadata =
+        Printf.sprintf "last used %s; %s paths; %s NAR; origin %s"
+          (cached_image_last_used image)
+          (cached_image_path_count image)
+          (cached_image_nar_size image)
+          (cached_image_origin image)
+      in
+      Printf.sprintf "%s  %s  %s  %s" references
         (cached_image_closure image)
-        image.path
+        metadata image.path
 
 let rm_item_disk_bytes = function
   | Vm_state vm -> vm.disk_bytes
