@@ -1054,6 +1054,7 @@ let rm_vms () =
           detail = rm_item_detail;
           selection_summary = rm_selection_summary;
           sorts = vm_rm_sorts;
+          bulk_actions = [||];
           initial_descending = false;
         };
         {
@@ -1066,6 +1067,16 @@ let rm_vms () =
           detail = rm_item_detail;
           selection_summary = rm_selection_summary;
           sorts = cache_rm_sorts;
+          bulk_actions =
+            [|
+              {
+                key = 'u';
+                select =
+                  (function
+                  | Cached_image image -> image.references = []
+                  | Vm_state _ -> false);
+              };
+            |];
           initial_descending = true;
         };
       |]
@@ -1073,8 +1084,8 @@ let rm_vms () =
     let selected =
       Tui.select_panes ~title:"Select VM states and cached images to delete"
         ~help:
-          "←/→/tab pane  ↑/k ↓/j move  space select  a all/none  s sort  r \
-           reverse  enter delete  q cancel"
+          "←/→/tab pane  ↑/k ↓/j move  space select  a all/none  u \
+           unreferenced  s sort  r reverse  enter delete  q cancel"
         ~panes
     in
     match selected with

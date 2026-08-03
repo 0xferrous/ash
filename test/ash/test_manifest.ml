@@ -1814,6 +1814,8 @@ let test_tui_pane_sorting_preserves_selection () =
           };
           { name = "name"; compare = String.compare };
         |];
+      bulk_actions =
+        [| { key = 'u'; select = (fun item -> String.length item = 2) } |];
       initial_descending = true;
     }
   in
@@ -1825,7 +1827,10 @@ let test_tui_pane_sorting_preserves_selection () =
   state.descending <- false;
   Tui.sort_pane state;
   assert_equal "ascending pane sort" "aaa" state.rows.(0).item;
-  assert_bool "selection follows sorted item" true state.rows.(0).selected
+  assert_bool "selection follows sorted item" true state.rows.(0).selected;
+  Tui.apply_bulk_action state 'u';
+  assert_equal "bulk selection preserves and adds matches" "aaa,cc"
+    (Tui.selected_rows state |> String.concat ",")
 
 let run name test =
   Printf.printf "test %s ... %!" name;

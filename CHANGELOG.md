@@ -16,7 +16,7 @@ and this project uses its existing Git tags for version history.
 ### Changed
 
 - Replaced the hand-written interactive selector terminal handling with Notty, including resize-aware list viewports and safe Unicode rendering.
-- Redesigned `ash rm` with separate VM-state and cached-image panes, labeled columns, independent selection with per-pane selected-size totals, selectable sort fields and directions, and cache modification times and VM reference counts.
+- Redesigned `ash rm` with separate VM-state and cached-image panes, labeled columns, independent selection with per-pane selected-size totals, selectable sort fields and directions, cache modification times and VM reference counts, and one-key selection of all unreferenced caches.
 
 ### Fixed
 

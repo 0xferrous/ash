@@ -10,12 +10,14 @@ type command =
   | Toggle_all
   | Next_sort
   | Reverse_sort
+  | Bulk_select of char
   | Confirm
   | Quit
   | Redraw
   | Ignore
 
 type 'a sort = { name : string; compare : 'a -> 'a -> int }
+type 'a bulk_action = { key : char; select : 'a -> bool }
 
 type 'a pane = {
   title : string;
@@ -25,6 +27,7 @@ type 'a pane = {
   detail : 'a -> string;
   selection_summary : 'a list -> string;
   sorts : 'a sort array;
+  bulk_actions : 'a bulk_action array;
   initial_descending : bool;
 }
 
@@ -64,6 +67,7 @@ let command_of_event = function
   | `Key (`ASCII ('r' | 'R'), []) -> Reverse_sort
   | `Key (`Enter, _) -> Confirm
   | `Key (`Escape, _) | `Key (`ASCII ('q' | 'Q'), []) -> Quit
+  | `Key (`ASCII key, []) -> Bulk_select (Char.lowercase_ascii key)
   | `Resize _ -> Redraw
   | `End -> Quit
   | _ -> Ignore
@@ -129,7 +133,7 @@ let select_one ~title ~help ~items ~label =
               cursor := move_down ~cursor:!cursor ~len:(Array.length items);
               loop ()
           | Previous_pane | Next_pane | Toggle | Toggle_all | Next_sort
-          | Reverse_sort | Redraw | Ignore ->
+          | Reverse_sort | Bulk_select _ | Redraw | Ignore ->
               loop ()
         in
         loop ())
@@ -154,6 +158,14 @@ let sort_pane state =
 let next_sort state =
   state.sort_index <- (state.sort_index + 1) mod Array.length state.pane.sorts;
   sort_pane state
+
+let apply_bulk_action state key =
+  state.pane.bulk_actions
+  |> Array.find_opt (fun action -> action.key = key)
+  |> Option.iter (fun action ->
+      Array.iter
+        (fun row -> if action.select row.item then row.selected <- true)
+        state.rows)
 
 let make_pane_state pane =
   if Array.length pane.sorts = 0 then
@@ -329,6 +341,9 @@ let select_panes ~title ~help ~panes =
               let state = active_state () in
               state.descending <- not state.descending;
               sort_pane state;
+              loop ()
+          | Bulk_select key ->
+              apply_bulk_action (active_state ()) key;
               loop ()
           | Redraw | Ignore -> loop ()
         in
