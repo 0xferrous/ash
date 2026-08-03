@@ -223,7 +223,8 @@ let kernel_serial_arg =
     & info [ "kernel-serial" ] ~docv:"MODE"
         ~doc:
           "Configure guest kernel serial I/O: off disables it, print streams \
-           output, and console connects host standard input and output.")
+           output, and console connects host standard input and output. \
+           Console mode requires --attach without --keep.")
 
 let mount_cwd_arg =
   Arg.(

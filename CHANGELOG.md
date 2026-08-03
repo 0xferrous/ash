@@ -24,6 +24,7 @@ and this project uses its existing Git tags for version history.
 
 ### Fixed
 
+- Restored direct foreground Virtle launches for attached sessions without `--keep`, making interactive kernel serial consoles usable again while retaining foreground mount and registration setup.
 - Preserved the selected sort direction when cycling between sort fields in `ash rm`.
 
 ### Documentation

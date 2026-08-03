@@ -71,7 +71,9 @@ let spawn =
            returns. The VM keeps running until stopped with ash stop.";
         `P
           "--attach starts the VM in the foreground and opens SSH. Without \
-           --keep, the VM stops when the attached session exits.";
+           --keep, the VM stops when the attached session exits. Interactive \
+           --kernel-serial=console requires this foreground mode and cannot be \
+           combined with --keep.";
         `P
           "--attach --keep starts the VM as a background unit, then attaches \
            over SSH. The VM keeps running after SSH exits.";
@@ -294,11 +296,12 @@ let spawn =
           "spawn writes virtle.toml with ssh.autoprovision enabled. This \
            records that ash should manage an SSH key for attached sessions.";
         `P
-          "The key is installed when ash attaches, not during a plain \
-           background spawn. On attach, ash creates or reuses id_ed25519 in \
-           the VM state directory, installs id_ed25519.pub into the guest \
-           user's authorized_keys through virtle guest-exec, then runs ssh \
-           with that identity.";
+          "The key is installed when an attached session first needs it, not \
+           during a plain background spawn. Foreground attached launches use \
+           virtle launch --ssh, whose autoprovisioning creates or reuses \
+           id_ed25519 and installs it through QGA after an authentication \
+           failure. Background attached launches perform the equivalent \
+           guest-exec installation before running ssh.";
         `P
           "Pass --kitty to spawn to use kitten ssh instead of ssh for attached \
            spawn sessions and save that choice in ash-state.toml for later \
@@ -414,8 +417,8 @@ let resume =
            for readiness, restores saved runtime hotmounts, then attaches. The \
            VM keeps running after SSH exits.";
         `P
-          "Plain background resume also restores saved runtime hotmounts. A \
-           foreground --attach resume does not currently restore them.";
+          "Both background and foreground attached resumes restore saved \
+           runtime hotmounts.";
         `S Manpage.s_examples;
         `Pre "ash resume work";
         `Pre "ash resume --attach work";

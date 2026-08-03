@@ -1468,7 +1468,7 @@ let test_waypipe_wraps_openssh_and_kitty () =
   let waypipe_wrapper = Filename.concat state "ash/wayland/ssh-with-waypipe" in
   assert_equal "Waypipe manifest wrapper" waypipe_wrapper (List.hd exec);
   assert_int "Waypipe manifest exec count" 1 (List.length exec);
-  assert_bool "Virtle SSH autoprovision disabled" false
+  assert_bool "Virtle SSH autoprovision enabled" true
     (find_bool manifest_doc [ "ssh"; "autoprovision" ]);
   let waypipe_content =
     In_channel.with_open_text waypipe_wrapper In_channel.input_all
@@ -1857,6 +1857,38 @@ let test_prepare_image_store () =
   assert_equal "closure update imports new store paths" "updated-system-init"
     updated_contents
 
+let test_launch_args () =
+  assert_bool "serial console accepts foreground attach" true
+    (Result.is_ok
+       (Virtle.validate_console_lifecycle ~kernel_serial:Virtle.Console
+          ~attach:true ~keep:false));
+  assert_equal "serial console rejects background launch"
+    "--kernel-serial=console requires --attach for terminal access"
+    (match
+       Virtle.validate_console_lifecycle ~kernel_serial:Virtle.Console
+         ~attach:false ~keep:false
+     with
+    | Error message -> message
+    | Ok () -> "");
+  assert_equal "serial console rejects kept background attach"
+    "--kernel-serial=console cannot be combined with --keep"
+    (match
+       Virtle.validate_console_lifecycle ~kernel_serial:Virtle.Console
+         ~attach:true ~keep:true
+     with
+    | Error message -> message
+    | Ok () -> "");
+  assert_equal "background launch omits SSH"
+    "--manifest,/state/virtle.toml,-v,launch,--resume,no"
+    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml" ~verbose:[ () ]
+       ~ssh:false
+    |> String.concat ",");
+  assert_equal "foreground launch attaches through Virtle"
+    "--manifest,/state/virtle.toml,-v,-v,launch,--resume,force,--ssh"
+    (Virtle.launch_args ~resume:(Some "force") ~path:"/state/virtle.toml"
+       ~verbose:[ (); () ] ~ssh:true
+    |> String.concat ",")
+
 let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
@@ -2050,6 +2082,7 @@ let () =
   run "native closure info" test_native_closure_info;
   run "prepare lower store" test_prepare_lower_store;
   run "prepare image store" test_prepare_image_store;
+  run "launch arguments" test_launch_args;
   run "nix json string array parser" test_nix_json_string_array_parser;
   run "scp arguments" test_scp_args;
   run "remove Nix store state" test_remove_nix_store_state;

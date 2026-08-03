@@ -2736,7 +2736,7 @@ let render_resolved_manifest inputs =
               ("user", Otoml.string user);
               ("exec", string_array selected_ssh_exec);
               ("ready_socket", Otoml.string "ready.sock");
-              ("autoprovision", Otoml.boolean false);
+              ("autoprovision", Otoml.boolean true);
             ] );
         ( "workspace",
           Otoml.table
@@ -3129,10 +3129,25 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
   in
   write_manifest_for_inputs inputs
 
-let launch_args ~resume ~path ~verbose =
+let validate_console_lifecycle ~kernel_serial ~attach ~keep =
+  match kernel_serial with
+  | Console when not attach ->
+      Error "--kernel-serial=console requires --attach for terminal access"
+  | Console when keep ->
+      Error "--kernel-serial=console cannot be combined with --keep"
+  | Off | Print | Console -> Ok ()
+
+let require_console_lifecycle ~kernel_serial ~attach ~keep =
+  match validate_console_lifecycle ~kernel_serial ~attach ~keep with
+  | Ok () -> ()
+  | Error message -> Log.fatal "%s" message
+
+let launch_args ~resume ~path ~verbose ~ssh =
   let verbose_args = List.map (fun _ -> "-v") verbose in
   let resume_mode = Option.value resume ~default:"no" in
-  [ "--manifest"; path ] @ verbose_args @ [ "launch"; "--resume"; resume_mode ]
+  [ "--manifest"; path ] @ verbose_args
+  @ [ "launch"; "--resume"; resume_mode ]
+  @ if ssh then [ "--ssh" ] else []
 
 let print_background_started ~name =
   Printf.printf "started VM: %s\n" name;
@@ -3142,7 +3157,7 @@ let print_background_started ~name =
   Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
 
 let start_background ~announce ~resume ~name ~virtle ~path ~verbose =
-  let args = launch_args ~resume ~path ~verbose in
+  let args = launch_args ~resume ~path ~verbose ~ssh:false in
   let description =
     match resume with
     | Some _ -> "ash VM " ^ name ^ " (resume)"
@@ -3177,44 +3192,67 @@ let launch_background ?(announce = true) ~resume (inputs : manifest_inputs) path
     ~path ~verbose;
   wait_and_mount inputs path
 
-let launch_background_and_attach ?cleanup_dir ~keep ~resume
-    (inputs : manifest_inputs) path ~verbose =
-  let run () =
-    launch_background ~announce:keep ~resume inputs path ~verbose;
-    attach_running_code ~virtle:inputs.virtle ~name:inputs.name ~path
-      ~kitty:false ~waypipe:None ~verbose ()
-  in
+let launch_background_and_attach ~resume (inputs : manifest_inputs) path
+    ~verbose =
+  launch_background ~resume inputs path ~verbose;
+  exit
+    (attach_running_code ~virtle:inputs.virtle ~name:inputs.name ~path
+       ~kitty:false ~waypipe:None ~verbose ())
+
+let start_foreground_setup (inputs : manifest_inputs) path =
+  match Unix.fork () with
+  | 0 -> (
+      try
+        wait_and_mount inputs path;
+        exit 0
+      with exn ->
+        Log.error "foreground VM setup failed: %s" (Printexc.to_string exn);
+        exit 1)
+  | pid -> pid
+
+let finish_foreground_setup pid =
+  match Unix.waitpid [ Unix.WNOHANG ] pid with
+  | 0, _ ->
+      (try Unix.kill pid Sys.sigterm
+       with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+      ignore (Unix.waitpid [] pid)
+  | _, Unix.WEXITED 0 -> ()
+  | _, status ->
+      Log.warn "foreground VM setup exited with code %d"
+        (Util.process_status_code status)
+
+let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
+    path ~verbose =
+  let args = launch_args ~resume ~path ~verbose ~ssh:true in
+  let setup_pid = start_foreground_setup inputs path in
   let code =
-    if keep then run ()
-    else
-      Fun.protect
-        ~finally:(fun () ->
-          let stop_code = Systemd_run.stop_user_unit ~name:inputs.name in
-          if stop_code <> 0 then
-            Log.warn "failed to stop VM %s after attach (exit code %d)"
-              inputs.name stop_code;
-          match cleanup_dir with
-          | Some dir ->
-              Log.info "removing ephemeral VM state %s" dir;
-              Util.remove_tree ~force:true dir
-          | None -> ())
-        run
+    Fun.protect
+      ~finally:(fun () -> finish_foreground_setup setup_pid)
+      (fun () -> Util.run_foreground inputs.virtle args)
   in
+  Option.iter
+    (fun dir ->
+      Log.info "removing ephemeral VM state %s" dir;
+      Util.remove_tree ~force:true dir)
+    cleanup_dir;
   exit code
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
     ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~ephemeral ~attach ~keep
     ~kitty ~waypipe ~verbose () =
+  require_console_lifecycle ~kernel_serial ~attach ~keep;
   let inputs, path =
     prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
       ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
   in
-  if attach then
-    launch_background_and_attach
+  if attach && keep then
+    launch_background_and_attach ~resume:None inputs path ~verbose
+  else if attach then
+    launch_foreground_attached
       ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
-      ~keep ~resume:None inputs path ~verbose
+      ~resume:None inputs path ~verbose
   else launch_background ~resume:None inputs path ~verbose
 
 let saved_inputs ?virtle ~name () =
@@ -3233,13 +3271,15 @@ let resume ?virtle ~name ~attach ~keep ~verbose () =
   if List.exists (fun vm -> vm.name = name) running then
     Log.fatal "VM %S is already running" name;
   let inputs = saved_inputs ?virtle ~name () in
+  require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach ~keep;
   ignore (registration_for_inputs inputs);
   let path = manifest_path ~name:inputs.name in
   if not (Sys.file_exists path) then
     Log.fatal "no VM manifest for %S (expected %s)" inputs.name path;
-  if attach then
-    launch_background_and_attach ~keep ~resume:(Some "force") inputs path
-      ~verbose
+  if attach && keep then
+    launch_background_and_attach ~resume:(Some "force") inputs path ~verbose
+  else if attach then
+    launch_foreground_attached ~resume:(Some "force") inputs path ~verbose
   else launch_background ~resume:(Some "force") inputs path ~verbose
 
 let rewrite_saved_manifest (inputs : manifest_inputs) =
@@ -3296,8 +3336,11 @@ let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~verbose =
       waypipe = (if waypipe then Some (find_waypipe ()) else saved.waypipe);
     }
   in
+  require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach:true
+    ~keep;
   let inputs, path = rewrite_saved_manifest inputs in
-  launch_background_and_attach ~keep ~resume:None inputs path ~verbose
+  if keep then launch_background_and_attach ~resume:None inputs path ~verbose
+  else launch_foreground_attached ~resume:None inputs path ~verbose
 
 let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
   let vms = list_vms () in
