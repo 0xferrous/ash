@@ -143,6 +143,21 @@
             secondToplevel = imageReconcileSecond.config.system.build.toplevel;
             firstClosure = pkgs.closureInfo { rootPaths = [ firstToplevel ]; };
             secondClosure = pkgs.closureInfo { rootPaths = [ secondToplevel ]; };
+            closureJson =
+              name: toplevel:
+              pkgs.runCommand name
+                {
+                  __structuredAttrs = true;
+                  exportReferencesGraph.closure = [ toplevel ];
+                  nativeBuildInputs = [ pkgs.jq ];
+                }
+                ''
+                  out=''${outputs[out]}
+                  jq '.closure | map({ key: .path, value: { narHash: .narHash, narSize: .narSize, references: .references } }) | from_entries' \
+                    "$NIX_ATTRS_JSON_FILE" > "$out"
+                '';
+            firstClosureJson = closureJson "ash-first-closure.json" firstToplevel;
+            secondClosureJson = closureJson "ash-second-closure.json" secondToplevel;
           in
           pkgs.runCommand "ash-image-store-reconcile-test"
             {
@@ -153,8 +168,8 @@
               size_mib=$(((total_bytes * 2 + 1048575) / 1048576 + 256))
               ${ashBuild}/bin/ash-image-reconcile-test \
                 "$TMPDIR/nix-store.img" "$size_mib" \
-                ${firstToplevel} ${firstClosure}/registration ${firstClosure}/store-paths \
-                ${secondToplevel} ${secondClosure}/registration ${secondClosure}/store-paths
+                ${firstToplevel} ${firstClosure}/registration ${firstClosure}/store-paths ${firstClosureJson} \
+                ${secondToplevel} ${secondClosure}/registration ${secondClosure}/store-paths ${secondClosureJson}
               touch "$out"
             '';
       in

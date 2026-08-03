@@ -104,13 +104,20 @@ let resolve_store_paths ?nix_executable roots =
   |> String.split_on_char '\n' |> List.map String.trim
   |> List.filter (( <> ) "")
 
+let rec containing_store_path path =
+  let parent = Filename.dirname path in
+  if parent = "/nix/store" then path
+  else if parent = path || String.length parent < String.length "/nix/store"
+  then invalid_arg (Printf.sprintf "path is not inside /nix/store: %s" path)
+  else containing_store_path parent
+
 let scan_image_store ?nix_executable ?store_paths ~toplevel ~registration () =
   let store_paths =
     match store_paths with
     | Some paths -> paths
     | None ->
         resolve_store_paths ?nix_executable
-          [ toplevel; Filename.dirname registration ]
+          [ toplevel; containing_store_path registration ]
   in
   let metrics = Image_import_core.Metrics.create () in
   let entries =
@@ -418,14 +425,6 @@ let build_path ?out_link ?(override_inputs = []) ~label attr =
     (subcommand_args "build" override_inputs
        (build_link_args out_link ^ " --print-out-paths " ^ Util.shell_quote attr))
 
-let build_expr_path ?out_link ?(override_inputs = []) ~label expr =
-  run_nix ~label ~attr:expr
-    (subcommand_args "build" override_inputs
-       ("--impure " ^ build_link_args out_link ^ " --print-out-paths --expr "
-      ^ Util.shell_quote expr))
-
-let nix_string value = Yojson.Safe.to_string (`String value)
-
 let split_flake_ref value =
   match String.index_opt value '#' with
   | None -> (value, None)
@@ -436,29 +435,164 @@ let split_flake_ref value =
       in
       (base, Some fragment)
 
-let resolve_registration ~override_inputs ~target ~toplevel ~out_link =
-  let flake, _ = split_flake_ref target.attr in
-  let expr =
-    Printf.sprintf
-      "let flake = builtins.getFlake %s; configuration = \
-       flake.nixosConfigurations.%s; in configuration.pkgs.closureInfo { \
-       rootPaths = [ (builtins.storePath %s) ]; }"
-      (nix_string flake)
-      (nix_string target.host_name)
-      (nix_string toplevel)
+type closure_path_info = {
+  path : string;
+  nar_hash : string;
+  nar_size : int64;
+  references : string list;
+}
+
+let json_int64 = function
+  | `Int value -> Some (Int64.of_int value)
+  | `Intlit value -> Int64.of_string_opt value
+  | _ -> None
+
+let closure_path_info path = function
+  | `Assoc fields ->
+      let field name = List.assoc_opt name fields in
+      let nar_hash =
+        match field "narHash" with
+        | Some (`String value) -> value
+        | _ -> failwith (Printf.sprintf "missing narHash for %s" path)
+      in
+      let nar_size =
+        match Option.bind (field "narSize") json_int64 with
+        | Some value -> value
+        | None -> failwith (Printf.sprintf "missing narSize for %s" path)
+      in
+      let references =
+        match field "references" with
+        | Some (`List values) ->
+            List.map
+              (function
+                | `String value -> value
+                | _ ->
+                    failwith
+                      (Printf.sprintf "invalid reference entry for %s" path))
+              values
+        | _ -> failwith (Printf.sprintf "missing references for %s" path)
+      in
+      { path; nar_hash; nar_size; references }
+  | _ -> failwith (Printf.sprintf "invalid path-info record for %s" path)
+
+let closure_path_infos text =
+  match Yojson.Safe.from_string text with
+  | `Assoc paths ->
+      paths
+      |> List.map (fun (path, info) -> closure_path_info path info)
+      |> List.sort (fun left right -> String.compare left.path right.path)
+  | _ -> failwith "nix path-info returned a non-object JSON value"
+
+let registration_path_infos text =
+  let rec take_references count acc lines =
+    if count = 0 then (List.rev acc, lines)
+    else
+      match lines with
+      | reference :: rest -> take_references (count - 1) (reference :: acc) rest
+      | [] -> failwith "truncated Nix registration references"
   in
-  let output =
-    build_expr_path ~out_link ~override_inputs
-      ~label:"Nix store registration closure" expr
+  let rec parse acc = function
+    | [] | [ "" ] -> List.rev acc
+    | path :: nar_hash :: nar_size :: _deriver :: reference_count :: rest ->
+        let nar_size =
+          match Int64.of_string_opt nar_size with
+          | Some value -> value
+          | None -> failwith (Printf.sprintf "invalid narSize for %s" path)
+        in
+        let reference_count =
+          match int_of_string_opt reference_count with
+          | Some value when value >= 0 -> value
+          | _ -> failwith (Printf.sprintf "invalid reference count for %s" path)
+        in
+        let references, rest = take_references reference_count [] rest in
+        parse ({ path; nar_hash; nar_size; references } :: acc) rest
+    | _ -> failwith "truncated Nix registration record"
   in
-  let registration = Filename.concat output "registration" in
-  if not (Sys.file_exists registration) then
+  String.split_on_char '\n' text
+  |> parse []
+  |> List.sort (fun left right -> String.compare left.path right.path)
+
+let registration_content infos =
+  let buffer = Buffer.create (List.length infos * 256) in
+  List.iter
+    (fun info ->
+      let references = List.sort String.compare info.references in
+      List.iter
+        (fun value ->
+          Buffer.add_string buffer value;
+          Buffer.add_char buffer '\n')
+        ([
+           info.path;
+           info.nar_hash;
+           Int64.to_string info.nar_size;
+           "";
+           string_of_int (List.length references);
+         ]
+        @ references))
+    infos;
+  Buffer.contents buffer
+
+let query_closure_info ~nix ~toplevel =
+  let command json_format =
+    String.concat " "
+      ([ Util.shell_quote nix; "path-info" ]
+      @ json_format
+      @ [ "--json"; "--recursive"; Util.shell_quote toplevel ])
+  in
+  let command =
+    Printf.sprintf "%s 2>/dev/null || %s"
+      (command [ "--json-format"; "1" ])
+      (command [])
+  in
+  try Util.command_output command |> closure_path_infos
+  with Failure message | Yojson.Json_error message ->
     Log.fatal
-      "failed to resolve Nix store registration file\n\n\
-       Closure info output: %s\n\
-       Expected registration file: %s"
-      output registration;
-  registration
+      "failed to query native Nix closure information\n\n\
+       Toplevel: %s\n\
+       Error: %s"
+      toplevel message
+
+let add_registration_to_store ~nix_store ~out_link content =
+  let temporary_dir = Filename.temp_file "ash-registration" "" in
+  Sys.remove temporary_dir;
+  Unix.mkdir temporary_dir 0o700;
+  Fun.protect
+    ~finally:(fun () -> Util.remove_tree ~force:true temporary_dir)
+    (fun () ->
+      let source = Filename.concat temporary_dir "registration" in
+      Util.write_file source content;
+      let registration =
+        Util.command_output
+          (String.concat " "
+             [
+               Util.shell_quote nix_store;
+               "--add-fixed";
+               "sha256";
+               Util.shell_quote source;
+             ])
+      in
+      Util.ensure_dir (Filename.dirname out_link);
+      (try Unix.unlink out_link with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+      ignore
+        (Util.command_output
+           (String.concat " "
+              [
+                Util.shell_quote nix_store;
+                "--realise";
+                Util.shell_quote registration;
+                "--add-root";
+                Util.shell_quote out_link;
+                "--indirect";
+              ]));
+      if not (Sys.file_exists registration) then
+        Log.fatal "native Nix registration was not added to the store: %s"
+          registration;
+      registration)
+
+let resolve_registration ~nix ~nix_store ~toplevel ~out_link =
+  let infos = query_closure_info ~nix ~toplevel in
+  let content = registration_content infos in
+  add_registration_to_store ~nix_store ~out_link content
 
 let normalize_flake_path path = Util.expand_home path
 
@@ -586,12 +720,14 @@ let resolve_boot ~override_inputs ~target ~gcroots_dir =
       ~label:"NixOS toplevel build output"
       (attr ^ ".config.system.build.toplevel")
   in
-  let registration =
-    resolve_registration ~override_inputs ~target ~toplevel
-      ~out_link:(root "closure-info")
-  in
-  let nix =
+  let nix_package =
     eval_raw ~override_inputs ~label:"Nix package" (attr ^ ".config.nix.package")
+  in
+  let nix = Filename.concat nix_package "bin/nix" in
+  let nix_store = Filename.concat nix_package "bin/nix-store" in
+  let registration =
+    resolve_registration ~nix ~nix_store ~toplevel
+      ~out_link:(root "registration")
   in
   let openssh =
     eval_raw ~override_inputs ~label:"OpenSSH package" (attr ^ ".pkgs.openssh")
@@ -620,8 +756,8 @@ let resolve_boot ~override_inputs ~target ~gcroots_dir =
     kernel_params;
     toplevel;
     registration;
-    nix = Filename.concat nix "bin/nix";
-    nix_store = Filename.concat nix "bin/nix-store";
+    nix;
+    nix_store;
     ssh = Filename.concat openssh "bin/ssh";
     systemd_ssh_proxy = Filename.concat systemd "lib/systemd/systemd-ssh-proxy";
   }

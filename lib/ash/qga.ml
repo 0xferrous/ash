@@ -137,7 +137,11 @@ if [ "$image_store" = false ] && [ -r /etc/nix/nix.conf ]; then
 fi
 
 marker_dir=/run/ash/nix-registration
-marker=$marker_dir/$(basename "$(dirname "$registration")")
+registration_name=$(basename "$registration")
+if [ "$registration_name" = registration ]; then
+  registration_name=$(basename "$(dirname "$registration")")
+fi
+marker=$marker_dir/$registration_name
 
 if [ -e "$marker" ]; then
   exit 42

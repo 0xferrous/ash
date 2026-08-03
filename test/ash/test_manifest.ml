@@ -1026,6 +1026,10 @@ let test_qga_load_nix_registration_action () =
     "store*=*local-overlay://*) exit 42";
   assert_string_contains "registration marker" script
     "/run/ash/nix-registration";
+  assert_string_contains "legacy registration marker uses parent" script
+    {|if [ "$registration_name" = registration ]; then|};
+  assert_string_contains "native registration marker uses store basename" script
+    {|marker=$marker_dir/$registration_name|};
   assert_string_contains "image store creates Nix database directory" script
     "mkdir -p /nix/var/nix/db";
   assert_string_contains "marker written after import" script
@@ -1589,6 +1593,66 @@ let test_nix_local_store_uri () =
     "local?real=%2Fnix%2Fstore&state=%2Fstate%2Fwith%20spaces"
     (Nix.local_store_uri ~real:"/nix/store" ~state:"/state/with spaces")
 
+let test_native_closure_info () =
+  let json =
+    {|{
+  "/nix/store/b": {
+    "narHash": "sha256-b",
+    "narSize": 2,
+    "references": ["/nix/store/z", "/nix/store/a"]
+  },
+  "/nix/store/a": {
+    "narHash": "sha256-a",
+    "narSize": 1,
+    "references": []
+  }
+}|}
+  in
+  let infos = Nix.closure_path_infos json in
+  assert_equal "native closure paths are deterministic"
+    "/nix/store/a,/nix/store/b"
+    (infos
+    |> List.map (fun (info : Nix.closure_path_info) -> info.path)
+    |> String.concat ",");
+  let expected_registration =
+    "/nix/store/a\n\
+     sha256-a\n\
+     1\n\n\
+     0\n\
+     /nix/store/b\n\
+     sha256-b\n\
+     2\n\n\
+     2\n\
+     /nix/store/a\n\
+     /nix/store/z\n"
+  in
+  assert_equal "native registration serialization" expected_registration
+    (Nix.registration_content infos);
+  assert_equal "nixpkgs registration parser canonicalization"
+    expected_registration
+    (Nix.registration_path_infos expected_registration
+    |> Nix.registration_content);
+  assert_equal "nested registration store object" "/nix/store/hash-closure-info"
+    (Nix.containing_store_path "/nix/store/hash-closure-info/registration");
+  assert_equal "direct registration store object" "/nix/store/hash-registration"
+    (Nix.containing_store_path "/nix/store/hash-registration");
+  let root = temp_dir "ash-test-native-closure-info" in
+  let nix = Filename.concat root "nix" in
+  let args_log = Filename.concat root "args" in
+  write_file nix
+    "#!/bin/sh\n\
+     printf '%s\\n' \"$*\" >> \"$ASH_TEST_NIX_PATH_INFO_ARGS\"\n\
+     cat <<'JSON'\n\
+     {\"/nix/store/a\":{\"narHash\":\"sha256-a\",\"narSize\":1,\"references\":[]}}\n\
+     JSON\n";
+  Unix.chmod nix 0o755;
+  Unix.putenv "ASH_TEST_NIX_PATH_INFO_ARGS" args_log;
+  let queried = Nix.query_closure_info ~nix ~toplevel:"/nix/store/system" in
+  assert_int "native closure info uses one Nix process" 1
+    (In_channel.with_open_text args_log In_channel.input_lines |> List.length);
+  assert_equal "native closure query result" "/nix/store/a"
+    (List.hd queried : Nix.closure_path_info).path
+
 let test_prepare_lower_store () =
   let root = temp_dir "ash-test-lower-store" in
   let bin = Filename.concat root "bin" in
@@ -1957,6 +2021,7 @@ let () =
     test_nix_storage_flake_ref_absolutizes_relative_paths;
   run "nix override input arguments" test_nix_override_input_args;
   run "nix local store URI" test_nix_local_store_uri;
+  run "native closure info" test_native_closure_info;
   run "prepare lower store" test_prepare_lower_store;
   run "prepare image store" test_prepare_image_store;
   run "nix json string array parser" test_nix_json_string_array_parser;

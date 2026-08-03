@@ -171,7 +171,7 @@ The overrides are saved as `nix_store_strategy` and
 spawns and regeneration.
 
 Ash caches one closure-sized ext4 base image for each selected closure and
-registration output under `$XDG_CACHE_HOME/$ASH_NAME/nix-store-images` (or
+generated registration store object under `$XDG_CACHE_HOME/$ASH_NAME/nix-store-images` (or
 `~/.cache/$ASH_NAME/nix-store-images`, with `ASH_NAME` defaulting to `ash`). New VM state uses a sparse reflink/CoW clone
 of that base image when the host filesystem supports it, then grows the clone
 to the VM's configured capacity. Different image-size settings therefore reuse

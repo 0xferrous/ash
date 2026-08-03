@@ -22,12 +22,27 @@ let check_image image =
   let code = Util.run_foreground e2fsck [ "-fn"; image ] in
   if code <> 0 then fail "e2fsck rejected reconciled image %s" image
 
+let assert_closure_info_equivalent ~label ~json ~registration =
+  let native =
+    In_channel.with_open_text json In_channel.input_all
+    |> Nix.closure_path_infos |> Nix.registration_content
+  in
+  let nixpkgs =
+    In_channel.with_open_text registration In_channel.input_all
+    |> Nix.registration_path_infos |> Nix.registration_content
+  in
+  if native <> nixpkgs then
+    fail
+      "%s native closure registration differs from nixpkgs closureInfo: \
+       native=%d bytes nixpkgs=%d bytes"
+      label (String.length native) (String.length nixpkgs)
+
 let () =
-  if Array.length Sys.argv <> 9 then
+  if Array.length Sys.argv <> 11 then
     fail
       "usage: %s IMAGE SIZE_MIB FIRST_TOPLEVEL FIRST_REGISTRATION \
-       FIRST_STORE_PATHS SECOND_TOPLEVEL SECOND_REGISTRATION \
-       SECOND_STORE_PATHS"
+       FIRST_STORE_PATHS FIRST_CLOSURE_JSON SECOND_TOPLEVEL \
+       SECOND_REGISTRATION SECOND_STORE_PATHS SECOND_CLOSURE_JSON"
       Sys.argv.(0);
   let image = Sys.argv.(1) in
   let size_mib = int_of_string Sys.argv.(2) in
@@ -36,13 +51,19 @@ let () =
   let first_store_paths =
     store_paths ~registration:first_registration Sys.argv.(5)
   in
-  let second_toplevel = Sys.argv.(6) in
-  let second_registration = Sys.argv.(7) in
+  let first_closure_json = Sys.argv.(6) in
+  let second_toplevel = Sys.argv.(7) in
+  let second_registration = Sys.argv.(8) in
   let second_store_paths =
-    store_paths ~registration:second_registration Sys.argv.(8)
+    store_paths ~registration:second_registration Sys.argv.(9)
   in
+  let second_closure_json = Sys.argv.(10) in
   if first_toplevel = second_toplevel then
     fail "test NixOS configurations resolved to the same toplevel";
+  assert_closure_info_equivalent ~label:"first" ~json:first_closure_json
+    ~registration:first_registration;
+  assert_closure_info_equivalent ~label:"second" ~json:second_closure_json
+    ~registration:second_registration;
   Nix.prepare_image_store ~store_paths:first_store_paths
     ~toplevel:first_toplevel ~registration:first_registration ~image ~size_mib
     ();

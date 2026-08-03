@@ -16,6 +16,7 @@ and this project uses its existing Git tags for version history.
 
 ### Changed
 
+- Generated Nix closure registration data directly from a single recursive store query instead of building a separate `pkgs.closureInfo` derivation.
 - Replaced the hand-written interactive selector terminal handling with Notty, including resize-aware list viewports and safe Unicode rendering.
 - Redesigned `ash rm` with separate VM-state and cached-image panes, labeled columns, independent selection with per-pane selected-size totals, selectable sort fields and directions, cache modification times and VM reference counts, and one-key selection of all unreferenced caches.
 
