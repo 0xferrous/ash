@@ -52,7 +52,7 @@ ro_mounts = [
 # is evaluated once even when it is reachable through multiple paths.
 extends = ["common"]
 
-# Entries may use HOST_PATH or HOST_PATH:GUEST_PATH.
+# Mount and file entries may use HOST_PATH or HOST_PATH:GUEST_PATH.
 # Host ~ resolves to the host user's home. Guest ~ resolves to the guest user's home.
 rw_mounts = [
   "~/dev/fr/ash",
@@ -62,4 +62,13 @@ rw_mounts = [
 ro_mounts = [
   "~/dev/reference:~/reference",
   "/var/lib/data:/mnt/data",
+]
+
+# Regular host files are embedded in the generated Virtle manifest and written
+# into the guest at boot. Source permissions are preserved. Files under the
+# guest user's home are owned by that user; other paths keep Virtle's default
+# ownership.
+files = [
+  "~/.gitconfig",
+  "~/.config/tool/config.toml:~/.config/tool/config.toml",
 ]

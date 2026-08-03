@@ -7,7 +7,15 @@ type mount = {
   read_only : bool;
 }
 
-type space_resources = { mounts : mount list }
+type write_file = {
+  source : string;
+  guest_path : string;
+  text : string;
+  mode : string;
+  chown : string option;
+}
+
+type space_resources = { mounts : mount list; write_files : write_file list }
 type nix_store_strategy = Shared | Image
 
 let load path : config =
@@ -208,6 +216,68 @@ let collect_space_mounts ~guest_user config space =
   in
   mounts true "ro_mounts" @ mounts false "rw_mounts"
 
+let read_file path =
+  let ic = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in ic)
+    (fun () -> really_input_string ic (in_channel_length ic))
+
+let path_is_within ~dir path =
+  path = dir
+  || String.starts_with ~prefix:(if dir = "/" then "/" else dir ^ "/") path
+
+let write_file_of_spec ~guest_user ~space spec =
+  let host_path, guest_path = split_mount_spec spec in
+  if host_path = "" then
+    Log.fatal "invalid file in space %S: host path is empty\n\nEntry: %s" space
+      spec;
+  if guest_path = "" then
+    Log.fatal "invalid file in space %S: guest path is empty\n\nEntry: %s" space
+      spec;
+  let source = expand_home ~home:(Util.home_dir ()) host_path in
+  let guest_path = expand_guest_home ~guest_user guest_path in
+  if Filename.is_relative source then
+    Log.fatal
+      "invalid file in space %S: host path must be absolute or start with ~: \
+       \"%s\"\n\n\
+       Entry: %s"
+      space host_path spec;
+  if Filename.is_relative guest_path then
+    Log.fatal
+      "invalid file in space %S: guest path must be absolute or start with ~: \
+       \"%s\"\n\n\
+       Entry: %s"
+      space guest_path spec;
+  if not (Sys.file_exists source) then (
+    Log.warn "skipping missing space file: %s" source;
+    None)
+  else
+    let stat = Unix.stat source in
+    if stat.st_kind <> Unix.S_REG then (
+      Log.warn "skipping non-regular space file: %s" source;
+      None)
+    else
+      let guest_home = guest_home guest_user in
+      let chown =
+        if path_is_within ~dir:guest_home guest_path then
+          Some
+            (if guest_user = "root" then "root:root" else guest_user ^ ":users")
+        else None
+      in
+      Some
+        {
+          source;
+          guest_path;
+          text = read_file source;
+          mode = Printf.sprintf "%04o" (stat.st_perm land 0o777);
+          chown;
+        }
+
+let collect_space_write_files ~guest_user config space =
+  strings [ "spaces"; space; "files" ] config
+  |> Option.value ~default:[]
+  |> List.filter_map (write_file_of_spec ~guest_user ~space)
+
 let uniq_mounts (mounts : mount list) =
   let _, rev =
     List.fold_left
@@ -215,6 +285,16 @@ let uniq_mounts (mounts : mount list) =
         let key = (mount.source, mount.target, mount.read_only) in
         if List.mem key seen then (seen, acc) else (key :: seen, mount :: acc))
       ([], []) mounts
+  in
+  List.rev rev
+
+let uniq_write_files (files : write_file list) =
+  let _, rev =
+    List.fold_left
+      (fun (seen, acc) (file : write_file) ->
+        let key = (file.source, file.guest_path) in
+        if List.mem key seen then (seen, acc) else (key :: seen, file :: acc))
+      ([], []) files
   in
   List.rev rev
 
@@ -229,4 +309,9 @@ let resources_for_spaces ~guest_user config spaces =
     |> List.concat_map (collect_space_mounts ~guest_user config)
     |> uniq_mounts
   in
-  { mounts }
+  let write_files =
+    resolved_spaces
+    |> List.concat_map (collect_space_write_files ~guest_user config)
+    |> uniq_write_files
+  in
+  { mounts; write_files }

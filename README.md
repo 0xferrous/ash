@@ -208,6 +208,12 @@ named VM, it reuses the saved space list. Spaces can compose other spaces with
 `extends = ["base", ...]`; extended spaces are evaluated recursively before the
 extending space.
 
+A space may also define `files = ["HOST_PATH", "HOST_PATH:GUEST_PATH", ...]`.
+Ash reads each regular host file when generating `virtle.toml` and emits it as a
+Virtle `write_files` entry, preserving its permission mode. Host and guest `~`
+expansion follows the mount rules. Files written below the guest user's home are
+owned by that user; other destinations retain Virtle's default ownership.
+
 ## Agent Portal
 
 The repository also builds a standalone OCaml implementation of the Agent-box

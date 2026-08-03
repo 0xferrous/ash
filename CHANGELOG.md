@@ -9,6 +9,7 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- Per-space `files` configuration for embedding host files into generated Virtle `write_files` entries with preserved modes and guest-home ownership.
 - `ash ls --cache` for a non-interactive inventory of cached image-backed Nix store bases, including sizes, modification times, VM reference counts, closures, and paths.
 - `ash attach --waypipe` display forwarding for Wayland and X11 applications, including composition with `--kitty` and persisted attach settings.
 - Experimental filtered D-Bus/vsock proxy for forwarding host desktop notifications into VMs.

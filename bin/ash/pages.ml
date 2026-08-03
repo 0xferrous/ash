@@ -163,20 +163,26 @@ let spawn =
           "The config defaults to XDG_CONFIG_HOME/ASH_NAME/config.toml or \
            ~/.config/ASH_NAME/config.toml. ASH_NAME defaults to ash, and \
            --config overrides every default. Each [spaces.NAME] table may \
-           define rw_mounts and ro_mounts arrays, plus an extends array naming \
-           other spaces. Extended spaces are evaluated recursively before the \
-           extending space. Unknown spaces and inheritance cycles are errors.";
+           define rw_mounts, ro_mounts, and files arrays, plus an extends \
+           array naming other spaces. Extended spaces are evaluated \
+           recursively before the extending space. Unknown spaces and \
+           inheritance cycles are errors.";
         `P
           "The [global] table may set memory to the VM memory in MiB; the \
            default is 4096. network_bridge and qemu_bridge_helper configure \
            the host bridge used for VM networking.";
         `P
-          "Each mount is HOST_PATH or HOST_PATH:GUEST_PATH. Host ~ resolves \
-           against the host user's home; guest ~ resolves against the guest \
-           SSH user's home. If GUEST_PATH is omitted, the original host path \
-           string is reused as the guest path. Absolute paths are also \
+          "Each mount or file is HOST_PATH or HOST_PATH:GUEST_PATH. Host ~ \
+           resolves against the host user's home; guest ~ resolves against the \
+           guest SSH user's home. If GUEST_PATH is omitted, the original host \
+           path string is reused as the guest path. Absolute paths are also \
            accepted. Missing host paths are skipped with a warning. Duplicate \
-           mounts are removed after parsing and path expansion.";
+           resources are removed after parsing and path expansion.";
+        `P
+          "Regular files selected through a space are embedded as Virtle \
+           write_files entries with their source permission mode and overwrite \
+           enabled. Guest-home destinations are owned by the guest SSH user; \
+           other destinations keep Virtle's default ownership.";
         `S "MOUNTS";
         `P
           "Spaces selected with --space add their configured directory mounts \

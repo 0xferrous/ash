@@ -768,6 +768,64 @@ rw_mounts = [%S]
     (Ash_config.path_tag "base" shared "/mnt/shared")
     shared_mount.tag
 
+let test_space_files_render_to_write_files () =
+  let root = temp_dir "ash-test-space-files" in
+  let home = Filename.concat root "home" in
+  let dotfile = Filename.concat home ".toolrc" in
+  let script = Filename.concat home "tool" in
+  let system_file = Filename.concat root "system.conf" in
+  mkdir_p home;
+  write_file dotfile "setting = true\n";
+  write_file script "#!/bin/sh\necho tool\n";
+  write_file system_file "system setting\n";
+  Unix.chmod script 0o750;
+  Unix.chmod system_file 0o640;
+  Unix.putenv "HOME" home;
+  let config =
+    parse_toml
+      (Printf.sprintf
+         {|[portal]
+enabled = true
+global = false
+
+[spaces.base]
+files = ["~/.toolrc"]
+
+[spaces.app]
+extends = ["base"]
+files = ["~/.toolrc", "~/tool:~/bin/tool", %S]
+|}
+         (system_file ^ ":/etc/system.conf"))
+  in
+  let resources =
+    Ash_config.resources_for_spaces ~guest_user:"agent" config [ "app" ]
+  in
+  assert_int "space files deduplicate through inheritance" 3
+    (List.length resources.write_files);
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"space-files"
+      ~spaces:[ "app" ] ()
+  in
+  let files = table_array (parse_toml manifest) "write_files" in
+  assert_int "configured and Portal write_files are combined" 5
+    (List.length files);
+  let dotfile = find_table_by_string files "guest_path" "/home/agent/.toolrc" in
+  assert_equal "space file contents" "setting = true\n"
+    (string_field dotfile "text");
+  assert_equal "space file mode" "0644" (string_field dotfile "mode");
+  assert_equal "guest-home file owner" "agent:users"
+    (string_field dotfile "chown");
+  assert_bool "space files overwrite existing guest files" true
+    (bool_field dotfile "overwrite");
+  let script = find_table_by_string files "guest_path" "/home/agent/bin/tool" in
+  assert_equal "executable file mode is preserved" "0750"
+    (string_field script "mode");
+  let system = find_table_by_string files "guest_path" "/etc/system.conf" in
+  assert_equal "absolute guest file mode is preserved" "0640"
+    (string_field system "mode");
+  assert_bool "absolute guest files retain Virtle's default owner" true
+    (List.assoc_opt "chown" system = None)
+
 let test_managed_portal_manifest () =
   let config =
     parse_toml {|[portal]
@@ -1852,6 +1910,7 @@ let () =
   run "space extension evaluation" test_space_extension_evaluation;
   run "space mount deduplication after parsing"
     test_space_mount_deduplication_after_parsing;
+  run "space files render to write_files" test_space_files_render_to_write_files;
   run "managed portal manifest" test_managed_portal_manifest;
   run "D-Bus notifications manifest" test_dbus_notifications_manifest;
   run "global portal manifest" test_global_portal_manifest;
