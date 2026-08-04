@@ -86,7 +86,7 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `virtiofsd` — used by generated manifests for ash-managed virtiofs mounts. Resolved from `PATH` at spawn time and stored in the manifest.
 - `e2fsck` and `resize2fs` — check and grow an existing image-backed Nix store when `image_size_mib` increases. New images are created directly through Ash's `libext2fs` binding.
 - `unshare` — prepares id-mapped writable store directories for the shared/local-overlay strategy when subordinate UID/GID ranges are available.
-- `bindfs` — creates host-side staging mounts for runtime hotmounts. See [Runtime hotmount implementation](#runtime-hotmount-implementation).
+- `bindfs` — creates host-side staging mounts for the shared Nix store, cwd, configured spaces, and runtime mounts. See [Runtime mount implementation](#runtime-mount-implementation).
 - `mountpoint` — used by `ash mount` to avoid remounting an already-mounted host-side hotmount directory.
 - `ssh` — host SSH client used for attached sessions. Defaults to the selected NixOS config's `pkgs.openssh`; override with `--ssh PATH`.
 - `waypipe` — wraps attached sessions selected with `--waypipe`, forwarding guest Wayland and X11 applications to the host compositor. The packaged Ash CLI includes the host executable; source builds resolve it from `PATH`. The guest must provide both `waypipe` and `xwayland-satellite` in its SSH command `PATH`.
@@ -97,13 +97,13 @@ nix run . -- attach --virtle ./result/bin/virtle rustbox
 - `journalctl` — reads logs from ash-owned background units for `ash logs`.
 - `ssh-keygen` — creates ash's SSH autoprovisioning key when needed.
 - `/bin/sh` — used internally to run small shell commands and capture output.
-- `du` — used by `ash ls`/state listing to estimate VM state disk usage, excluding the VM state's `hotmounts` staging directory; ash falls back to walking the directory tree if it fails.
+- `du` — used by `ash ls`/state listing to estimate VM state disk usage, excluding the consolidated `shares` tree so nested host staging mounts are not traversed; ash falls back to walking the directory tree if it fails.
 
 `ash logs NAME` runs `journalctl --user --unit ash-<name>.service --invocation=0` so only the latest process invocation is shown, with 100 recent lines by default. It requests JSON records and formats each entry as `[YYYY-MM-DD HH:MM:SS] MESSAGE`, omitting hostname and process metadata. `--lines`/`-n` changes the count, and `--follow`/`-f` follows new entries. Background spawn prints `ash logs -f NAME` as a hint. Invocation filtering requires systemd 257 or newer.
 
-`ash inspect NAME` emits a concise human-readable summary for a running or stopped VM, covering runtime/storage status, saved flake and spaces, machine resources, configured mounts/files, workspace paths, and hotmount desired state. `ash inspect --json NAME` emits the complete machine-readable object: it converts the saved `ash-state.toml`, referenced ash config TOML, and generated `virtle.toml` documents to JSON; reports state sizes and persist/workspace artifacts; includes parsed hotmount desired state and malformed metadata; and checks host staging mountpoints. For running VMs the JSON view additionally queries the virtle control socket for raw status and the guest kernel mount table through QGA.
+`ash inspect NAME` emits a concise human-readable summary for a running or stopped VM, covering runtime/storage status, saved flake and spaces, machine resources, configured mounts/files, workspace paths, and runtime mount desired state. `ash inspect --json NAME` emits the complete machine-readable object: it converts the saved `ash-state.toml`, referenced ash config TOML, and generated `virtle.toml` documents to JSON; reports state sizes and persist/workspace artifacts; includes parsed runtime mount owners; and checks host staging mountpoints. For running VMs the JSON view additionally queries the virtle control socket for raw status and the guest kernel mount table through QGA.
 
-Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as loading the selected system closure into the guest Nix database, mounting space/workspace/hotmount virtiofs tags, installing ash's SSH public key, and collecting `ash ls` runtime statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `nix-store`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ip`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket. It matches the guest interface by ash's stable per-name MAC address and reports its first global IPv4 address. SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, those columns show a dash.
+Some operations execute commands inside the guest through `virtle rpc guest-exec`, such as loading the selected system closure into the guest Nix database, mounting the consolidated share roots and binding staged workspace/space/runtime paths, installing ash's SSH public key, and collecting `ash ls` runtime statistics. Those commands use guest paths like `/run/current-system/sw/bin/sh`, `nix-store`, `mount`, `mountpoint`, `install`, `stat`, `mkdir`, `chown`, `chmod`, `grep`, `ip`, `ss`, `awk`, and `who`; they must exist in the guest image. For each running VM, `ash ls` queries QGA directly through the virtle control socket. It matches the guest interface by ash's stable per-name MAC address and reports its first global IPv4 address. SSH is the number of established AF_VSOCK stream sockets whose guest-local port is 22, and PTY is the number of `pts/*` login records with the AF_VSOCK `UNKNOWN` remote marker. If the query fails, those columns show a dash.
 
 Spawn options:
 
@@ -115,7 +115,7 @@ Spawn options:
 - `-c`, `--config CONFIG` — ash config. Default: `$XDG_CONFIG_HOME/$ASH_NAME/config.toml`, falling back to `~/.config/$ASH_NAME/config.toml`; `ASH_NAME` defaults to `ash`.
 - `--ssh PATH` — override path to host `ssh`. Defaults to the selected NixOS config's `pkgs.openssh`.
 - `--systemd-ssh-proxy PATH` — override path to host `systemd-ssh-proxy`. Defaults to the selected NixOS config's `config.systemd.package`.
-- `--ro-store-socket PATH` — use an existing virtiofs daemon socket for the read-only `/nix/store` mount instead of starting ash's own `ro-store` virtiofsd.
+- `--shares-ro-socket PATH` — use an existing virtiofs daemon socket for the consolidated read-only share. `--ro-store-socket` remains a compatibility alias.
 - `--nix-store-strategy shared|image` — override `global.nix_store.strategy` for this VM and save it in `ash-state.toml`.
 - `--nix-store-image-size-mib MIB` — override `global.nix_store.image_size_mib` for this VM and save it in `ash-state.toml`.
 - `--kernel-serial=off|print|console` — disable serial I/O, stream guest kernel/init output, or connect host standard input and output to the guest serial console. Interactive `console` mode requires `--attach` without `--keep` so Virtle owns the terminal directly.
@@ -188,7 +188,7 @@ nixosConfigurations.<HOST>.config.services.getty.autologinUser
 nixosConfigurations.<HOST>.config.users.users.<USER>.name
 ```
 
-Then it reads `$XDG_CONFIG_HOME/$ASH_NAME/config.toml` (falling back to `~/.config/$ASH_NAME/config.toml`, with `ASH_NAME` defaulting to `ash`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.kitty` defaults to false; when true, spawned manifests and attached sessions use `kitten ssh` unless another feature wraps that SSH command. An explicit `--kitty` also enables Kitty for the requested operation. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. `global.nix_store.strategy` selects `shared` (the default) or `image`; `global.nix_store.image_size_mib` defaults to 16384. `--nix-store-strategy` and `--nix-store-image-size-mib` override those defaults for one VM; explicit overrides are saved in its `ash-state.toml` and reused by later spawns and regeneration. Pass `--ro-store-socket` to select an existing virtiofsd socket for the shared strategy. An explicit enabled `[portal]` section enables Portal integration. Selected spaces turn their `rw_mounts` and `ro_mounts` into `virtle` virtiofs mounts, and their `files` into Virtle `write_files` entries. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
+Then it reads `$XDG_CONFIG_HOME/$ASH_NAME/config.toml` (falling back to `~/.config/$ASH_NAME/config.toml`, with `ASH_NAME` defaulting to `ash`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.kitty` defaults to false; when true, spawned manifests and attached sessions use `kitten ssh` unless another feature wraps that SSH command. An explicit `--kitty` also enables Kitty for the requested operation. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. `global.nix_store.strategy` selects `shared` (the default) or `image`; `global.nix_store.image_size_mib` defaults to 16384. `--nix-store-strategy` and `--nix-store-image-size-mib` override those defaults for one VM; explicit overrides are saved in its `ash-state.toml` and reused by later spawns and regeneration. Pass `--shares-ro-socket` (or the compatibility alias `--ro-store-socket`) to select an existing virtiofsd socket for the consolidated read-only share. An explicit enabled `[portal]` section enables Portal integration. Selected spaces stage their `rw_mounts` and `ro_mounts` beneath the consolidated share roots and turn their `files` into Virtle `write_files` entries. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
 
 Space selection is explicit:
 
@@ -204,91 +204,118 @@ Space `files` entries must resolve to regular host files. Ash reads their conten
 
 The guest SSH user defaults to `config.services.getty.autologinUser` from the selected NixOS configuration. `--user` overrides it, and ash validates the result through `config.users.users.<user>.name`.
 
-It also exposes these mount devices to the guest:
+Every generated manifest exposes exactly two virtiofs directory devices:
 
-- `workspace` — writable virtiofs share for `<state_dir>/workspace`, intended for `/home/<ssh-user>/workspace`
-- `hotmounts` — writable virtiofs share for `<state_dir>/hotmounts`, used by `ash mount` for QGA-driven hot mounts into a running VM.
-The `shared` strategy adds:
+- `shares-ro` — `<state_dir>/shares/ro`, mounted read-only in the guest. It uses `--sandbox=none` so the staged host Nix store retains root ownership.
+- `shares-rw` — `<state_dir>/shares/rw`, mounted writable in the guest. When subordinate UID/GID ranges are available, Ash maps guest identities one-to-one; otherwise it falls back to identity squashing.
 
-- `ro-store` — readonly virtiofs share for the host `/nix/store`. By default ash starts a virtiofsd using `ro-store.sock` with its user-namespace sandbox disabled so root ownership from the host store remains root ownership in the guest. Pass `--ro-store-socket PATH` to use an existing daemon instead.
-- `shares-ro` — readonly VM-state data, including `guest-store-state`, a synthetic local-store metadata database for the resolved NixOS closure.
-- `shares-rw` — writable VM-state data, including `guest-store-state`, `guest-store-upper`, and `guest-store-work` for guests that choose a host-backed OverlayFS upper layer. When subordinate UID/GID ranges are available, Ash maps guest identities one-to-one; otherwise it falls back to identity squashing.
+Ash organizes them as:
 
-The `image` strategy instead adds `nix-store.img`, a writable ext4 image labeled `nix-store`. It does not add `ro-store`, `shares-ro`, or `shares-rw`, so the guest has no live host Nix store share. Ash appends `ash.nix-store=image` or `ash.nix-store=shared` after the evaluated NixOS kernel parameters, replacing any pre-existing `ash.nix-store` value, so a single guest closure can conditionally select its stage-1 mount layout.
-- `persist` — writable ext4 image labeled `persist`
-- `workspace_cwd` — virtiofs share for the host current working directory, only when `--mount-cwd` is passed
+```text
+<state_dir>/shares/
+├── ro/
+│   ├── system/
+│   │   ├── guest-store-state/
+│   │   └── nix-store/
+│   └── mounts/
+│       ├── spaces/<mount-id>/
+│       └── hotmounts/<mount-id>/
+└── rw/
+    ├── system/
+    │   ├── guest-store-state/
+    │   ├── guest-store-upper/
+    │   └── guest-store-work/
+    └── mounts/
+        ├── workspace/
+        ├── cwd/
+        ├── spaces/<mount-id>/
+        └── hotmounts/<mount-id>/
+```
+
+Workspace data lives directly at `shares/rw/mounts/workspace`. The current working directory and configured space directories are staged with bindfs before launch. Runtime mounts are staged below `mounts/hotmounts`. Guest-exec mounts the appropriate share at `/run/ash/shares/ro` or `/run/ash/shares/rw` and bind-mounts the staged path at its final guest target.
+
+The shared Nix store strategy stages `/nix/store` read-only at `shares/ro/system/nix-store` and stores synthetic lower-store metadata at `shares/ro/system/guest-store-state`. Guests must mount `shares-ro` during stage 1 and bind its `system/nix-store` child at `/nix/store`. The writable local-overlay state remains under `shares/rw/system`.
+
+The image strategy also exposes `shares-ro` and `shares-rw` for workspace, space, and runtime mounts, but does not stage the host Nix store. Instead it adds `nix-store.img`, a writable ext4 image labeled `nix-store`. Both strategies append `ash.nix-store=image` or `ash.nix-store=shared` after the evaluated NixOS kernel parameters. All manifests additionally attach the writable ext4 `persist.img` image labeled `persist`.
 
 Ash queries the exact resolved NixOS toplevel once with recursive `nix path-info --json`, then serializes each path's NAR hash, NAR size, and references into the database format accepted by `nix-store --load-db`. The generated registration is added to the Nix store as a fixed-output file. The kernel, initrd, toplevel, and registration file have indirect GC roots under `<state_dir>/gcroots/`; the toplevel root retains its transitive system closure. The roots remain valid for stopped VMs and disappear automatically when the VM state directory is deleted, including ephemeral cleanup.
 
-For the `shared` strategy, Ash uses the selected NixOS configuration's `config.nix.package` to load that registration into a synthetic local-store database at `<state_dir>/shares/ro/guest-store-state`. The synthetic store uses the host `/nix/store` as its physical store directory, but contains metadata only for the pinned NixOS closure.
+For the `shared` strategy, Ash uses the selected NixOS configuration's `config.nix.package` to load that registration into a synthetic local-store database at `<state_dir>/shares/ro/system/guest-store-state`. The synthetic store uses the host `/nix/store` as its physical store directory, but contains metadata only for the pinned NixOS closure.
 
 For the `image` strategy, Ash resolves the selected toplevel closure plus its generated registration store object and writes both directly into a sparse ext4 filesystem through the shared `libext2fs` importer. Store paths are written below `/store` in the image, which becomes `/nix/store` when the filesystem is mounted at `/nix`. Writable images use conventional ext4 inode density of roughly one inode per 16 KiB rather than sizing inodes only for the initial closure. The image initially contains store paths but no Nix database. Ash caches a read-only, closure-sized base image under `$XDG_CACHE_HOME/$ASH_NAME/nix-store-images` (falling back to `~/.cache/$ASH_NAME/nix-store-images`, with `ASH_NAME` defaulting to `ash`), keyed by cache format and the exact toplevel store path rather than registration output or writable capacity. Creating a VM clones that base into the VM state with `cp --reflink=auto --sparse=always`, using filesystem CoW when available and retaining sparse-copy behavior otherwise, then grows the clone with `resize2fs` to the configured `image_size_mib`. A versioned TOML sidecar (`<cache-key>.toml` for cached bases and `nix-store.toml` for writable VM images) records the closure, registration path and hash, expected image size, closure metrics, timestamps, cache lineage, and deduplicated flake provenance. Existing `.toplevel` markers remain visible as legacy metadata, while writable images using them require `ash rebuild-db` before reuse. Increasing `image_size_mib` for a stopped VM enlarges the sparse backing file and runs `resize2fs`; shrinking remains an explicit `ash rebuild-db`. When a stopped VM selects a different closure, Ash checks the existing filesystem, opens it through `libext2fs`, skips immutable targets already present, imports only missing paths, and updates the TOML sidecar after a successful close. Old and guest-added store paths remain available; a failed import is resumable because the old sidecar is retained and subsequent attempts skip paths already written. The flake exposes `nixosConfigurations.image-reconcile-first` and `nixosConfigurations.image-reconcile-second`; `checks.x86_64-linux.image-store-reconcile` builds both closures, creates an image from the first, reconciles the second into the same image, verifies both toplevels and the updated sidecar, and finishes with `e2fsck`.
 
 After guest readiness and before ash-managed mounts, Ash imports the resulting `registration` file with guest-root `nix-store --load-db` for guests that use the regular local store. This applies to both shared and image-backed stores. Guests configured with a `local-overlay` store skip the import because the closure is already present in the readonly lower-store database. Ash detects these guests through `/etc/ash/local-overlay-store` or a `store = local-overlay://...` entry in `nix.conf`. Foreground attach flows apply the same check in the generated SSH wrapper. A marker under `/run/ash/nix-registration/` avoids repeating regular-store imports during the same boot.
 
-The guest may mount these tags/labels as needed. The current agent guest config mounts them as:
+The guest mounts the two share roots at stable paths. A shared-store guest must make the read-only root and its staged Nix store available during stage 1; the remaining final targets are created by Ash through QGA:
 
 ```nix
-fileSystems."/home/agent/workspace" = {
-  device = "workspace";
+fileSystems."/run/ash/shares/ro" = {
+  device = "shares-ro";
   fsType = "virtiofs";
+  options = [ "ro" ];
+  neededForBoot = true;
 };
 
-# A guest supporting both strategies can define conditional stage-1 mount
-# units using ConditionKernelCommandLine=ash.nix-store=shared|image. Shared
-# mode mounts ro-store, shares-ro, shares-rw, and the writable overlay at
-# /sysroot/nix/store. Image mode mounts the ext4 label at /sysroot/nix.
+fileSystems."/run/ash/shares/rw" = {
+  device = "shares-rw";
+  fsType = "virtiofs";
+  neededForBoot = true;
+};
+
+# Enable this binding only for ash.nix-store=shared.
+fileSystems."/nix/store" = {
+  device = "/run/ash/shares/ro/system/nix-store";
+  fsType = "none";
+  options = [ "bind" "ro" ];
+  neededForBoot = true;
+};
 
 fileSystems."/persist" = {
   device = "/dev/disk/by-label/persist";
   fsType = "ext4";
 };
-
-fileSystems."/mnt/cwd" = {
-  device = "workspace_cwd";
-  fsType = "virtiofs";
-};
 ```
 
-Not every exposed mount must be mounted by the guest, but features depending on a path require the matching mount. For example, `--mount-cwd` sets `workspace.mount_cwd = true` and expects `workspace_cwd` to be mounted at `/mnt/cwd` inside the guest.
+Image mode mounts the ext4 `nix-store` label at `/nix` instead of binding the staged host store. Workspace, cwd, selected spaces, and runtime mounts are bound from the mounted share roots by Ash after QGA becomes ready.
 
-## Runtime hotmount implementation
+## Runtime mount implementation
 
 `ash mount [--mode ro|rw] NAME HOST_PATH[:GUEST_PATH]` uses this path:
 
 ```text
 host directory
-  -> bindfs staging mount under <state_dir>/hotmounts/<id>
-  -> hotmounts virtiofs share
-  -> /run/ash/hotmounts in guest
+  -> bindfs staging under <state_dir>/shares/{ro,rw}/mounts/hotmounts/<id>
+  -> shares-ro or shares-rw virtiofs root
+  -> /run/ash/shares/{ro,rw}/mounts/hotmounts/<id> in the guest
   -> guest bind mount at GUEST_PATH
 ```
 
-For writable staging mounts ash runs:
+For writable staging mounts Ash runs:
 
 ```sh
 bindfs --multithreaded --no-allow-other \
   -o attr_timeout=0,entry_timeout=0,negative_timeout=0 SOURCE TARGET
 ```
 
-Read-only mounts add `-r`. The options avoid bindfs' default single-threaded FUSE mode, avoid requiring `allow_other`, and disable metadata caches. If bindfs fails and ash is running as root, ash can fall back to a kernel `mount --bind`. Mutable virtiofs shares (`workspace`, selected space directories, `hotmounts`, and `workspace_cwd`) use `--cache=never`; the immutable `/nix/store` share keeps virtiofsd's default cache behavior.
+Read-only mounts add `-r`. The options avoid bindfs' default single-threaded FUSE mode, avoid requiring `allow_other`, and disable metadata caches. If bindfs fails and Ash is running as root, Ash can fall back to a kernel `mount --bind`. Ash omits explicit daemon argument arrays for the consolidated shares so Virtle supplies its standard virtiofsd arguments.
 
-Ash stores each persistent desired-state record at:
+Runtime desired state is stored atomically in `ash-state.toml`:
 
-```text
-<state_dir>/hotmounts/.ash/<source_name>.meta
+```toml
+[runtime]
+spaces = ["development"]
+
+[[runtime.mounts]]
+id = "project-0123456789ab"
+host_path = "/home/user/project"
+guest_path = "/home/agent/project"
+mode = "rw"
+owners = ["manual", "space:development"]
 ```
 
-with this line-oriented format:
+The ID is derived from the normalized host and guest paths. Owners act as claims: `ash umount-space` removes only the matching `space:NAME` claim, and the mount remains desired while another manual or space owner exists. `ash mount-space` stores the fully resolved snapshot, including inherited mounts, so restart and unmount behavior does not depend on later config changes. Ash rejects runtime targets that conflict with workspace, cwd, or launch-time space targets.
 
-```text
-<guest_path>
-<host_dir>
-<mode>
-<source_name>
-```
-
-Metadata writes use temporary-file-plus-rename atomic replacement. Mount, unmount, and startup reconciliation are serialized by a per-VM advisory lock.
+All state mutations hold `<state_dir>/ash-state.lock` across the read-modify-write operation and replace `ash-state.toml` atomically. Desired state is committed before guest realization. Startup reconciliation recreates missing bindfs and guest bind mounts, removes orphan staging paths, and retries mounts that previously failed. Legacy `<state_dir>/hotmounts/.ash/*.meta` records are imported into `ash-state.toml` and their old staging tree is removed after successful reconciliation.
 
 Host staging teardown tries, in order:
 
@@ -300,7 +327,7 @@ Host staging teardown tries, in order:
 
 The lazy variants handle virtiofsd briefly keeping the staging mount busy.
 
-`ash` uses `/home/<ssh-user>/workspace` as the guest workspace directory. For the default `agent` user, this is `/home/agent/workspace`. The SSH user can be overridden per run with `--user`; `ash` validates that the selected NixOS configuration defines `users.users.<user>`. If the guest mounts the `workspace` tag via static guest config, that config must use the same user/path.
+`ash` uses `/home/<ssh-user>/workspace` as the guest workspace directory and binds it from `shares/rw/mounts/workspace`. For the default `agent` user, this is `/home/agent/workspace`. The SSH user can be overridden per run with `--user`; `ash` validates that the selected NixOS configuration defines `users.users.<user>`.
 
 `ash` currently enables `ssh.autoprovision = true` in the generated manifest, so the guest should run QEMU Guest Agent and respond on the generated `qga.sock`. Passing `--mount-cwd` also requires QGA because `virtle` uses guest commands to bind-mount the workspace. For NixOS guests, enable:
 

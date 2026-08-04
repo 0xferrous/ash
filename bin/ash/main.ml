@@ -121,10 +121,12 @@ let ro_store_socket_arg =
   Arg.(
     value
     & opt (some string) None
-    & info [ "ro-store-socket" ]
+    & info
+        [ "shares-ro-socket"; "ro-store-socket" ]
         ~doc:
-          "Use an existing virtiofs daemon socket for the read-only /nix/store \
-           mount instead of starting ash's own ro-store virtiofsd."
+          "Use an existing virtiofs daemon socket for the consolidated \
+           read-only shares-ro mount. --ro-store-socket is retained as a \
+           compatibility alias."
         ~docv:"PATH")
 
 let nix_store_strategy_arg =
@@ -495,7 +497,7 @@ let umount_cmd =
 
 let space_names_arg =
   Arg.(
-    non_empty & pos_right 1 string []
+    non_empty & pos_right 0 string []
     & info [] ~doc:"Space names to hotmount." ~docv:"SPACE")
 
 let mount_space_man = Pages.mount_space.man

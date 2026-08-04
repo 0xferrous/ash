@@ -146,11 +146,17 @@ Names that are not already lowercase DNS labels receive an eight-hex digest
 suffix after normalization. The host must have `.local` mDNS resolution
 enabled, and multicast UDP 5353 must pass over the VM bridge.
 
-The default Nix store strategy is `shared`: Ash exposes the host `/nix/store`
-read-only through virtiofs. Pass `--ro-store-socket PATH` to reuse an existing
-virtiofsd. Ash also provides lower-store metadata and writable overlay
-locations under `shares/ro` and `shares/rw` for guests using Nix's
-`local-overlay` store.
+Every VM exposes exactly two directory shares: `shares-ro` and `shares-rw`.
+Workspace, cwd, configured spaces, and runtime mounts are staged beneath these
+roots and bind-mounted at their final guest paths. Ash leaves the consolidated
+shares' daemon argument arrays unset so Virtle supplies its standard virtiofsd
+arguments. The default Nix store
+strategy is `shared`; it stages the host `/nix/store` at
+`shares/ro/system/nix-store`, with lower-store metadata and writable overlay
+state under the corresponding `system` directories. Guests using this strategy
+must mount `shares-ro` during stage 1 and bind the staged store at `/nix/store`.
+Pass `--shares-ro-socket PATH` to reuse an existing daemon socket;
+`--ro-store-socket` remains a compatibility alias.
 
 To use a private image-backed store instead:
 

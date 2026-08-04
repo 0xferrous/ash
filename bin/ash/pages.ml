@@ -188,8 +188,9 @@ let spawn =
            other destinations keep Virtle's default ownership.";
         `S "MOUNTS";
         `P
-          "Spaces selected with --space add their configured directory mounts \
-           as launch-time virtiofs shares. New VMs have no selected spaces by \
+          "Spaces selected with --space stage their configured directories \
+           beneath the consolidated shares-ro or shares-rw tree, then bind \
+           those paths into the guest. New VMs have no selected spaces by \
            default; existing named VMs reuse their saved selection.";
         `P
           "--mount-cwd also adds the current host directory as a workspace/cwd \
@@ -207,10 +208,10 @@ let spawn =
            the registration. Foreground attached spawns use the generated SSH \
            wrapper for the same preparation.";
         `P
-          "Runtime hotmounts are managed later with ash mount, ash umount, ash \
-           mount-space, and ash umount-space. Successful hotmounts are saved \
-           as desired state and restored by later background starts and \
-           resumes. Foreground attached starts do not currently restore them.";
+          "Runtime mounts are managed later with ash mount, ash umount, ash \
+           mount-space, and ash umount-space. Their resolved paths, modes, and \
+           manual or space ownership claims are saved in ash-state.toml and \
+           reconciled by later starts and resumes.";
         `S "NIX STORE STRATEGIES";
         `P
           "Set [global.nix_store].strategy to shared or image. shared is the \
@@ -219,10 +220,11 @@ let spawn =
            --nix-store-image-size-mib override these defaults for one VM and \
            save the choice in its ash-state.toml.";
         `P
-          "The shared strategy exposes the host /nix/store read-only through \
-           the ro-store virtiofs tag. It also provides shares-ro and shares-rw \
-           for guests using Nix's local-overlay store. --ro-store-socket may \
-           select an existing virtiofsd socket for this strategy.";
+          "The shared strategy stages the host /nix/store at \
+           shares/ro/system/nix-store. Both store strategies expose exactly \
+           two directory shares, shares-ro and shares-rw. --shares-ro-socket \
+           may select an existing daemon socket; --ro-store-socket remains a \
+           compatibility alias.";
         `P
           "The image strategy creates nix-store.img as a private ext4 \
            filesystem labeled nix-store and copies the selected closure plus \
@@ -259,27 +261,25 @@ let spawn =
            discards guest-added store paths.";
         `S "ASSUMED MOUNTS";
         `P
-          "Every generated virtle.toml includes workspace, hotmounts, and a \
-           persistent ext4 disk image at persist.img. The shared Nix store \
-           strategy also includes shares-ro, shares-rw, and the read-only \
-           ro-store virtiofs mount. The image strategy instead attaches \
+          "Every generated virtle.toml includes exactly two virtiofs directory \
+           mounts, shares-ro and shares-rw, plus the persistent ext4 image at \
+           persist.img. The image Nix store strategy additionally attaches \
            nix-store.img, labeled nix-store. The manifest enables KVM, so the \
            host is expected to provide /dev/kvm.";
         `P
-          "The workspace mount exposes a directory inside ash VM state to the \
-           guest through virtiofs. It acts as a host/guest directory portal \
-           and is not capped like a disk image; usable size is bounded by host \
-           storage.";
+          "The workspace lives at shares/rw/mounts/workspace and is bound to \
+           the guest workspace path. It is not capped like a disk image; \
+           usable size is bounded by host storage.";
         `P
-          "The hotmounts mount is reserved for later ash mount operations, so \
-           new host directories can be staged and mounted into a running guest \
-           without regenerating the manifest.";
+          "Runtime directories are staged below \
+           shares/{ro,rw}/mounts/hotmounts and can be mounted into a running \
+           guest without regenerating the manifest.";
         `P
           "With the shared strategy, the shares mounts expose VM-state \
            directories at /run/ash/shares/ro and /run/ash/shares/rw. Before \
            launch, Ash loads the resolved NixOS closure registration into \
-           shares/ro/guest-store-state so a guest local-overlay store can use \
-           it as readonly lower-store metadata. The rw share provides \
+           shares/ro/system/guest-store-state so a guest local-overlay store \
+           can use it as readonly lower-store metadata. The rw share provides \
            guest-store-state, guest-store-upper, and guest-store-work for \
            host-backed OverlayFS upper layers. Configure the local-overlay \
            store's writable state to use guest-store-state so its metadata is \
@@ -288,9 +288,8 @@ let spawn =
            build users keep distinct ownership; otherwise it falls back to \
            squashing identities to the host user.";
         `P
-          "When --mount-cwd is used, ash adds workspace_cwd for the current \
-           host directory. The current agent guest config mounts this tag at \
-           /mnt/cwd.";
+          "When --mount-cwd is used, ash stages the current host directory at \
+           shares/rw/mounts/cwd and binds it to /mnt/cwd in the guest.";
         `S "SSH AUTOPROVISIONING";
         `P
           "spawn writes virtle.toml with ssh.autoprovision enabled. This \
@@ -414,11 +413,11 @@ let resume =
            stops when SSH exits.";
         `P
           "--attach --keep resumes as a background systemd user unit, waits \
-           for readiness, restores saved runtime hotmounts, then attaches. The \
-           VM keeps running after SSH exits.";
+           for readiness, restores saved runtime mounts, then attaches. The VM \
+           keeps running after SSH exits.";
         `P
           "Both background and foreground attached resumes restore saved \
-           runtime hotmounts.";
+           runtime mounts.";
         `S Manpage.s_examples;
         `Pre "ash resume work";
         `Pre "ash resume --attach work";
@@ -454,8 +453,9 @@ let ls =
            failed.";
         `P
           "DISK is host storage currently used. VIRTUAL is apparent size, \
-           including sparse files such as persist.img. Both exclude ash's \
-           hotmounts staging directory.";
+           including sparse files such as persist.img. Both exclude the \
+           consolidated shares tree so nested host staging mounts are not \
+           traversed.";
         `P
           "With --cache, output shows each cache key, host disk usage, sparse \
            virtual size, modification time, logical VM reference count, \
@@ -482,10 +482,8 @@ let inspect =
         `P
           "The default view includes runtime and storage status, flake and \
            space configuration, machine resources, workspace paths, configured \
-           virtle mounts and files, and persistent hotmount state.";
-        `P
-          "Malformed hotmount metadata is shown as a warning in the hotmount \
-           section.";
+           virtle mounts and files, and runtime mount owners stored in \
+           ash-state.toml.";
         `S "JSON";
         `P
           "With --json, prints the complete machine-readable view, including \
@@ -512,8 +510,9 @@ let regenerate =
            without launching the VM.";
         `S "WHAT IT REWRITES";
         `P
-          "regenerate rewrites virtle.toml and generated helper files such as \
-           ssh-with-space-mounts. It does not rewrite ash-state.toml.";
+          "regenerate rewrites virtle.toml, ash-state.toml, and generated \
+           helper files such as ssh-with-space-mounts. Runtime desired state \
+           is preserved while resolved spawn fields are refreshed.";
         `S "WHEN USEFUL";
         `P
           "Use after upgrading ash when generated output changed, after \
@@ -542,17 +541,18 @@ let rebuild_db =
            closure.";
         `S "WHAT IT RESETS";
         `P
-          "For strategy=shared, rebuild-db removes shares/ro and shares/rw, \
-           including local-overlay metadata, upper, and work directories. For \
-           strategy=image, it removes nix-store.img and its closure marker but \
-           preserves the closure base under \
-           $XDG_CACHE_HOME/$ASH_NAME/nix-store-images. ASH_NAME defaults to \
-           ash. The replacement image reuses that cache when the closure \
-           matches. In either case, guest-installed store paths are discarded.";
+          "For strategy=shared, rebuild-db removes only the Nix-related \
+           directories below shares/{ro,rw}/system, including local-overlay \
+           metadata, upper, and work directories. For strategy=image, it \
+           removes nix-store.img and its closure marker but preserves the \
+           closure base under $XDG_CACHE_HOME/$ASH_NAME/nix-store-images. \
+           ASH_NAME defaults to ash. The replacement image reuses that cache \
+           when the closure matches. In either case, guest-installed store \
+           paths are discarded.";
         `S "SAFETY";
         `P
-          "The VM must be stopped. persist.img, workspace, SSH keys, \
-           hotmounts, and other non-store VM state are preserved.";
+          "The VM must be stopped. persist.img, workspace, SSH keys, runtime \
+           mount state, and other non-store share data are preserved.";
         `S "REGENERATION";
         `P
           "After removing the store state, ash resolves the saved flake again, \
@@ -587,18 +587,18 @@ let mount =
            resolving host symlinks to their targets.";
         `S "HOW IT WORKS";
         `P
-          "ash stages the host directory under the VM state's hotmounts \
-           directory, exposes it through the fixed hotmounts virtiofs share, \
-           then uses virtle guest-exec to mount it at GUEST_PATH inside the \
-           guest.";
+          "ash stages the host directory below \
+           shares/{ro,rw}/mounts/hotmounts, exposes it through the matching \
+           consolidated share, then uses virtle guest-exec to bind it at \
+           GUEST_PATH inside the guest.";
         `P
-          "The guest hotmounts share is mounted lazily on first use. --mode \
-           controls guest access: rw is the default; ro makes the staged mount \
-           read-only.";
+          "The guest shares-ro or shares-rw root is mounted lazily when \
+           needed. --mode controls guest access: rw is the default; ro uses \
+           the read-only share and a read-only bind mount.";
         `P
-          "A successful mount is recorded as persistent desired state. Later \
-           background starts and resumes attempt to recreate it; an individual \
-           restoration failure is reported without preventing VM startup.";
+          "The desired mount is recorded atomically in ash-state.toml before \
+           guest realization. Later starts and resumes retry any missing host \
+           staging or guest bind mount.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;
@@ -691,12 +691,13 @@ let mount_space =
           "ash reads the config path saved in the VM's ash-state.toml, then \
            resolves the SPACE arguments from that ash config.";
         `P
-          "Each resolved space directory mount is mounted using the same \
-           runtime hotmount mechanism as ash mount.";
+          "Each requested space is resolved to a mount snapshot and recorded \
+           in ash-state.toml with a space ownership claim before \
+           reconciliation.";
         `P
-          "Read-only space mounts stay read-only. Successful space mounts use \
-           the same persistent desired-state records as ash mount and are \
-           restored by later background starts and resumes.";
+          "Read-only space mounts stay read-only. Overlapping spaces share one \
+           resolved mount with multiple ownership claims, so removing one \
+           space does not remove a mount still required by another owner.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;
@@ -717,11 +718,12 @@ let umount_space =
            running VM.";
         `S "HOW IT WORKS";
         `P
-          "ash reads the config path saved in the VM's ash-state.toml, then \
-           resolves the SPACE arguments from that ash config.";
+          "ash removes each SPACE ownership claim from the resolved snapshot \
+           already stored in ash-state.toml; it does not re-resolve the \
+           current config while unmounting.";
         `P
-          "Each resolved space directory target is unmounted from the running \
-           guest and removed from persistent desired state.";
+          "A guest and host staging mount is removed only when no manual or \
+           space owners remain.";
         `S "REQUIREMENTS";
         `P "The VM must be running and QEMU Guest Agent must be available.";
         `S Manpage.s_examples;

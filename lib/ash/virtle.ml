@@ -190,6 +190,17 @@ let manifest_path ~name = Filename.concat (state_dir name) "virtle.toml"
 let ash_config_path ~name = Filename.concat (state_dir name) "ash-state.toml"
 let has_saved_ash_config ~name = Sys.file_exists (ash_config_path ~name)
 
+let with_state_lock ~name f =
+  let dir = state_dir name in
+  Util.ensure_dir dir;
+  let path = Filename.concat dir "ash-state.lock" in
+  let fd = Unix.openfile path [ Unix.O_CREAT; Unix.O_RDWR ] 0o600 in
+  Fun.protect
+    ~finally:(fun () -> Unix.close fd)
+    (fun () ->
+      Unix.lockf fd Unix.F_LOCK 0;
+      f ())
+
 let space_mount_ssh_wrapper_path ~name =
   Filename.concat (state_dir name) "ssh-with-space-mounts"
 
@@ -258,33 +269,33 @@ let positive_integer_opt_of_doc doc path =
       Log.fatal "ash-state.toml field %s must be greater than zero"
         (String.concat "." path)
 
-let virtiofs_section ?cache ?(extra_args = []) ~socket ~bin () =
-  let args =
-    [
-      "--socket-path={{.Socket}}";
-      "--shared-dir={{.MountSource}}";
-      "--tag={{.MountTag}}";
-      "--xattr";
-    ]
-    @ extra_args
-    @ match cache with None -> [] | Some cache -> [ "--cache=" ^ cache ]
-  in
-  Otoml.table
-    [
-      ("socket", Otoml.string socket);
-      ("bin", Otoml.string bin);
-      ("args", string_array args);
-    ]
+let virtiofs_section ?cache ?(extra_args = []) ?(virtle_defaults = false)
+    ~socket ~bin () =
+  let fields = [ ("socket", Otoml.string socket); ("bin", Otoml.string bin) ] in
+  if virtle_defaults then Otoml.table fields
+  else
+    let args =
+      [
+        "--socket-path={{.Socket}}";
+        "--shared-dir={{.MountSource}}";
+        "--tag={{.MountTag}}";
+        "--xattr";
+      ]
+      @ extra_args
+      @ match cache with None -> [] | Some cache -> [ "--cache=" ^ cache ]
+    in
+    Otoml.table (fields @ [ ("args", string_array args) ])
 
-let virtiofs_mount ?target ?cache ?extra_args ~tag ~source ~read_only ~socket
-    ~bin () =
+let virtiofs_mount ?target ?cache ?extra_args ?virtle_defaults ~tag ~source
+    ~read_only ~socket ~bin () =
   let fields =
     [
       ("type", Otoml.string "virtiofs");
       ("tag", Otoml.string tag);
       ("source", Otoml.string source);
       ("read_only", Otoml.boolean read_only);
-      ("virtiofs", virtiofs_section ?cache ?extra_args ~socket ~bin ());
+      ( "virtiofs",
+        virtiofs_section ?cache ?extra_args ?virtle_defaults ~socket ~bin () );
     ]
   in
   let fields =
@@ -310,10 +321,30 @@ let image_mount ~source ~size ~label =
           ] );
     ]
 
-let space_mount ~bin (mount : Ash_config.mount) =
-  virtiofs_mount ~target:mount.target ~cache:"never" ~tag:mount.tag
-    ~source:mount.source ~read_only:mount.read_only
-    ~socket:(mount.tag ^ ".sock") ~bin ()
+let shares_dir ~name = Filename.concat (state_dir name) "shares"
+let shares_ro_dir ~name = Filename.concat (shares_dir ~name) "ro"
+let shares_rw_dir ~name = Filename.concat (shares_dir ~name) "rw"
+let shares_guest_dir = "/run/ash/shares"
+let shares_ro_guest_dir = Filename.concat shares_guest_dir "ro"
+let shares_rw_guest_dir = Filename.concat shares_guest_dir "rw"
+
+let shares_system_dir ~name ~read_only =
+  Filename.concat
+    (if read_only then shares_ro_dir ~name else shares_rw_dir ~name)
+    "system"
+
+let shares_mounts_dir ~name ~read_only =
+  Filename.concat
+    (if read_only then shares_ro_dir ~name else shares_rw_dir ~name)
+    "mounts"
+
+let shares_mount_dir ~name ~read_only category id =
+  Filename.concat
+    (Filename.concat (shares_mounts_dir ~name ~read_only) category)
+    id
+
+let workspace_host_dir ~name =
+  Filename.concat (shares_mounts_dir ~name ~read_only:false) "workspace"
 
 let workspace_mount ~workspace_guest_dir ~workspace_host_dir =
   {
@@ -323,13 +354,17 @@ let workspace_mount ~workspace_guest_dir ~workspace_host_dir =
     read_only = false;
   }
 
-let hotmounts_dir ~name = Filename.concat (state_dir name) "hotmounts"
-let hotmounts_guest_dir = "/run/ash/hotmounts"
-let hotmount_metadata_dir ~name = Filename.concat (hotmounts_dir ~name) ".ash"
-let shares_dir ~name = Filename.concat (state_dir name) "shares"
-let shares_ro_dir ~name = Filename.concat (shares_dir ~name) "ro"
-let shares_rw_dir ~name = Filename.concat (shares_dir ~name) "rw"
-let shares_guest_dir = "/run/ash/shares"
+(* Legacy locations are retained only for migrating existing hotmount state. *)
+let legacy_hotmounts_dir ~name = Filename.concat (state_dir name) "hotmounts"
+
+let legacy_hotmount_metadata_dir ~name =
+  Filename.concat (legacy_hotmounts_dir ~name) ".ash"
+
+let migrate_state_path ~old_path ~new_path =
+  if Sys.file_exists old_path && not (Sys.file_exists new_path) then (
+    Util.ensure_dir (Filename.dirname new_path);
+    Unix.rename old_path new_path;
+    Log.info "migrated VM state %s to %s" old_path new_path)
 
 type subordinate_id_range = { start : int; count : int }
 
@@ -469,9 +504,26 @@ let hotmount_mode_of_string = function
 
 let hotmount_mode_name = function Read_only -> "ro" | Read_write -> "rw"
 
+let shared_mount_location (mount : Ash_config.mount) =
+  let share_tag, share_guest_dir =
+    if mount.read_only then ("shares-ro", shares_ro_guest_dir)
+    else ("shares-rw", shares_rw_guest_dir)
+  in
+  let relative_source =
+    match mount.tag with
+    | "workspace" -> "mounts/workspace"
+    | "workspace_cwd" -> "mounts/cwd"
+    | tag -> Filename.concat "mounts/spaces" tag
+  in
+  (share_tag, share_guest_dir, relative_source)
+
 let mount_action (mount : Ash_config.mount) =
-  Qga.mount_virtiofs_action ~name:("ash-mount-" ^ mount.tag) ~tag:mount.tag
-    ~target:mount.target ~read_only:mount.read_only
+  let share_tag, share_guest_dir, relative_source =
+    shared_mount_location mount
+  in
+  Qga.mount_shared_path_action ~name:("ash-mount-" ^ mount.tag) ~share_tag
+    ~share_guest_dir ~relative_source ~guest_path:mount.target
+    ~read_only:mount.read_only
 
 let write_space_mount_ssh_wrapper ?(kitty = false) ~name ~virtle ~manifest_path
     ~registration_path ~load_registration ~ssh_exec mounts =
@@ -1256,9 +1308,21 @@ let space_mounts_for_inputs (inputs : manifest_inputs) =
     workspace_mount
       ~workspace_guest_dir:
         (Filename.concat (Ash_config.guest_home user) "workspace")
-      ~workspace_host_dir:(Filename.concat (state_dir inputs.name) "workspace")
+      ~workspace_host_dir:(workspace_host_dir ~name:inputs.name)
   in
-  workspace_mount :: resources.mounts
+  workspace_mount
+  ::
+  (if inputs.mount_cwd then
+     [
+       {
+         Ash_config.tag = "workspace_cwd";
+         source = Sys.getcwd ();
+         target = "/mnt/cwd";
+         read_only = false;
+       };
+     ]
+   else [])
+  @ resources.mounts
 
 let execute_nix_registration ~virtle ~path registration =
   let action =
@@ -1366,8 +1430,110 @@ exit "$bindfs_status"
 
 let ensure_bindfs_mount ~bindfs ~mode ~source ~target =
   if not (try_ensure_bindfs_mount ~bindfs ~mode ~source ~target) then
-    Log.fatal "failed to mount host directory %S at hotmount staging path %S"
-      source target
+    Log.fatal "failed to mount host directory %S at staging path %S" source
+      target
+
+let try_unmount_staging mount_dir =
+  let command =
+    Printf.sprintf
+      {sh|set -u
+target=%s
+if ! mountpoint -q -- "$target"; then exit 0; fi
+if command -v fusermount3 >/dev/null 2>&1; then
+  fusermount3 -u "$target" && exit 0
+  fusermount3 -uz "$target" && exit 0
+fi
+if command -v fusermount >/dev/null 2>&1; then
+  fusermount -u "$target" && exit 0
+  fusermount -uz "$target" && exit 0
+fi
+if [ "$(id -u)" = 0 ]; then umount "$target" && exit 0; fi
+exit 1
+|sh}
+      (Util.shell_quote mount_dir)
+  in
+  Util.run_foreground "/bin/sh" [ "-c"; command ] = 0
+
+let remove_staging_path path =
+  if try_unmount_staging path then Util.remove_tree ~force:true path
+  else Log.warn "failed to remove stale staging path %s" path
+
+let cleanup_staging_children ~dir ~desired =
+  if Sys.file_exists dir then
+    Sys.readdir dir |> Array.to_list
+    |> List.filter (fun entry -> not (List.mem entry desired))
+    |> List.iter (fun entry -> remove_staging_path (Filename.concat dir entry))
+
+let static_mount_staging_dir ~name (mount : Ash_config.mount) =
+  match mount.tag with
+  | "workspace" -> workspace_host_dir ~name
+  | "workspace_cwd" ->
+      Filename.concat (shares_mounts_dir ~name ~read_only:false) "cwd"
+  | tag -> shares_mount_dir ~name ~read_only:mount.read_only "spaces" tag
+
+let prepare_host_share_mounts (inputs : manifest_inputs) =
+  let mounts = space_mounts_for_inputs inputs in
+  let store_strategy =
+    Option.value inputs.nix_store_strategy
+      ~default:
+        (Ash_config.load_for_spaces inputs.config_path []
+        |> Ash_config.global_nix_store_strategy)
+  in
+  let staged_mounts =
+    List.filter
+      (fun (mount : Ash_config.mount) -> mount.tag <> "workspace")
+      mounts
+  in
+  let bindfs =
+    if staged_mounts <> [] || store_strategy = Ash_config.Shared then
+      Some (find_bindfs ())
+    else None
+  in
+  List.iter
+    (fun read_only ->
+      let desired =
+        mounts
+        |> List.filter (fun (mount : Ash_config.mount) ->
+            mount.tag <> "workspace"
+            && mount.tag <> "workspace_cwd"
+            && mount.read_only = read_only)
+        |> List.map (fun (mount : Ash_config.mount) -> mount.tag)
+      in
+      cleanup_staging_children
+        ~dir:
+          (Filename.concat
+             (shares_mounts_dir ~name:inputs.name ~read_only)
+             "spaces")
+        ~desired)
+    [ true; false ];
+  (* cwd has a fixed staging name but a launch-dependent source, so always
+     replace it rather than accepting a stale mountpoint from an earlier cwd. *)
+  remove_staging_path
+    (Filename.concat
+       (shares_mounts_dir ~name:inputs.name ~read_only:false)
+       "cwd");
+  List.iter
+    (fun (mount : Ash_config.mount) ->
+      if mount.tag = "workspace" then Util.ensure_dir mount.source
+      else
+        ensure_bindfs_mount ~bindfs:(Option.get bindfs)
+          ~mode:(if mount.read_only then Read_only else Read_write)
+          ~source:mount.source
+          ~target:(static_mount_staging_dir ~name:inputs.name mount))
+    mounts;
+  match store_strategy with
+  | Ash_config.Shared ->
+      ensure_bindfs_mount ~bindfs:(Option.get bindfs) ~mode:Read_only
+        ~source:"/nix/store"
+        ~target:
+          (Filename.concat
+             (shares_system_dir ~name:inputs.name ~read_only:true)
+             "nix-store")
+  | Ash_config.Image ->
+      remove_staging_path
+        (Filename.concat
+           (shares_system_dir ~name:inputs.name ~read_only:true)
+           "nix-store")
 
 let split_hotmount_spec spec =
   match String.index_opt spec ':' with
@@ -1380,98 +1546,182 @@ let split_hotmount_spec spec =
 
 let guest_home user = if user = "root" then "/root" else "/home/" ^ user
 
-let metadata_path ~name ~source_name =
-  Filename.concat (hotmount_metadata_dir ~name) (source_name ^ ".meta")
-
-type hotmount_metadata = {
+type runtime_mount = {
+  id : string;
   guest_path : string;
   host_dir : string;
   mode : hotmount_mode;
-  source_name : string;
-  path : string;
+  owners : string list;
 }
 
-let hotmount_metadata_content metadata =
-  String.concat "\n"
+type runtime_mount_state = { spaces : string list; mounts : runtime_mount list }
+
+let empty_runtime_mount_state = { spaces = []; mounts = [] }
+let manual_mount_owner = "manual"
+let space_mount_owner space = "space:" ^ space
+
+let runtime_mount_staging_dir ~name mount =
+  shares_mount_dir ~name ~read_only:(mount.mode = Read_only) "hotmounts"
+    mount.id
+
+let runtime_mount_table mount =
+  Otoml.table
     [
-      metadata.guest_path;
-      metadata.host_dir;
-      hotmount_mode_name metadata.mode;
-      metadata.source_name;
-      "";
+      ("id", Otoml.string mount.id);
+      ("host_path", Otoml.string mount.host_dir);
+      ("guest_path", Otoml.string mount.guest_path);
+      ("mode", Otoml.string (hotmount_mode_name mount.mode));
+      ("owners", string_array mount.owners);
     ]
 
-let write_hotmount_metadata_record metadata =
-  Util.atomic_write_file metadata.path (hotmount_metadata_content metadata)
+let runtime_state_table state =
+  Otoml.table
+    [
+      ("spaces", string_array state.spaces);
+      ( "mounts",
+        Otoml.TomlTableArray (List.map runtime_mount_table state.mounts) );
+    ]
 
-let hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode =
-  {
-    guest_path;
-    host_dir;
-    mode;
-    source_name;
-    path = metadata_path ~name ~source_name;
-  }
+let runtime_table_string fields key =
+  match List.assoc_opt key fields with
+  | Some (Otoml.TomlString value) -> value
+  | _ -> Log.fatal "ash-state.toml runtime mount is missing string field %s" key
 
-let read_hotmount_metadata path =
-  try
-    let lines =
-      In_channel.with_open_text path In_channel.input_all
-      |> String.split_on_char '\n'
-    in
-    match lines with
-    | guest_path :: host_dir :: mode_name :: source_name :: _ ->
-        let mode =
-          match mode_name with
-          | "ro" -> Ok Read_only
-          | "rw" -> Ok Read_write
-          | _ -> Error (Printf.sprintf "invalid mode %S" mode_name)
-        in
-        Result.bind mode (fun mode ->
-            let file_source_name =
-              Filename.basename path |> Filename.remove_extension
-            in
-            if guest_path = "" || Filename.is_relative guest_path then
-              Error "guest path is not absolute"
-            else if host_dir = "" || Filename.is_relative host_dir then
-              Error "host directory is not absolute"
-            else if source_name = "" || source_name <> file_source_name then
-              Error "source name does not match metadata filename"
-            else if source_name <> hotmount_slug ~host_dir ~guest_path then
-              Error "source name does not match host and guest paths"
-            else Ok { guest_path; host_dir; mode; source_name; path })
-    | _ -> Error "expected four metadata lines"
-  with Sys_error err -> Error err
+let runtime_table_strings fields key =
+  match List.assoc_opt key fields with
+  | Some (Otoml.TomlArray values) ->
+      List.map
+        (function
+          | Otoml.TomlString value -> value
+          | _ ->
+              Log.fatal
+                "ash-state.toml runtime mount field %s must contain strings" key)
+        values
+  | _ ->
+      Log.fatal "ash-state.toml runtime mount is missing string array field %s"
+        key
 
-type hotmounts_read = {
-  mounts : hotmount_metadata list;
-  invalid : (string * string) list;
-}
+let runtime_mount_of_table = function
+  | Otoml.TomlTable fields | Otoml.TomlInlineTable fields ->
+      let id = runtime_table_string fields "id" in
+      let host_dir = runtime_table_string fields "host_path" in
+      let guest_path = runtime_table_string fields "guest_path" in
+      let mode = hotmount_mode_of_string (runtime_table_string fields "mode") in
+      let owners = runtime_table_strings fields "owners" in
+      if id <> hotmount_slug ~host_dir ~guest_path then
+        Log.fatal
+          "ash-state.toml runtime mount id %S does not match its host and \
+           guest paths"
+          id;
+      if Filename.is_relative host_dir || Filename.is_relative guest_path then
+        Log.fatal "ash-state.toml runtime mount paths must be absolute";
+      { id; host_dir; guest_path; mode; owners }
+  | _ -> Log.fatal "ash-state.toml runtime.mounts must contain tables"
 
-(* Read the complete persistent hotmount inventory without performing mounts or
-   logging. Callers such as startup reconciliation and a future inspect command
-   can decide how to present malformed records. *)
-let read_hotmounts ~name =
-  let dir = hotmount_metadata_dir ~name in
-  if not (Sys.file_exists dir) then { mounts = []; invalid = [] }
+let legacy_runtime_mounts ~name =
+  let dir = legacy_hotmount_metadata_dir ~name in
+  if not (Sys.file_exists dir) then []
   else
     Sys.readdir dir |> Array.to_list |> List.sort String.compare
     |> List.filter (fun entry -> Filename.check_suffix entry ".meta")
-    |> List.fold_left
-         (fun state entry ->
-           let path = Filename.concat dir entry in
-           match read_hotmount_metadata path with
-           | Ok metadata -> { state with mounts = metadata :: state.mounts }
-           | Error err -> { state with invalid = (path, err) :: state.invalid })
-         { mounts = []; invalid = [] }
-    |> fun state ->
-    { mounts = List.rev state.mounts; invalid = List.rev state.invalid }
+    |> List.filter_map (fun entry ->
+        let path = Filename.concat dir entry in
+        try
+          match
+            In_channel.with_open_text path In_channel.input_all
+            |> String.split_on_char '\n'
+          with
+          | guest_path :: host_dir :: mode_name :: id :: _ ->
+              let mode =
+                match mode_name with
+                | "ro" -> Some Read_only
+                | "rw" -> Some Read_write
+                | _ -> None
+              in
+              if
+                mode = None
+                || Filename.is_relative guest_path
+                || Filename.is_relative host_dir
+                || id <> hotmount_slug ~host_dir ~guest_path
+              then (
+                Log.warn "ignoring invalid legacy hotmount metadata %s" path;
+                None)
+              else
+                Some
+                  {
+                    id;
+                    guest_path;
+                    host_dir;
+                    mode = Option.get mode;
+                    owners = [ manual_mount_owner ];
+                  }
+          | _ ->
+              Log.warn "ignoring invalid legacy hotmount metadata %s" path;
+              None
+        with Sys_error err ->
+          Log.warn "ignoring unreadable legacy hotmount metadata %s: %s" path
+            err;
+          None)
 
-let log_invalid_hotmount_metadata invalid =
-  List.iter
-    (fun (path, err) ->
-      Log.warn "ignoring invalid hotmount metadata %s: %s" path err)
-    invalid
+let runtime_state_of_doc doc =
+  let spaces =
+    Otoml.find_opt doc
+      (Otoml.get_array Otoml.get_string)
+      [ "runtime"; "spaces" ]
+    |> Option.value ~default:[]
+  in
+  let mounts =
+    match Otoml.find_opt doc Fun.id [ "runtime"; "mounts" ] with
+    | None -> []
+    | Some (Otoml.TomlTableArray values | Otoml.TomlArray values) ->
+        List.map runtime_mount_of_table values
+    | Some _ -> Log.fatal "ash-state.toml runtime.mounts must be a table array"
+  in
+  { spaces; mounts }
+
+let load_runtime_mount_state ~name =
+  let path = ash_config_path ~name in
+  if not (Sys.file_exists path) then empty_runtime_mount_state
+  else
+    let doc = load_manifest_doc path in
+    if Otoml.path_exists doc [ "runtime" ] then runtime_state_of_doc doc
+    else { spaces = []; mounts = legacy_runtime_mounts ~name }
+
+let write_runtime_mount_state_unlocked ~name runtime =
+  let path = ash_config_path ~name in
+  let doc = load_manifest_doc path in
+  let doc =
+    match doc with
+    | Otoml.TomlTable fields ->
+        Otoml.TomlTable
+          (("runtime", runtime_state_table runtime)
+          :: List.remove_assoc "runtime" fields)
+    | _ -> Log.fatal "ash-state.toml must contain a TOML table"
+  in
+  let content =
+    "# Generated by ash. Used by `ash regenerate`.\n"
+    ^ Otoml.Printer.to_string doc
+  in
+  Util.atomic_write_file path content
+
+let runtime_mount ~host_dir ~guest_path ~mode ~owners =
+  {
+    id = hotmount_slug ~host_dir ~guest_path;
+    host_dir;
+    guest_path;
+    mode;
+    owners;
+  }
+
+let add_owner owner mount =
+  if List.mem owner mount.owners then mount
+  else { mount with owners = mount.owners @ [ owner ] }
+
+let remove_owner owner mount =
+  { mount with owners = List.filter (( <> ) owner) mount.owners }
+
+let find_runtime_mount_by_guest_path state guest_path =
+  List.find_opt (fun mount -> mount.guest_path = guest_path) state.mounts
 
 let rec toml_to_json = function
   | Otoml.TomlString value -> `String value
@@ -1578,20 +1828,18 @@ let host_mountpoint_state path =
   | Some mountpoint ->
       `Bool (Util.run_foreground mountpoint [ "-q"; "--"; path ] = 0)
 
-let hotmount_inspect_json ~name metadata =
-  let staging_path =
-    Filename.concat (hotmounts_dir ~name) metadata.source_name
-  in
+let hotmount_inspect_json ~name mount =
+  let staging_path = runtime_mount_staging_dir ~name mount in
   `Assoc
     [
-      ("guestPath", `String metadata.guest_path);
-      ("hostPath", `String metadata.host_dir);
-      ("mode", `String (hotmount_mode_name metadata.mode));
-      ("sourceName", `String metadata.source_name);
-      ("metadataPath", `String metadata.path);
-      ("hostExists", `Bool (Sys.file_exists metadata.host_dir));
+      ("id", `String mount.id);
+      ("guestPath", `String mount.guest_path);
+      ("hostPath", `String mount.host_dir);
+      ("mode", `String (hotmount_mode_name mount.mode));
+      ("owners", `List (List.map (fun owner -> `String owner) mount.owners));
+      ("hostExists", `Bool (Sys.file_exists mount.host_dir));
       ( "hostKind",
-        match file_kind metadata.host_dir with
+        match file_kind mount.host_dir with
         | Some kind -> `String kind
         | None -> `Null );
       ("stagingPath", `String staging_path);
@@ -1670,13 +1918,7 @@ let find_inspect_vm ~name =
 let inspect_vm_json ~name =
   let vm = find_inspect_vm ~name in
   let name = vm.name in
-  let hotmounts = read_hotmounts ~name in
-  let invalid_hotmounts =
-    List.map
-      (fun (path, error) ->
-        `Assoc [ ("path", `String path); ("error", `String error) ])
-      hotmounts.invalid
-  in
+  let runtime_mounts = load_runtime_mount_state ~name in
   `Assoc
     [
       ("name", `String vm.name);
@@ -1693,7 +1935,7 @@ let inspect_vm_json ~name =
               inspect_path (Filename.concat vm.path "persist.img") );
             ( "nixStoreImage",
               inspect_path (Filename.concat vm.path "nix-store.img") );
-            ("workspace", inspect_path (Filename.concat vm.path "workspace"));
+            ("workspace", inspect_path (workspace_host_dir ~name));
           ] );
       ("runtime", inspect_runtime_json vm);
       ("ash", inspect_toml_file (ash_config_path ~name));
@@ -1702,11 +1944,14 @@ let inspect_vm_json ~name =
       ( "hotmounts",
         `Assoc
           [
-            ("directory", `String (hotmounts_dir ~name));
-            ("metadataDirectory", `String (hotmount_metadata_dir ~name));
+            ("stateFile", `String (ash_config_path ~name));
+            ( "spaces",
+              `List
+                (List.map (fun space -> `String space) runtime_mounts.spaces) );
             ( "mounts",
-              `List (List.map (hotmount_inspect_json ~name) hotmounts.mounts) );
-            ("invalid", `List invalid_hotmounts);
+              `List
+                (List.map (hotmount_inspect_json ~name) runtime_mounts.mounts)
+            );
           ] );
     ]
 
@@ -1759,11 +2004,8 @@ let configured_mount_target fields =
   | Some target -> Some target
   | None -> (
       match inspect_table_string fields "tag" with
-      | Some "hotmounts" -> Some hotmounts_guest_dir
-      | Some "shares-ro" -> Some (Filename.concat shares_guest_dir "ro")
-      | Some "shares-rw" -> Some (Filename.concat shares_guest_dir "rw")
-      | Some "ro-store" -> Some "/nix/store"
-      | Some "workspace_cwd" -> Some "/mnt/cwd"
+      | Some "shares-ro" -> Some shares_ro_guest_dir
+      | Some "shares-rw" -> Some shares_rw_guest_dir
       | _ -> (
           match List.assoc_opt "image" fields with
           | Some (Otoml.TomlTable image | Otoml.TomlInlineTable image) -> (
@@ -1891,36 +2133,30 @@ let inspect_vm_human ~name =
   if write_files <> [] then (
     Printf.printf "\nConfigured files (%d)\n" (List.length write_files);
     List.iter print_write_file write_files);
-  let hotmounts = read_hotmounts ~name in
-  Printf.printf "\nHotmounts (%d)\n" (List.length hotmounts.mounts);
+  let runtime_mounts = load_runtime_mount_state ~name in
+  Printf.printf "\nRuntime mounts (%d; spaces: %s)\n"
+    (List.length runtime_mounts.mounts)
+    (match runtime_mounts.spaces with
+    | [] -> "(none)"
+    | spaces -> String.concat "," spaces);
   List.iter
-    (fun metadata ->
-      let staging =
-        Filename.concat (hotmounts_dir ~name) metadata.source_name
-      in
+    (fun mount ->
+      let staging = runtime_mount_staging_dir ~name mount in
       let annotations =
         [
-          (if Sys.file_exists metadata.host_dir then None
-           else Some "host missing");
+          (if Sys.file_exists mount.host_dir then None else Some "host missing");
           (match host_mountpoint_state staging with
           | `Bool true -> Some "staged"
           | _ -> None);
+          Some ("owners=" ^ String.concat "," mount.owners);
         ]
         |> List.filter_map Fun.id
       in
-      let suffix =
-        match annotations with
-        | [] -> ""
-        | values -> " [" ^ String.concat ", " values ^ "]"
-      in
-      Printf.printf "  - %s -> %s (%s)%s\n" metadata.host_dir
-        metadata.guest_path
-        (hotmount_mode_name metadata.mode)
+      let suffix = " [" ^ String.concat ", " annotations ^ "]" in
+      Printf.printf "  - %s -> %s (%s)%s\n" mount.host_dir mount.guest_path
+        (hotmount_mode_name mount.mode)
         suffix)
-    hotmounts.mounts;
-  List.iter
-    (fun (path, error) -> Printf.printf "  ! invalid %s: %s\n" path error)
-    hotmounts.invalid;
+    runtime_mounts.mounts;
   flush stdout
 
 let inspect_vm ~json ~name =
@@ -1929,22 +2165,6 @@ let inspect_vm ~json ~name =
     output_char stdout '\n';
     flush stdout)
   else inspect_vm_human ~name
-
-let find_hotmount_metadata_by_guest_path ~name ~guest_path =
-  let state = read_hotmounts ~name in
-  log_invalid_hotmount_metadata state.invalid;
-  List.find_opt (fun metadata -> metadata.guest_path = guest_path) state.mounts
-
-let with_hotmount_lock ~name f =
-  let dir = hotmount_metadata_dir ~name in
-  Util.ensure_dir dir;
-  let path = Filename.concat dir "lock" in
-  let fd = Unix.openfile path [ Unix.O_CREAT; Unix.O_RDWR ] 0o600 in
-  Fun.protect
-    ~finally:(fun () -> Unix.close fd)
-    (fun () ->
-      Unix.lockf fd Unix.F_LOCK 0;
-      f ())
 
 let resolve_hotmount_guest_path ~user ~host_dir = function
   | None -> host_dir
@@ -1987,60 +2207,97 @@ let normalize_hotmount_host_dir host_dir =
 let resolve_hotmount_host_path path =
   Util.expand_home path |> Util.absolute_path |> normalize_hotmount_host_dir
 
-let hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir
-    ~guest_path () =
+let runtime_mount_action ~name:action_name mount =
+  let read_only = mount.mode = Read_only in
+  Qga.mount_shared_path_action ~name:action_name
+    ~share_tag:(if read_only then "shares-ro" else "shares-rw")
+    ~share_guest_dir:
+      (if read_only then shares_ro_guest_dir else shares_rw_guest_dir)
+    ~relative_source:(Filename.concat "mounts/hotmounts" mount.id)
+    ~guest_path:mount.guest_path ~read_only
+
+let realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount =
+  let staging = runtime_mount_staging_dir ~name mount in
+  ensure_bindfs_mount ~bindfs ~mode:mount.mode ~source:mount.host_dir
+    ~target:staging;
+  let action = runtime_mount_action ~name:"ash-runtime-mount" mount in
+  let output =
+    virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
+      ~params:(Qga.params action) ()
+  in
+  match (Qga.result action output).exit_code with
+  | Some 0 ->
+      Log.info "mounted %s at %s (%s)" mount.host_dir mount.guest_path
+        (hotmount_mode_name mount.mode);
+      true
+  | Some 42 ->
+      Log.info "%s is already mounted" mount.guest_path;
+      true
+  | _ ->
+      Log.warn "failed to realize runtime mount %s at %s: %s" mount.host_dir
+        mount.guest_path output;
+      false
+
+let ensure_runtime_target_not_static ~name guest_path =
+  let saved = load_manifest_doc (ash_config_path ~name) in
+  let manifest = load_manifest_doc (manifest_path ~name) in
+  let config_path = string_of_doc saved [ "spawn"; "config_path" ] in
+  let spaces = string_array_of_doc saved [ "spawn"; "spaces" ] in
+  let mount_cwd = bool_of_doc saved [ "spawn"; "mount_cwd" ] in
+  let user = manifest_string manifest [ "ssh"; "user" ] in
+  let resources =
+    Ash_config.load_for_spaces config_path spaces |> fun config ->
+    Ash_config.resources_for_spaces ~guest_user:user config spaces
+  in
+  let targets =
+    Filename.concat (Ash_config.guest_home user) "workspace"
+    :: (if mount_cwd then [ "/mnt/cwd" ] else [])
+    @ List.map (fun (mount : Ash_config.mount) -> mount.target) resources.mounts
+  in
+  if List.mem guest_path targets then
+    Log.fatal
+      "guest path %S is already provided by a launch-time mount; remove it \
+       from the VM's selected spaces before adding a runtime mount"
+      guest_path
+
+let add_runtime_mount_claim ~bindfs ~virtle ~manifest_path ~name ~owner ~mode
+    ~host_dir ~guest_path =
   let host_dir = normalize_hotmount_host_dir host_dir in
-  with_hotmount_lock ~name (fun () ->
-      let hotmounts_dir = hotmounts_dir ~name in
-      let source_name = hotmount_slug ~host_dir ~guest_path in
-      let mount_dir = Filename.concat hotmounts_dir source_name in
-      (match find_hotmount_metadata_by_guest_path ~name ~guest_path with
-      | Some existing when existing.source_name <> source_name ->
-          Log.fatal "guest path %S is already assigned to host directory %S"
-            guest_path existing.host_dir
-      | Some existing when existing.mode <> mode ->
-          Log.fatal
-            "guest path %S is already recorded in %s mode; unmount it before \
-             changing mode"
-            guest_path
-            (hotmount_mode_name existing.mode)
-      | _ -> ());
-      ensure_bindfs_mount ~bindfs ~mode ~source:host_dir ~target:mount_dir;
-      let metadata =
-        hotmount_metadata ~name ~source_name ~host_dir ~guest_path ~mode
+  ensure_runtime_target_not_static ~name guest_path;
+  let desired = runtime_mount ~host_dir ~guest_path ~mode ~owners:[ owner ] in
+  let state = load_runtime_mount_state ~name in
+  let mount, mounts =
+    match find_runtime_mount_by_guest_path state guest_path with
+    | Some existing when existing.host_dir <> host_dir || existing.mode <> mode
+      ->
+        Log.fatal "guest path %S is already assigned to host directory %S (%s)"
+          guest_path existing.host_dir
+          (hotmount_mode_name existing.mode)
+    | Some existing ->
+        let mount = add_owner owner existing in
+        ( mount,
+          List.map
+            (fun current -> if current.id = existing.id then mount else current)
+            state.mounts )
+    | None -> (desired, state.mounts @ [ desired ])
+  in
+  write_runtime_mount_state_unlocked ~name { state with mounts };
+  if not (realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount) then
+    Log.fatal
+      "saved runtime mount state, but could not realize %s; it will be retried \
+       on the next start"
+      guest_path;
+  mount
+
+let hotmount_path ~bindfs ~virtle ~manifest_path ~name ~owner ~mode ~host_dir
+    ~guest_path () =
+  with_state_lock ~name (fun () ->
+      let mount =
+        add_runtime_mount_claim ~bindfs ~virtle ~manifest_path ~name ~owner
+          ~mode ~host_dir ~guest_path
       in
-      let metadata_existed = Sys.file_exists metadata.path in
-      if not metadata_existed then write_hotmount_metadata_record metadata;
-      let action =
-        Qga.hotmount_action ~name:"ash-hotmount"
-          ~read_only:(match mode with Read_only -> true | Read_write -> false)
-          ~hotmounts_guest_dir ~source_name ~guest_path
-      in
-      let output =
-        try
-          virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-            ~params:(Qga.params action) ()
-        with exn ->
-          (if not metadata_existed then
-             try Unix.unlink metadata.path with Unix.Unix_error _ -> ());
-          raise exn
-      in
-      match (Qga.result action output).exit_code with
-      | Some 0 ->
-          if metadata_existed then write_hotmount_metadata_record metadata;
-          Log.info "mounted %s at %s (%s)" host_dir guest_path
-            (hotmount_mode_name mode);
-          Printf.printf "%s -> %s (%s)\n" host_dir guest_path
-            (hotmount_mode_name mode)
-      | Some 42 when metadata_existed ->
-          Log.info "%s is already a desired hotmount" guest_path
-      | Some 42 ->
-          (try Unix.unlink metadata.path with Unix.Unix_error _ -> ());
-          Log.fatal "%s is already a mountpoint" guest_path
-      | _ ->
-          (if not metadata_existed then
-             try Unix.unlink metadata.path with Unix.Unix_error _ -> ());
-          Log.fatal "failed to hotmount %s at %s: %s" host_dir guest_path output)
+      Printf.printf "%s -> %s (%s)\n" mount.host_dir mount.guest_path
+        (hotmount_mode_name mount.mode))
 
 let hotmount ?virtle ~mode ~name ~spec () =
   let bindfs = find_bindfs () in
@@ -2053,187 +2310,137 @@ let hotmount ?virtle ~mode ~name ~spec () =
     manifest_string (load_manifest_doc manifest_path) [ "ssh"; "user" ]
   in
   let guest_path = resolve_hotmount_guest_path ~user ~host_dir guest_path in
-  hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode ~host_dir ~guest_path
-    ()
+  hotmount_path ~bindfs ~virtle ~manifest_path ~name ~owner:manual_mount_owner
+    ~mode ~host_dir ~guest_path ()
 
-let try_unmount_hotmount_staging mount_dir =
-  let command =
-    Printf.sprintf
-      {sh|set -u
-target=%s
-
-if ! mountpoint -q -- "$target"; then exit 0; fi
-
-if command -v fusermount3 >/dev/null 2>&1; then
-  fusermount3 -u "$target" && exit 0
-  fusermount3 -uz "$target" && exit 0
-fi
-
-if command -v fusermount >/dev/null 2>&1; then
-  fusermount -u "$target" && exit 0
-  fusermount -uz "$target" && exit 0
-fi
-
-if [ "$(id -u)" = 0 ]; then
-  umount "$target" && exit 0
-fi
-
-printf '%%s\n' 'ash: failed to unmount host hotmount staging path' >&2
-exit 1
-|sh}
-      (Util.shell_quote mount_dir)
-  in
-  Util.run_foreground "/bin/sh" [ "-c"; command ] = 0
+let try_unmount_hotmount_staging = try_unmount_staging
 
 let unmount_hotmount_staging mount_dir =
   if not (try_unmount_hotmount_staging mount_dir) then
     Log.fatal "failed to unmount host staging path %S" mount_dir
 
 let cleanup_orphan_hotmount_staging ~name records =
-  let desired = List.map (fun metadata -> metadata.source_name) records in
-  let dir = hotmounts_dir ~name in
-  if Sys.file_exists dir then
+  let cleanup read_only =
+    let desired =
+      records
+      |> List.filter (fun mount -> mount.mode = Read_only = read_only)
+      |> List.map (fun mount -> mount.id)
+    in
+    let dir =
+      Filename.concat (shares_mounts_dir ~name ~read_only) "hotmounts"
+    in
+    if Sys.file_exists dir then
+      Sys.readdir dir |> Array.to_list
+      |> List.filter (fun entry -> not (List.mem entry desired))
+      |> List.iter (fun entry ->
+          let path = Filename.concat dir entry in
+          try
+            if (Unix.lstat path).st_kind = Unix.S_DIR then
+              if try_unmount_hotmount_staging path then (
+                (try Unix.rmdir path with Unix.Unix_error _ -> ());
+                Log.info "cleaned orphan runtime staging path %s" path)
+              else Log.warn "failed to clean orphan staging path %s" path
+          with Unix.Unix_error _ -> ())
+  in
+  cleanup true;
+  cleanup false
+
+let cleanup_legacy_hotmount_state ~name =
+  let dir = legacy_hotmounts_dir ~name in
+  if Sys.file_exists dir then (
     Sys.readdir dir |> Array.to_list
-    |> List.filter (fun entry ->
-        entry <> ".ash" && not (List.mem entry desired))
+    |> List.filter (fun entry -> entry <> ".ash")
     |> List.iter (fun entry ->
         let path = Filename.concat dir entry in
-        try
-          if (Unix.lstat path).st_kind = Unix.S_DIR then
-            if try_unmount_hotmount_staging path then (
-              (try Unix.rmdir path with Unix.Unix_error _ -> ());
-              Log.info "cleaned orphan hotmount staging path %s" path)
-            else Log.warn "failed to clean orphan hotmount staging path %s" path
-        with Unix.Unix_error _ -> ())
+        if try_unmount_hotmount_staging path then
+          try Util.remove_tree ~force:true path with _ -> ());
+    Util.remove_tree ~force:true dir)
 
 let restore_hotmounts ~virtle ~manifest_path ~name =
-  with_hotmount_lock ~name (fun () ->
-      let state = read_hotmounts ~name in
-      log_invalid_hotmount_metadata state.invalid;
+  with_state_lock ~name (fun () ->
+      let state = load_runtime_mount_state ~name in
+      (* Writing the complete state also migrates legacy per-mount sidecars into
+         ash-state.toml before any old staging paths are removed. *)
+      write_runtime_mount_state_unlocked ~name state;
       cleanup_orphan_hotmount_staging ~name state.mounts;
       match state.mounts with
-      | [] -> ()
-      | records -> (
+      | [] -> cleanup_legacy_hotmount_state ~name
+      | mounts -> (
           match Util.find_in_path "bindfs" with
           | None ->
               Log.warn
-                "cannot restore %d hotmount(s): bindfs is not available in PATH"
-                (List.length records)
+                "cannot restore %d runtime mount(s): bindfs is not available \
+                 in PATH"
+                (List.length mounts)
           | Some bindfs ->
               let restored = ref 0 in
               let failed = ref 0 in
               List.iter
-                (fun metadata ->
-                  if not (Sys.file_exists metadata.host_dir) then (
+                (fun mount ->
+                  if not (Sys.file_exists mount.host_dir) then (
                     incr failed;
                     Log.warn
-                      "cannot restore hotmount %s: host directory %S does not \
-                       exist"
-                      metadata.guest_path metadata.host_dir)
-                  else
-                    try
-                      if (Unix.stat metadata.host_dir).st_kind <> Unix.S_DIR
-                      then (
-                        incr failed;
-                        Log.warn
-                          "cannot restore hotmount %s: host path %S is not a \
-                           directory"
-                          metadata.guest_path metadata.host_dir)
-                      else
-                        let mount_dir =
-                          Filename.concat (hotmounts_dir ~name)
-                            metadata.source_name
-                        in
-                        if
-                          not
-                            (try_ensure_bindfs_mount ~bindfs ~mode:metadata.mode
-                               ~source:metadata.host_dir ~target:mount_dir)
-                        then (
-                          incr failed;
-                          Log.warn
-                            "cannot restore hotmount %s: failed to mount host \
-                             staging path %s"
-                            metadata.guest_path mount_dir)
-                        else
-                          let action =
-                            Qga.hotmount_action ~name:"ash-hotmount-restore"
-                              ~read_only:
-                                (match metadata.mode with
-                                | Read_only -> true
-                                | Read_write -> false)
-                              ~hotmounts_guest_dir
-                              ~source_name:metadata.source_name
-                              ~guest_path:metadata.guest_path
-                          in
-                          let output =
-                            virtle_rpc ~virtle ~path:manifest_path
-                              ~method_name:"guest-exec"
-                              ~params:(Qga.params action) ()
-                          in
-                          match (Qga.result action output).exit_code with
-                          | Some 0 ->
-                              incr restored;
-                              Log.info "restored hotmount %s at %s (%s)"
-                                metadata.host_dir metadata.guest_path
-                                (hotmount_mode_name metadata.mode)
-                          | Some 42 ->
-                              incr failed;
-                              Log.warn
-                                "cannot restore hotmount %s: guest target is \
-                                 already a mountpoint"
-                                metadata.guest_path
-                          | _ ->
-                              incr failed;
-                              Log.warn "failed to restore hotmount %s at %s: %s"
-                                metadata.host_dir metadata.guest_path output
-                    with
-                    | Unix.Unix_error (err, _, _) ->
-                        incr failed;
-                        Log.warn "failed to restore hotmount %s: %s"
-                          metadata.guest_path (Unix.error_message err)
-                    | Sys_error err | Failure err ->
-                        incr failed;
-                        Log.warn "failed to restore hotmount %s: %s"
-                          metadata.guest_path err)
-                records;
-              Log.info "hotmount restoration complete: %d restored, %d failed"
+                      "cannot restore runtime mount %s: host directory %S does \
+                       not exist"
+                      mount.guest_path mount.host_dir)
+                  else if
+                    realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name
+                      mount
+                  then incr restored
+                  else incr failed)
+                mounts;
+              if !failed = 0 then cleanup_legacy_hotmount_state ~name;
+              Log.info
+                "runtime mount restoration complete: %d restored, %d failed"
                 !restored !failed))
 
-let hotunmount_path ~virtle ~manifest_path ~name ~guest_path () =
-  with_hotmount_lock ~name (fun () ->
-      let metadata = find_hotmount_metadata_by_guest_path ~name ~guest_path in
-      Option.iter
-        (fun metadata ->
-          try Unix.unlink metadata.path
-          with Unix.Unix_error (err, _, _) ->
-            Log.fatal "failed to remove hotmount metadata %s: %s" metadata.path
-              (Unix.error_message err))
-        metadata;
-      let action = Qga.unmount_action ~name:"ash-hotunmount" ~guest_path in
-      let output =
-        try
-          virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-            ~params:(Qga.params action) ()
-        with exn ->
-          Option.iter write_hotmount_metadata_record metadata;
-          raise exn
-      in
-      (match (Qga.result action output).exit_code with
-      | Some 0 -> Log.info "unmounted guest path %s" guest_path
-      | Some 42 -> Log.info "%s is not a mountpoint in guest" guest_path
-      | _ ->
-          Option.iter write_hotmount_metadata_record metadata;
-          Log.fatal "failed to unmount guest path %s: %s" guest_path output);
-      (match metadata with
-      | None -> Log.warn "no hotmount metadata found for %s" guest_path
-      | Some metadata ->
-          let mount_dir =
-            Filename.concat (hotmounts_dir ~name) metadata.source_name
+let hotunmount_path ~virtle ~manifest_path ~name ~owner ~guest_path () =
+  with_state_lock ~name (fun () ->
+      let state = load_runtime_mount_state ~name in
+      match find_runtime_mount_by_guest_path state guest_path with
+      | None -> Log.warn "no runtime mount found for %s" guest_path
+      | Some mount when not (List.mem owner mount.owners) ->
+          Log.warn "runtime mount %s is not owned by %s" guest_path owner
+      | Some mount ->
+          let updated = remove_owner owner mount in
+          let mounts =
+            if updated.owners = [] then
+              List.filter (fun current -> current.id <> mount.id) state.mounts
+            else
+              List.map
+                (fun current ->
+                  if current.id = mount.id then updated else current)
+                state.mounts
           in
-          unmount_hotmount_staging mount_dir;
-          (try Unix.rmdir mount_dir with Unix.Unix_error _ -> ());
-          Log.info "unmounted host staging path %s" mount_dir);
-      Printf.printf "unmounted %s\n" guest_path)
+          let next = { state with mounts } in
+          write_runtime_mount_state_unlocked ~name next;
+          if updated.owners <> [] then
+            Log.info "kept %s mounted for remaining owners: %s" guest_path
+              (String.concat "," updated.owners)
+          else
+            let action =
+              Qga.unmount_action ~name:"ash-runtime-unmount" ~guest_path
+            in
+            let output =
+              try
+                virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
+                  ~params:(Qga.params action) ()
+              with exn ->
+                write_runtime_mount_state_unlocked ~name state;
+                raise exn
+            in
+            (match (Qga.result action output).exit_code with
+            | Some 0 -> Log.info "unmounted guest path %s" guest_path
+            | Some 42 -> Log.info "%s is not a mountpoint in guest" guest_path
+            | _ ->
+                write_runtime_mount_state_unlocked ~name state;
+                Log.fatal "failed to unmount guest path %s: %s" guest_path
+                  output);
+            let staging = runtime_mount_staging_dir ~name mount in
+            unmount_hotmount_staging staging;
+            (try Unix.rmdir staging with Unix.Unix_error _ -> ());
+            Log.info "unmounted host staging path %s" staging;
+            Printf.printf "unmounted %s\n" guest_path)
 
 let hotunmount ?virtle ~name ~guest_path () =
   let virtle = find_virtle virtle in
@@ -2244,7 +2451,8 @@ let hotunmount ?virtle ~name ~guest_path () =
   let guest_path =
     resolve_hotmount_guest_path ~user ~host_dir:"" (Some guest_path)
   in
-  hotunmount_path ~virtle ~manifest_path ~name ~guest_path ()
+  hotunmount_path ~virtle ~manifest_path ~name ~owner:manual_mount_owner
+    ~guest_path ()
 
 let space_resources_for_running_vm ~name ~manifest_path spaces =
   let saved_doc = load_manifest_doc (ash_config_path ~name) in
@@ -2255,28 +2463,210 @@ let space_resources_for_running_vm ~name ~manifest_path spaces =
   in
   Ash_config.resources_for_spaces ~guest_user:user config spaces
 
+let add_space_mount_to_state ~space state (mount : Ash_config.mount) =
+  let owner = space_mount_owner space in
+  let mode = if mount.read_only then Read_only else Read_write in
+  let host_dir = normalize_hotmount_host_dir mount.source in
+  match find_runtime_mount_by_guest_path state mount.target with
+  | Some existing when existing.host_dir <> host_dir || existing.mode <> mode ->
+      Log.fatal "guest path %S is already assigned to host directory %S (%s)"
+        mount.target existing.host_dir
+        (hotmount_mode_name existing.mode)
+  | Some existing ->
+      let updated = add_owner owner existing in
+      {
+        state with
+        mounts =
+          List.map
+            (fun current ->
+              if current.id = existing.id then updated else current)
+            state.mounts;
+      }
+  | None ->
+      let mount =
+        runtime_mount ~host_dir ~guest_path:mount.target ~mode ~owners:[ owner ]
+      in
+      { state with mounts = state.mounts @ [ mount ] }
+
 let hotmount_spaces ?virtle ~name ~spaces () =
+  let spaces =
+    List.fold_left
+      (fun unique space ->
+        if List.mem space unique then unique else unique @ [ space ])
+      [] spaces
+  in
   if spaces = [] then Log.fatal "mount-space requires at least one SPACE";
   let bindfs = find_bindfs () in
   let virtle = find_virtle virtle in
   let name, manifest_path = select_attach_vm (Some name) in
-  let resources = space_resources_for_running_vm ~name ~manifest_path spaces in
+  let resolved =
+    List.map
+      (fun space ->
+        let resources =
+          space_resources_for_running_vm ~name ~manifest_path [ space ]
+        in
+        (space, resources.mounts))
+      spaces
+  in
   List.iter
-    (fun (mount : Ash_config.mount) ->
-      let mode = if mount.read_only then Read_only else Read_write in
-      hotmount_path ~bindfs ~virtle ~manifest_path ~name ~mode
-        ~host_dir:mount.source ~guest_path:mount.target ())
-    resources.mounts
+    (fun (_, mounts) ->
+      List.iter
+        (fun (mount : Ash_config.mount) ->
+          ensure_runtime_target_not_static ~name mount.target)
+        mounts)
+    resolved;
+  with_state_lock ~name (fun () ->
+      let previous = load_runtime_mount_state ~name in
+      let requested_owners = List.map space_mount_owner spaces in
+      let base =
+        {
+          spaces =
+            List.filter
+              (fun space -> not (List.mem space spaces))
+              previous.spaces;
+          mounts =
+            previous.mounts
+            |> List.map (fun mount ->
+                List.fold_left
+                  (fun current owner -> remove_owner owner current)
+                  mount requested_owners)
+            |> List.filter (fun mount -> mount.owners <> []);
+        }
+      in
+      let desired =
+        List.fold_left
+          (fun state (space, mounts) ->
+            let state =
+              List.fold_left (add_space_mount_to_state ~space) state mounts
+            in
+            { state with spaces = state.spaces @ [ space ] })
+          base resolved
+      in
+      write_runtime_mount_state_unlocked ~name desired;
+      let obsolete =
+        List.filter
+          (fun old ->
+            not
+              (List.exists
+                 (fun current -> current.id = old.id && current.mode = old.mode)
+                 desired.mounts))
+          previous.mounts
+      in
+      let failures = ref 0 in
+      List.iter
+        (fun mount ->
+          let action =
+            Qga.unmount_action ~name:"ash-runtime-space-refresh"
+              ~guest_path:mount.guest_path
+          in
+          let output =
+            virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
+              ~params:(Qga.params action) ()
+          in
+          match (Qga.result action output).exit_code with
+          | Some 0 | Some 42 -> (
+              let staging = runtime_mount_staging_dir ~name mount in
+              unmount_hotmount_staging staging;
+              try Unix.rmdir staging with Unix.Unix_error _ -> ())
+          | _ ->
+              incr failures;
+              Log.warn "failed to replace old runtime space path %s: %s"
+                mount.guest_path output)
+        obsolete;
+      let requested_mounts =
+        List.filter
+          (fun mount ->
+            List.exists
+              (fun owner -> List.mem owner mount.owners)
+              requested_owners)
+          desired.mounts
+      in
+      List.iter
+        (fun mount ->
+          if
+            not
+              (realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount)
+          then incr failures)
+        requested_mounts;
+      if !failures <> 0 then
+        Log.fatal
+          "saved runtime space state, but failed to reconcile %d mount(s); \
+           they will be retried on the next start"
+          !failures;
+      Printf.printf "mounted runtime spaces: %s\n" (String.concat "," spaces))
 
 let hotunmount_spaces ?virtle ~name ~spaces () =
+  let spaces =
+    List.fold_left
+      (fun unique space ->
+        if List.mem space unique then unique else unique @ [ space ])
+      [] spaces
+  in
   if spaces = [] then Log.fatal "umount-space requires at least one SPACE";
+  let bindfs = find_bindfs () in
   let virtle = find_virtle virtle in
   let name, manifest_path = select_attach_vm (Some name) in
-  let resources = space_resources_for_running_vm ~name ~manifest_path spaces in
-  List.iter
-    (fun (mount : Ash_config.mount) ->
-      hotunmount_path ~virtle ~manifest_path ~name ~guest_path:mount.target ())
-    resources.mounts
+  with_state_lock ~name (fun () ->
+      let previous = load_runtime_mount_state ~name in
+      let owners = List.map space_mount_owner spaces in
+      let updated_mounts =
+        List.map
+          (fun mount ->
+            List.fold_left (fun m owner -> remove_owner owner m) mount owners)
+          previous.mounts
+      in
+      let removed, retained =
+        List.partition (fun mount -> mount.owners = []) updated_mounts
+      in
+      let desired =
+        {
+          spaces =
+            List.filter
+              (fun space -> not (List.mem space spaces))
+              previous.spaces;
+          mounts = retained;
+        }
+      in
+      write_runtime_mount_state_unlocked ~name desired;
+      let restore_previous () =
+        write_runtime_mount_state_unlocked ~name previous;
+        List.iter
+          (fun mount ->
+            ignore
+              (realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount))
+          removed
+      in
+      let failed = ref false in
+      (try
+         List.iter
+           (fun mount ->
+             let action =
+               Qga.unmount_action ~name:"ash-runtime-space-unmount"
+                 ~guest_path:mount.guest_path
+             in
+             let output =
+               virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
+                 ~params:(Qga.params action) ()
+             in
+             match (Qga.result action output).exit_code with
+             | Some 0 | Some 42 -> (
+                 let staging = runtime_mount_staging_dir ~name mount in
+                 unmount_hotmount_staging staging;
+                 try Unix.rmdir staging with Unix.Unix_error _ -> ())
+             | _ ->
+                 failed := true;
+                 Log.warn "failed to unmount runtime space path %s: %s"
+                   mount.guest_path output)
+           removed
+       with exn ->
+         restore_previous ();
+         raise exn);
+      if !failed then (
+        restore_previous ();
+        Log.fatal
+          "failed to unmount one or more runtime space paths; restored desired \
+           state");
+      Printf.printf "unmounted runtime spaces: %s\n" (String.concat "," spaces))
 
 let ssh_identity_path ~name = Filename.concat (state_dir name) "id_ed25519"
 
@@ -2640,54 +3030,77 @@ let render_resolved_manifest inputs =
   let workspace_guest_dir =
     Filename.concat (Ash_config.guest_home user) "workspace"
   in
-  let workspace_host_dir = Filename.concat state_dir "workspace" in
-  let hotmounts_host_dir = hotmounts_dir ~name:inputs.name in
+  let workspace_host_dir = workspace_host_dir ~name:inputs.name in
   let store_strategy = inputs.nix_store_strategy in
-  let ro_store_socket =
-    Option.value inputs.ro_store_socket ~default:"ro-store.sock"
+  let shares_ro_socket =
+    Option.value inputs.ro_store_socket ~default:"shares-ro.sock"
   in
   let shares_ro_host_dir = shares_ro_dir ~name:inputs.name in
   let shares_rw_host_dir = shares_rw_dir ~name:inputs.name in
+  migrate_state_path
+    ~old_path:(Filename.concat state_dir "workspace")
+    ~new_path:workspace_host_dir;
+  List.iter
+    (fun entry ->
+      migrate_state_path
+        ~old_path:(Filename.concat shares_ro_host_dir entry)
+        ~new_path:
+          (Filename.concat
+             (shares_system_dir ~name:inputs.name ~read_only:true)
+             entry))
+    [ "guest-store-state" ];
+  List.iter
+    (fun entry ->
+      migrate_state_path
+        ~old_path:(Filename.concat shares_rw_host_dir entry)
+        ~new_path:
+          (Filename.concat
+             (shares_system_dir ~name:inputs.name ~read_only:false)
+             entry))
+    [ "guest-store-state"; "guest-store-upper"; "guest-store-work" ];
+  Util.ensure_dir shares_ro_host_dir;
+  Util.ensure_dir shares_rw_host_dir;
   Util.ensure_dir workspace_host_dir;
-  Util.ensure_dir hotmounts_host_dir;
-  let shares_rw_identity =
-    match store_strategy with
-    | Ash_config.Shared ->
-        Util.ensure_dir shares_ro_host_dir;
-        Util.ensure_dir shares_rw_host_dir;
-        Some
-          (prepare_guest_store_dirs (shares_rw_identity ()) shares_rw_host_dir)
-    | Ash_config.Image -> None
-  in
+  let shares_rw_identity = shares_rw_identity () in
+  if store_strategy = Ash_config.Shared then
+    ignore
+      (prepare_guest_store_dirs shares_rw_identity
+         (shares_system_dir ~name:inputs.name ~read_only:false));
   let workspace_mount =
     workspace_mount ~workspace_guest_dir ~workspace_host_dir
   in
+  let cwd_mount =
+    {
+      Ash_config.tag = "workspace_cwd";
+      source = Sys.getcwd ();
+      target = "/mnt/cwd";
+      read_only = false;
+    }
+  in
+  let launch_targets =
+    workspace_mount.target
+    :: (if inputs.mount_cwd then [ cwd_mount.target ] else [])
+    @ List.map (fun (mount : Ash_config.mount) -> mount.target) resources.mounts
+  in
+  (if has_saved_ash_config ~name:inputs.name then
+     load_runtime_mount_state ~name:inputs.name |> fun runtime ->
+     List.iter
+       (fun mount ->
+         if List.mem mount.guest_path launch_targets then
+           Log.fatal
+             "runtime mount target %S conflicts with a launch-time workspace \
+              or space mount; remove one of the conflicting desired mounts"
+             mount.guest_path)
+       runtime.mounts);
   let store_mounts =
-    match (store_strategy, shares_rw_identity) with
-    | Ash_config.Shared, Some identity ->
-        [
-          virtiofs_mount ~cache:"never" ~tag:"shares-ro"
-            ~source:shares_ro_host_dir ~read_only:true ~socket:"shares-ro.sock"
-            ~bin:inputs.virtiofsd ();
-          virtiofs_mount ~cache:"never"
-            ~extra_args:(shares_rw_virtiofs_extra_args identity)
-            ~tag:"shares-rw" ~source:shares_rw_host_dir ~read_only:false
-            ~socket:"shares-rw.sock" ~bin:inputs.virtiofsd ();
-          (* The host Nix store is root-owned. virtiofsd's default namespace
-             sandbox maps an unprivileged launcher to namespace root, leaving
-             host uid/gid 0 unmapped and exposing store paths to the guest as
-             nobody:nogroup. Preserve ownership by avoiding the namespace. *)
-          virtiofs_mount ~extra_args:[ "--sandbox=none" ] ~tag:"ro-store"
-            ~source:"/nix/store" ~read_only:true ~socket:ro_store_socket
-            ~bin:inputs.virtiofsd ();
-        ]
-    | Ash_config.Image, None ->
+    match store_strategy with
+    | Ash_config.Shared -> []
+    | Ash_config.Image ->
         [
           image_mount
             ~source:(Filename.concat state_dir "nix-store.img")
             ~size:inputs.nix_store_image_size_mib ~label:"nix-store";
         ]
-    | _ -> assert false
   in
   let kernel_params =
     List.filter
@@ -2700,9 +3113,12 @@ let render_resolved_manifest inputs =
   in
   let mounts =
     [
-      space_mount ~bin:inputs.virtiofsd workspace_mount;
-      virtiofs_mount ~cache:"never" ~tag:"hotmounts" ~source:hotmounts_host_dir
-        ~read_only:false ~socket:"hotmounts.sock" ~bin:inputs.virtiofsd ();
+      virtiofs_mount ~virtle_defaults:true ~tag:"shares-ro"
+        ~source:shares_ro_host_dir ~read_only:true ~socket:shares_ro_socket
+        ~bin:inputs.virtiofsd ();
+      virtiofs_mount ~virtle_defaults:true ~tag:"shares-rw"
+        ~source:shares_rw_host_dir ~read_only:false ~socket:"shares-rw.sock"
+        ~bin:inputs.virtiofsd ();
     ]
     @ store_mounts
     @ [
@@ -2710,16 +3126,11 @@ let render_resolved_manifest inputs =
           ~source:(Filename.concat state_dir "persist.img")
           ~size:16384 ~label:"persist";
       ]
-    @ (if inputs.mount_cwd then
-         [
-           virtiofs_mount ~cache:"never" ~tag:"workspace_cwd" ~source:"."
-             ~read_only:false ~socket:"workspace-cwd.sock" ~bin:inputs.virtiofsd
-             ();
-         ]
-       else [])
-    @ List.map (space_mount ~bin:inputs.virtiofsd) resources.mounts
   in
-  let ssh_mounts = workspace_mount :: resources.mounts in
+  let ssh_mounts =
+    (workspace_mount :: (if inputs.mount_cwd then [ cwd_mount ] else []))
+    @ resources.mounts
+  in
   let ssh_wrapper =
     write_space_mount_ssh_wrapper ~name:inputs.name ~virtle:inputs.virtle
       ~manifest_path:(manifest_path ~name:inputs.name)
@@ -2821,7 +3232,8 @@ let render_resolved_manifest inputs =
   in
   (spaces, header ^ Otoml.Printer.to_string document)
 
-let ash_config (inputs : manifest_inputs) =
+let ash_config ?(runtime = empty_runtime_mount_state) (inputs : manifest_inputs)
+    =
   let fields =
     [
       ("config_path", Otoml.string inputs.config_path);
@@ -2884,24 +3296,30 @@ let ash_config (inputs : manifest_inputs) =
   in
   let tables =
     [ ("spawn", Otoml.table fields) ]
-    @
-    match inputs.registration_path with
-    | Some registration_path ->
-        [
-          ( "resolved",
-            Otoml.table
-              [ ("registration_path", Otoml.string registration_path) ] );
-        ]
-    | None -> []
+    @ (match inputs.registration_path with
+      | Some registration_path ->
+          [
+            ( "resolved",
+              Otoml.table
+                [ ("registration_path", Otoml.string registration_path) ] );
+          ]
+      | None -> [])
+    @ [ ("runtime", runtime_state_table runtime) ]
   in
   "# Generated by ash. Used by `ash regenerate`.\n"
   ^ Otoml.Printer.to_string (Otoml.table tables)
 
-let write_ash_config (inputs : manifest_inputs) =
+let write_ash_config_unlocked ?runtime (inputs : manifest_inputs) =
   let path = ash_config_path ~name:inputs.name in
-  let content = ash_config inputs in
-  Util.write_file path content;
+  let runtime =
+    Option.value runtime ~default:(load_runtime_mount_state ~name:inputs.name)
+  in
+  let content = ash_config ~runtime inputs in
+  Util.atomic_write_file path content;
   Log.debug "wrote ash config %s (%d bytes)" path (String.length content)
+
+let write_ash_config (inputs : manifest_inputs) =
+  with_state_lock ~name:inputs.name (fun () -> write_ash_config_unlocked inputs)
 
 let load_ash_config ~name =
   let path = ash_config_path ~name in
@@ -3045,16 +3463,12 @@ let render_manifest (inputs : manifest_inputs) =
     Option.value inputs.nix_store_image_size_mib
       ~default:(Ash_config.global_nix_store_image_size config)
   in
-  (match (store_strategy, inputs.ro_store_socket) with
-  | Ash_config.Image, Some _ ->
-      Log.fatal
-        "--ro-store-socket cannot be used with the image-backed Nix store \
-         strategy"
-  | _ -> ());
   (match store_strategy with
   | Ash_config.Shared ->
       let lower_store_state =
-        Filename.concat (shares_ro_dir ~name:inputs.name) "guest-store-state"
+        Filename.concat
+          (shares_system_dir ~name:inputs.name ~read_only:true)
+          "guest-store-state"
       in
       Nix.prepare_lower_store ~nix_store:boot.nix_store
         ~registration:boot.registration ~state:lower_store_state
@@ -3247,6 +3661,7 @@ let wait_and_mount (inputs : manifest_inputs) path =
 
 let launch_background ?(announce = true) ~resume (inputs : manifest_inputs) path
     ~verbose =
+  prepare_host_share_mounts inputs;
   start_background ~announce ~resume ~name:inputs.name ~virtle:inputs.virtle
     ~path ~verbose;
   wait_and_mount inputs path
@@ -3282,6 +3697,7 @@ let finish_foreground_setup pid =
 
 let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
     path ~verbose =
+  prepare_host_share_mounts inputs;
   let args = launch_args ~resume ~path ~verbose ~ssh:true in
   let setup_pid = start_foreground_setup inputs path in
   let code =
@@ -3482,10 +3898,25 @@ let stop ?name ~force () =
   exit code
 
 let remove_nix_store_state ~name =
-  let shares = shares_dir ~name in
   let image = Filename.concat (state_dir name) "nix-store.img" in
+  let ro_system = shares_system_dir ~name ~read_only:true in
+  let rw_system = shares_system_dir ~name ~read_only:false in
+  let staged_store = Filename.concat ro_system "nix-store" in
   Log.debug "removing Nix store state for VM %s" name;
-  Util.remove_tree ~force:true shares;
+  ignore (try_unmount_hotmount_staging staged_store);
+  List.iter
+    (fun path -> Util.remove_tree ~force:true path)
+    [
+      staged_store;
+      Filename.concat ro_system "guest-store-state";
+      Filename.concat rw_system "guest-store-state";
+      Filename.concat rw_system "guest-store-upper";
+      Filename.concat rw_system "guest-store-work";
+      Filename.concat (shares_ro_dir ~name) "guest-store-state";
+      Filename.concat (shares_rw_dir ~name) "guest-store-state";
+      Filename.concat (shares_rw_dir ~name) "guest-store-upper";
+      Filename.concat (shares_rw_dir ~name) "guest-store-work";
+    ];
   (try Unix.unlink image with Unix.Unix_error _ -> ());
   Image_metadata.remove image
 

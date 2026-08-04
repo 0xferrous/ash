@@ -245,28 +245,27 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   assert_string_contains "SSH wrapper uses registration path" wrapper_content
     test_boot.registration;
   let mounts = table_array doc "mounts" in
-  let same_path =
-    find_table_by_string mounts "target" "/home/agent/dev/fr/ash"
-  in
-  assert_equal "implicit guest target source"
-    (Filename.concat home "dev/fr/ash")
-    (string_field same_path "source");
-  assert_bool "implicit mount writable" false (bool_field same_path "read_only");
-  let workspace_path =
-    find_table_by_string mounts "target" "/home/agent/workspace/ash"
-  in
-  assert_equal "explicit guest target source"
-    (Filename.concat home "dev/fr/ash")
-    (string_field workspace_path "source");
-  let read_only =
-    find_table_by_string mounts "target" "/home/agent/src/read-only"
-  in
-  assert_equal "read-only source"
-    (Filename.concat home "dev/read-only")
-    (string_field read_only "source");
-  assert_bool "read-only mount" true (bool_field read_only "read_only");
-  let absolute_mount = find_table_by_string mounts "target" absolute in
-  assert_equal "absolute source" absolute (string_field absolute_mount "source")
+  assert_int "consolidated mount count" 3 (List.length mounts);
+  let shares_ro = find_table_by_string mounts "tag" "shares-ro" in
+  let shares_rw = find_table_by_string mounts "tag" "shares-rw" in
+  assert_equal "shares-ro source"
+    (Filename.concat state "ash/unit-test/shares/ro")
+    (string_field shares_ro "source");
+  assert_bool "shares-ro is read-only" true (bool_field shares_ro "read_only");
+  assert_equal "shares-rw source"
+    (Filename.concat state "ash/unit-test/shares/rw")
+    (string_field shares_rw "source");
+  assert_bool "shares-rw is writable" false (bool_field shares_rw "read_only");
+  assert_bool "space source is not a virtiofs entry" false
+    (List.exists
+       (fun table ->
+         List.assoc_opt "source" table
+         = Some (Otoml.TomlString (Filename.concat home "dev/fr/ash")))
+       mounts);
+  assert_string_contains "workspace uses consolidated rw share" wrapper_content
+    "/run/ash/shares/rw";
+  assert_string_contains "space mounts use staged spaces path" wrapper_content
+    "mounts/spaces"
 
 let test_global_memory_config () =
   let root = temp_dir "ash-test-global-memory" in
@@ -348,7 +347,7 @@ let test_no_spaces_selected_by_default () =
   assert_equal "no selected spaces" "" (String.concat "," spaces);
   let doc = parse_toml manifest in
   let mounts = table_array doc "mounts" in
-  assert_int "fixed mount count without spaces" 6 (List.length mounts);
+  assert_int "fixed mount count without spaces" 3 (List.length mounts);
   let shares_ro = find_table_by_string mounts "tag" "shares-ro" in
   assert_equal "shares ro source"
     (Filename.concat state "ash/no-spaces/shares/ro")
@@ -361,16 +360,18 @@ let test_no_spaces_selected_by_default () =
     (string_field shares_rw "source");
   assert_bool "shares rw mount writable" false
     (bool_field shares_rw "read_only");
-  assert_bool "shares rw configures uid ownership" true
-    (Virtle.contains_substring manifest "--uid-map="
-    || Virtle.contains_substring manifest "--translate-uid=");
-  assert_bool "shares rw configures gid ownership" true
-    (Virtle.contains_substring manifest "--gid-map="
-    || Virtle.contains_substring manifest "--translate-gid=");
-  assert_string_contains "ro store preserves host ownership" manifest
-    "--sandbox=none";
+  let uses_virtle_defaults mount =
+    match table_field mount "virtiofs" with
+    | Otoml.TomlTable fields | Otoml.TomlInlineTable fields ->
+        not (List.mem_assoc "args" fields)
+    | _ -> fail "virtiofs field is not a table"
+  in
+  assert_bool "shares ro uses virtle daemon defaults" true
+    (uses_virtle_defaults shares_ro);
+  assert_bool "shares rw uses virtle daemon defaults" true
+    (uses_virtle_defaults shares_rw);
   let guest_store_upper =
-    Filename.concat state "ash/no-spaces/shares/rw/guest-store-upper"
+    Filename.concat state "ash/no-spaces/shares/rw/system/guest-store-upper"
   in
   if not (Sys.file_exists guest_store_upper) then
     fail "guest store upper dir should exist";
@@ -379,7 +380,8 @@ let test_no_spaces_selected_by_default () =
   if
     not
       (Sys.file_exists
-         (Filename.concat state "ash/no-spaces/shares/rw/guest-store-work"))
+         (Filename.concat state
+            "ash/no-spaces/shares/rw/system/guest-store-work"))
   then fail "guest store work dir should exist";
   assert_equal "default ssh user" "agent" (find_string doc [ "ssh"; "user" ])
 
@@ -420,12 +422,15 @@ image_size_mib = 12288
        (fun table ->
          List.assoc_opt "tag" table = Some (Otoml.TomlString "ro-store"))
        mounts);
-  assert_bool "image store omits shares" false
+  assert_bool "image store includes shares-ro" true
     (List.exists
        (fun table ->
-         match List.assoc_opt "tag" table with
-         | Some (Otoml.TomlString ("shares-ro" | "shares-rw")) -> true
-         | _ -> false)
+         List.assoc_opt "tag" table = Some (Otoml.TomlString "shares-ro"))
+       mounts);
+  assert_bool "image store includes shares-rw" true
+    (List.exists
+       (fun table ->
+         List.assoc_opt "tag" table = Some (Otoml.TomlString "shares-rw"))
        mounts);
   let store =
     List.find
@@ -448,7 +453,7 @@ image_size_mib = 12288
   | _ -> fail "image store configuration is not a table");
   assert_bool "image store target" true
     (Virtle.configured_mount_target store = Some "/nix");
-  assert_bool "image store does not prepare host shares" false
+  assert_bool "image store prepares consolidated host shares" true
     (Sys.file_exists (Filename.concat state "ash/image-store/shares"));
   let wrapper =
     In_channel.with_open_text
@@ -461,7 +466,12 @@ image_size_mib = 12288
     render ~config ~flake:"../my-nix#agent" ~name:"shared-store" ()
   in
   let shared_mounts = table_array (parse_toml shared_manifest) "mounts" in
-  assert_bool "other VM inherits global shared strategy" true
+  assert_bool "other VM inherits consolidated shared strategy" true
+    (List.exists
+       (fun table ->
+         List.assoc_opt "tag" table = Some (Otoml.TomlString "shares-ro"))
+       shared_mounts);
+  assert_bool "shared strategy omits legacy ro-store tag" false
     (List.exists
        (fun table ->
          List.assoc_opt "tag" table = Some (Otoml.TomlString "ro-store"))
@@ -1135,8 +1145,9 @@ let test_qga_unmount_removes_empty_mountpoint () =
 
 let test_qga_mountpoint_inherits_parent_owner () =
   let action =
-    Qga.hotmount_action ~name:"test-hotmount" ~read_only:false
-      ~hotmounts_guest_dir:"/run/ash/hotmounts" ~source_name:"source"
+    Qga.mount_shared_path_action ~name:"test-hotmount" ~read_only:false
+      ~share_tag:"shares-rw" ~share_guest_dir:"/run/ash/shares/rw"
+      ~relative_source:"mounts/hotmounts/source"
       ~guest_path:"/home/agent/project"
   in
   let script = List.nth action.args 1 in
@@ -1146,7 +1157,11 @@ let test_qga_mountpoint_inherits_parent_owner () =
   assert_string_contains "mountpoint owner install" script
     "install -d -o \"$owner\" -g \"$group\" \"$path\"";
   assert_string_contains "target uses helper" script
-    "install_mountpoint \"$target\""
+    "install_mountpoint \"$target\"";
+  assert_string_contains "bind failure diagnostics" script
+    "ash: bind mount failed; source and share diagnostics follow";
+  assert_string_contains "bind source findmnt diagnostics" script
+    "findmnt -T \"$source\""
 
 let test_virtiofs_cache_options () =
   let mutable_mount =
@@ -1170,6 +1185,15 @@ let test_virtiofs_cache_options () =
     (List.mem "--cache=never" (args mutable_mount));
   assert_bool "immutable mount keeps default cache" false
     (List.exists (String.starts_with ~prefix:"--cache=") (args default_mount))
+
+let test_virtiofs_uses_virtle_default_args () =
+  let mount =
+    Virtle.virtiofs_mount ~virtle_defaults:true ~tag:"default"
+      ~source:"/tmp/source" ~read_only:false ~socket:"default.sock"
+      ~bin:"/bin/virtiofsd" ()
+  in
+  assert_bool "virtle default mount omits daemon args" true
+    (Otoml.find_opt mount Fun.id [ "virtiofs"; "args" ] = None)
 
 let test_virtiofs_idmap_args () =
   assert_equal "virtiofs subordinate id mappings"
@@ -1198,19 +1222,14 @@ let test_inspect_infers_fixed_mount_targets () =
   let fields tag =
     [ ("type", Otoml.TomlString "virtiofs"); ("tag", Otoml.TomlString tag) ]
   in
-  assert_bool "hotmount target" true
-    (Virtle.configured_mount_target (fields "hotmounts")
-    = Some "/run/ash/hotmounts");
   assert_bool "shares ro target" true
     (Virtle.configured_mount_target (fields "shares-ro")
     = Some "/run/ash/shares/ro");
   assert_bool "shares rw target" true
     (Virtle.configured_mount_target (fields "shares-rw")
     = Some "/run/ash/shares/rw");
-  assert_bool "ro-store target" true
-    (Virtle.configured_mount_target (fields "ro-store") = Some "/nix/store");
-  assert_bool "workspace cwd target" true
-    (Virtle.configured_mount_target (fields "workspace_cwd") = Some "/mnt/cwd")
+  assert_bool "legacy hotmount tag has no inferred target" true
+    (Virtle.configured_mount_target (fields "hotmounts") = None)
 
 let test_bindfs_disables_kernel_metadata_caches () =
   let expected = "attr_timeout=0,entry_timeout=0,negative_timeout=0" in
@@ -1218,6 +1237,8 @@ let test_bindfs_disables_kernel_metadata_caches () =
   let ro_args = Virtle.bindfs_args_for_mode Virtle.Read_only in
   assert_bool "bindfs rw has cache timeouts" true (List.mem expected rw_args);
   assert_bool "bindfs ro has cache timeouts" true (List.mem expected ro_args);
+  assert_bool "bindfs limits staging to its owner" true
+    (List.mem "--no-allow-other" rw_args && List.mem "--no-allow-other" ro_args);
   assert_bool "bindfs ro stays read-only" true (List.mem "-r" ro_args)
 
 let test_hotmount_host_path_normalization_cases () =
@@ -1341,48 +1362,104 @@ let test_hotmount_tilde_guest_path_uses_guest_home () =
     (Virtle.resolve_hotmount_guest_path ~user:"root" ~host_dir:"/host/project"
        (Some "~/project"))
 
-let test_hotmount_metadata_roundtrip () =
-  let root = temp_dir "ash-test-hotmount-metadata" in
-  let host_dir = Filename.concat root "host" in
+let test_runtime_mount_state_roundtrip () =
+  let host_dir = "/host/project" in
   let guest_path = "/home/agent/project" in
-  let source_name = Virtle.hotmount_slug ~host_dir ~guest_path in
-  let path = Filename.concat root (source_name ^ ".meta") in
-  let metadata : Virtle.hotmount_metadata =
-    { guest_path; host_dir; mode = Virtle.Read_only; source_name; path }
+  let mount =
+    Virtle.runtime_mount ~host_dir ~guest_path ~mode:Virtle.Read_only
+      ~owners:[ "manual"; "space:dev" ]
   in
-  Virtle.write_hotmount_metadata_record metadata;
-  match Virtle.read_hotmount_metadata path with
-  | Error err -> fail ("failed to read metadata: " ^ err)
-  | Ok restored ->
-      assert_equal "metadata guest path" guest_path restored.guest_path;
-      assert_equal "metadata host dir" host_dir restored.host_dir;
-      assert_equal "metadata source name" source_name restored.source_name;
-      assert_bool "metadata read-only mode" true
-        (restored.mode = Virtle.Read_only)
+  let state : Virtle.runtime_mount_state =
+    { spaces = [ "dev" ]; mounts = [ mount ] }
+  in
+  let doc =
+    Otoml.table [ ("runtime", Virtle.runtime_state_table state) ]
+    |> Otoml.Printer.to_string |> parse_toml
+  in
+  let restored = Virtle.runtime_state_of_doc doc in
+  assert_equal "runtime space" "dev" (List.hd restored.spaces);
+  let restored_mount = List.hd restored.mounts in
+  assert_equal "runtime guest path" guest_path restored_mount.guest_path;
+  assert_equal "runtime host path" host_dir restored_mount.host_dir;
+  assert_equal "runtime mount id" mount.id restored_mount.id;
+  assert_equal "runtime owners" "manual,space:dev"
+    (String.concat "," restored_mount.owners);
+  assert_bool "runtime read-only mode" true
+    (restored_mount.mode = Virtle.Read_only)
 
-let test_read_hotmounts_reports_valid_and_invalid_records () =
-  let root = temp_dir "ash-test-read-hotmounts" in
+let test_runtime_space_mount_owners_overlap () =
+  let root = temp_dir "ash-test-runtime-space-owners" in
+  let host = Filename.concat root "source" in
+  mkdir_p host;
+  let mount : Ash_config.mount =
+    {
+      tag = "source-test";
+      source = host;
+      target = "/home/agent/source";
+      read_only = false;
+    }
+  in
+  let state =
+    Virtle.add_space_mount_to_state ~space:"rust"
+      Virtle.empty_runtime_mount_state mount
+    |> fun state -> Virtle.add_space_mount_to_state ~space:"go" state mount
+  in
+  assert_int "overlapping spaces share one mount" 1 (List.length state.mounts);
+  assert_equal "overlapping space owners" "space:rust,space:go"
+    (String.concat "," (List.hd state.mounts).owners);
+  let remaining = Virtle.remove_owner "space:rust" (List.hd state.mounts) in
+  assert_equal "remaining space owner" "space:go"
+    (String.concat "," remaining.owners)
+
+let test_legacy_hotmount_state_import () =
+  let root = temp_dir "ash-test-legacy-runtime-state" in
+  Unix.putenv "XDG_STATE_HOME" root;
+  let name = "legacy-runtime" in
+  let state_dir = Virtle.state_dir name in
+  let metadata_dir = Virtle.legacy_hotmount_metadata_dir ~name in
+  mkdir_p state_dir;
+  mkdir_p metadata_dir;
+  write_file (Virtle.ash_config_path ~name) "[spawn]\nspaces = []\n";
+  let host_dir = "/host/legacy" in
+  let guest_path = "/home/agent/legacy" in
+  let id = Virtle.hotmount_slug ~host_dir ~guest_path in
+  write_file
+    (Filename.concat metadata_dir (id ^ ".meta"))
+    (String.concat "\n" [ guest_path; host_dir; "ro"; id; "" ]);
+  let state = Virtle.load_runtime_mount_state ~name in
+  assert_int "legacy runtime mount count" 1 (List.length state.mounts);
+  let mount = List.hd state.mounts in
+  assert_equal "legacy runtime owner" "manual" (String.concat "," mount.owners);
+  assert_bool "legacy runtime mode" true (mount.mode = Virtle.Read_only)
+
+let test_runtime_mount_state_loads_from_ash_state () =
+  let root = temp_dir "ash-test-runtime-state" in
   Unix.putenv "XDG_STATE_HOME" root;
   let name = "inventory" in
-  let host_dir = Filename.concat root "host" in
+  let state_dir = Virtle.state_dir name in
+  mkdir_p state_dir;
+  let host_dir = "/host/project" in
   let guest_path = "/home/agent/project" in
-  let source_name = Virtle.hotmount_slug ~host_dir ~guest_path in
-  let metadata =
-    Virtle.hotmount_metadata ~name ~source_name ~host_dir ~guest_path
-      ~mode:Virtle.Read_write
-  in
-  Virtle.write_hotmount_metadata_record metadata;
-  let invalid_path =
-    Filename.concat (Virtle.hotmount_metadata_dir ~name) "broken.meta"
-  in
-  write_file invalid_path "broken\n";
-  let state = Virtle.read_hotmounts ~name in
-  assert_int "valid hotmount count" 1 (List.length state.mounts);
-  assert_int "invalid hotmount count" 1 (List.length state.invalid);
-  assert_equal "inventory guest path" guest_path
-    (List.hd state.mounts).guest_path;
-  assert_equal "invalid metadata path" invalid_path
-    (fst (List.hd state.invalid))
+  let id = Virtle.hotmount_slug ~host_dir ~guest_path in
+  write_file
+    (Virtle.ash_config_path ~name)
+    (Printf.sprintf
+       {|[runtime]
+spaces = ["dev"]
+
+[[runtime.mounts]]
+id = %S
+host_path = %S
+guest_path = %S
+mode = "rw"
+owners = ["space:dev"]
+|}
+       id host_dir guest_path);
+  let state = Virtle.load_runtime_mount_state ~name in
+  assert_int "runtime mount count" 1 (List.length state.mounts);
+  assert_equal "runtime state space" "dev" (List.hd state.spaces);
+  assert_equal "runtime state guest path" guest_path
+    (List.hd state.mounts).guest_path
 
 let test_inspect_includes_config_and_hotmounts () =
   let root = temp_dir "ash-test-inspect" in
@@ -1410,6 +1487,8 @@ rw_mounts = []
 [spaces.go]
 ro_mounts = []
 |};
+  let guest_path = "/home/agent/project" in
+  let mount_id = Virtle.hotmount_slug ~host_dir ~guest_path in
   write_file
     (Virtle.ash_config_path ~name)
     (Printf.sprintf
@@ -1417,13 +1496,18 @@ ro_mounts = []
 config_path = %S
 flake = "github:example/vms#agent"
 spaces = ["rust", "go"]
+
+[runtime]
+spaces = ["rust"]
+
+[[runtime.mounts]]
+id = %S
+host_path = %S
+guest_path = %S
+mode = "rw"
+owners = ["space:rust"]
 |}
-       config_path);
-  let guest_path = "/home/agent/project" in
-  let source_name = Virtle.hotmount_slug ~host_dir ~guest_path in
-  Virtle.write_hotmount_metadata_record
-    (Virtle.hotmount_metadata ~name ~source_name ~host_dir ~guest_path
-       ~mode:Virtle.Read_write);
+       config_path mount_id host_dir guest_path);
   let json = Virtle.inspect_vm_json ~name in
   let open Yojson.Safe.Util in
   assert_equal "inspect name" name (json |> member "name" |> to_string);
@@ -1596,6 +1680,21 @@ let test_spawn_reuses_saved_flake_when_omitted () =
     (String.concat "," (Virtle.resolve_spawn_spaces ~name []));
   assert_equal "explicit spaces override saved" "rust,go"
     (String.concat "," (Virtle.resolve_spawn_spaces ~name [ "rust"; "go" ]));
+  let runtime_mount =
+    Virtle.runtime_mount ~host_dir:"/host/project"
+      ~guest_path:"/home/agent/project" ~mode:Virtle.Read_write
+      ~owners:[ "space:base" ]
+  in
+  write_file state_path
+    (Virtle.ash_config
+       ~runtime:{ spaces = [ "base" ]; mounts = [ runtime_mount ] }
+       inputs);
+  Virtle.write_ash_config inputs;
+  let runtime = Virtle.load_runtime_mount_state ~name in
+  assert_int "state rewrite preserves runtime mounts" 1
+    (List.length runtime.mounts);
+  assert_equal "state rewrite preserves runtime owners" "space:base"
+    (String.concat "," (List.hd runtime.mounts).owners);
   let legacy_name = "legacy-serial-vm" in
   write_file
     (Virtle.ash_config_path ~name:legacy_name)
@@ -2045,20 +2144,20 @@ let test_remove_nix_store_state () =
       Unix.putenv "XDG_STATE_HOME" root;
       let name = "work" in
       let shares = Virtle.shares_dir ~name in
-      let preserved =
-        Filename.concat (Virtle.state_dir name) "workspace/keep"
-      in
-      write_file (Filename.concat shares "ro/guest-store-state/db.sqlite") "db";
-      write_file
-        (Filename.concat shares "rw/guest-store-upper/store-path")
-        "path";
+      let preserved = Filename.concat shares "rw/mounts/workspace/keep" in
+      let ro_state = Filename.concat shares "ro/system/guest-store-state" in
+      let rw_upper = Filename.concat shares "rw/system/guest-store-upper" in
+      write_file (Filename.concat ro_state "db.sqlite") "db";
+      write_file (Filename.concat rw_upper "store-path") "path";
       write_file preserved "keep";
       let image = Filename.concat (Virtle.state_dir name) "nix-store.img" in
       write_file image "image";
       write_file (image ^ ".toplevel") "/nix/store/system\n";
       write_file (Image_metadata.sidecar_path image) "schema_version = 1\n";
       Virtle.remove_nix_store_state ~name;
-      assert_bool "Nix store shares removed" false (Sys.file_exists shares);
+      assert_bool "consolidated shares preserved" true (Sys.file_exists shares);
+      assert_bool "readonly Nix state removed" false (Sys.file_exists ro_state);
+      assert_bool "writable Nix state removed" false (Sys.file_exists rw_upper);
       assert_bool "Nix store image removed" false (Sys.file_exists image);
       assert_bool "Nix store image legacy marker removed" false
         (Sys.file_exists (image ^ ".toplevel"));
@@ -2185,6 +2284,7 @@ let () =
   run "qga mountpoint inherits parent owner"
     test_qga_mountpoint_inherits_parent_owner;
   run "virtiofs cache options" test_virtiofs_cache_options;
+  run "virtiofs uses virtle default args" test_virtiofs_uses_virtle_default_args;
   run "virtiofs subordinate id mappings" test_virtiofs_idmap_args;
   run "virtiofs idmap fallback" test_virtiofs_idmap_fallback;
   run "inspect infers fixed mount targets"
@@ -2200,9 +2300,12 @@ let () =
     test_hotmount_default_guest_path_matches_host_path;
   run "hotmount tilde guest path uses guest home"
     test_hotmount_tilde_guest_path_uses_guest_home;
-  run "hotmount metadata roundtrip" test_hotmount_metadata_roundtrip;
-  run "read hotmounts reports valid and invalid records"
-    test_read_hotmounts_reports_valid_and_invalid_records;
+  run "runtime mount state roundtrip" test_runtime_mount_state_roundtrip;
+  run "runtime space mount owners overlap"
+    test_runtime_space_mount_owners_overlap;
+  run "legacy hotmount state import" test_legacy_hotmount_state_import;
+  run "runtime mount state loads from ash-state"
+    test_runtime_mount_state_loads_from_ash_state;
   run "inspect includes config and hotmounts"
     test_inspect_includes_config_and_hotmounts;
   run "atomic write replaces complete file"

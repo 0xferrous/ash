@@ -101,7 +101,7 @@
             install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
             install -Dm755 ${ashBuild}/bin/ash-dbus-proxy "$out/bin/ash-dbus-proxy"
             wrapProgram "$out/bin/ash" \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.waypipe ]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bindfs pkgs.waypipe ]}
           '';
 
         agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
@@ -219,6 +219,7 @@
             ocamlPackages.otoml
             ocamlPackages.utop
             ocamlPackages.uutf
+            pkgs.bindfs
             pkgs.e2fsprogs
             pkgs.waypipe
           ];

@@ -18,6 +18,8 @@ and this project uses its existing Git tags for version history.
 
 ### Changed
 
+- Consolidated directory sharing into the `shares-ro` and `shares-rw` VirtioFS roots. Workspace, cwd, configured spaces, the shared host Nix store, and runtime mounts now use structured bindfs staging paths beneath those roots; the Nix package includes `bindfs` at runtime, while Virtle supplies the shares' standard virtiofsd arguments.
+- Moved persistent runtime mount and `mount-space` desired state into atomically updated `ash-state.toml` records with ownership claims, restart reconciliation, overlapping-space handling, and migration from legacy per-mount metadata files.
 - Keyed image-backed Nix store caches by the exact toplevel store path, since native registration data is derived deterministically from that closure.
 - Generated Nix closure registration data directly from a single recursive store query instead of building a separate `pkgs.closureInfo` derivation.
 - Replaced the hand-written interactive selector terminal handling with Notty, including resize-aware list viewports and safe Unicode rendering.
@@ -25,6 +27,8 @@ and this project uses its existing Git tags for version history.
 
 ### Fixed
 
+- Corrected `mount-space` and `umount-space` positional parsing so the first space name is accepted.
+- Added guest-side source, ownership, and mount-table diagnostics when a staged bind mount cannot be realized.
 - Restored direct foreground Virtle launches for attached sessions without `--keep`, making interactive kernel serial consoles usable again while retaining foreground mount and registration setup.
 - Preserved the selected sort direction when cycling between sort fields in `ash rm`.
 

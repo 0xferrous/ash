@@ -213,24 +213,29 @@ fi
     ~args:[ tag; target; (if read_only then "1" else "0") ]
     (install_mountpoint_script ^ script)
 
-(* QGA ACTION SCRIPT: mount ash's hotmounts virtiofs staging share and bind one
-   staged entry to the requested guest target. *)
-let hotmount_action ~name ~read_only ~hotmounts_guest_dir ~source_name
-    ~guest_path =
-  let source = Filename.concat hotmounts_guest_dir source_name in
+(* QGA ACTION SCRIPT: mount one of ash's consolidated virtiofs shares and
+   bind a staged entry to its requested guest target. *)
+let mount_shared_path_action ~name ~share_tag ~share_guest_dir ~relative_source
+    ~guest_path ~read_only =
+  let source = Filename.concat share_guest_dir relative_source in
   let script =
     {sh|
 set -eu
 PATH=/run/current-system/sw/bin:/bin
 
-hot=$1
-source=$2
-target=$3
-read_only=$4
+share_tag=$1
+share=$2
+source=$3
+target=$4
+read_only=$5
 
-install -d "$hot"
-if ! mountpoint -q "$hot"; then
-  mount -t virtiofs -- hotmounts "$hot"
+install -d "$share"
+if ! mountpoint -q "$share"; then
+  if [ "$share_tag" = shares-ro ]; then
+    mount -t virtiofs -o ro -- "$share_tag" "$share"
+  else
+    mount -t virtiofs -- "$share_tag" "$share"
+  fi
 fi
 
 if mountpoint -q "$target"; then
@@ -238,7 +243,21 @@ if mountpoint -q "$target"; then
 fi
 
 install_mountpoint "$target"
-mount --bind "$source" "$target"
+if mount --bind "$source" "$target"; then
+  :
+else
+  status=$?
+  echo "ash: bind mount failed; source and share diagnostics follow" >&2
+  namei -l -- "$source" >&2 || true
+  ls -ld -- "$share" "$share/mounts" "$share/mounts/hotmounts" \
+    "$source" "$target" >&2 || true
+  stat -c 'ash: %n mode=%A uid=%u gid=%g device=%d inode=%i' -- \
+    "$share" "$source" "$target" >&2 || true
+  findmnt -T "$share" >&2 || true
+  findmnt -T "$source" >&2 || true
+  findmnt -T "$target" >&2 || true
+  exit "$status"
+fi
 if [ "$read_only" = 1 ]; then
   mount -o remount,bind,ro "$target"
 fi
@@ -247,7 +266,8 @@ fi
   shell_action ~name
     ~args:
       [
-        hotmounts_guest_dir;
+        share_tag;
+        share_guest_dir;
         source;
         guest_path;
         (if read_only then "1" else "0");
