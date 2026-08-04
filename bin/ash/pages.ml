@@ -267,6 +267,38 @@ let spawn =
            nix-store.img, labeled nix-store. The manifest enables KVM, so the \
            host is expected to provide /dev/kvm.";
         `P
+          "The host-side VM state uses this directory layout. Conditional \
+           entries appear only when their strategy or mount feature is used:";
+        `Pre
+          "<state-dir>/\n\
+           |-- ash-state.toml\n\
+           |-- virtle.toml\n\
+           |-- shares/\n\
+           |   |-- ro/                         -> shares-ro\n\
+           |   |   |-- system/\n\
+           |   |   |   |-- nix-store/         # shared strategy\n\
+           |   |   |   `-- guest-store-state/ # shared strategy\n\
+           |   |   `-- mounts/\n\
+           |   |       |-- spaces/<tag>/\n\
+           |   |       `-- hotmounts/<id>/\n\
+           |   `-- rw/                         -> shares-rw\n\
+           |       |-- system/\n\
+           |       |   |-- guest-store-state/  # shared strategy\n\
+           |       |   |-- guest-store-upper/  # shared strategy\n\
+           |       |   `-- guest-store-work/   # shared strategy\n\
+           |       `-- mounts/\n\
+           |           |-- workspace/\n\
+           |           |-- cwd/                # with --mount-cwd\n\
+           |           |-- spaces/<tag>/\n\
+           |           `-- hotmounts/<id>/\n\
+           |-- persist.img\n\
+           |-- nix-store.img                   # image strategy\n\
+           `-- virtle_state/                   # sockets and runtime files";
+        `P
+          "The guest mounts shares-ro and shares-rw at /run/ash/shares/ro and \
+           /run/ash/shares/rw, then Ash bind-mounts individual staged children \
+           at their requested guest destinations.";
+        `P
           "The workspace lives at shares/rw/mounts/workspace and is bound to \
            the guest workspace path. It is not capped like a disk image; \
            usable size is bounded by host storage.";

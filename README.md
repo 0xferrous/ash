@@ -148,10 +148,42 @@ enabled, and multicast UDP 5353 must pass over the VM bridge.
 
 Every VM exposes exactly two directory shares: `shares-ro` and `shares-rw`.
 Workspace, cwd, configured spaces, and runtime mounts are staged beneath these
-roots and bind-mounted at their final guest paths. Ash leaves the consolidated
-shares' daemon argument arrays unset so Virtle supplies its standard virtiofsd
-arguments. The default Nix store
-strategy is `shared`; it stages the host `/nix/store` at
+roots and bind-mounted at their final guest paths. A VM state directory has the
+following relevant layout; entries marked as conditional are created only when
+that feature is used:
+
+```text
+<state-dir>/
+|-- ash-state.toml
+|-- virtle.toml
+|-- shares/
+|   |-- ro/                              -> shares-ro
+|   |   |-- system/
+|   |   |   |-- nix-store/              # shared strategy
+|   |   |   `-- guest-store-state/      # shared strategy
+|   |   `-- mounts/
+|   |       |-- spaces/<tag>/            # configured read-only mounts
+|   |       `-- hotmounts/<id>/          # runtime read-only mounts
+|   `-- rw/                              -> shares-rw
+|       |-- system/
+|       |   |-- guest-store-state/       # shared strategy
+|       |   |-- guest-store-upper/       # shared strategy
+|       |   `-- guest-store-work/        # shared strategy
+|       `-- mounts/
+|           |-- workspace/
+|           |-- cwd/                     # with --mount-cwd
+|           |-- spaces/<tag>/            # configured writable mounts
+|           `-- hotmounts/<id>/          # runtime writable mounts
+|-- persist.img
+|-- nix-store.img                        # image strategy
+`-- virtle_state/                        # sockets, locks, runtime files
+```
+
+The guest mounts the two roots at `/run/ash/shares/ro` and
+`/run/ash/shares/rw`; Ash then bind-mounts individual staged children at their
+requested guest destinations. Ash leaves the consolidated shares' daemon
+argument arrays unset so Virtle supplies its standard virtiofsd arguments. The
+default Nix store strategy is `shared`; it stages the host `/nix/store` at
 `shares/ro/system/nix-store`, with lower-store metadata and writable overlay
 state under the corresponding `system` directories. Guests using this strategy
 must mount `shares-ro` during stage 1 and bind the staged store at `/nix/store`.

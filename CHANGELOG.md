@@ -34,6 +34,7 @@ and this project uses its existing Git tags for version history.
 
 ### Documentation
 
+- Added an ASCII VM-state tree showing how the consolidated read-only and writable shares stage system, workspace, space, and runtime mount data.
 - Host-backed guest FileChooser portal design covering Documents portal integration, filesystem exposure, security boundaries, and implementation phases.
 
 ## [v0.1.6] - 2026-08-02
