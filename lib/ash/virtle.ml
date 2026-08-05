@@ -526,7 +526,7 @@ let mount_action (mount : Ash_config.mount) =
     ~read_only:mount.read_only
 
 let write_space_mount_ssh_wrapper ?(kitty = false) ~name ~virtle ~manifest_path
-    ~registration_path ~load_registration ~ssh_exec mounts =
+    ~registration_path ~load_registration ~ssh_exec mount_actions =
   let path = space_mount_ssh_wrapper_path_for ~kitty ~name in
   let registration_action =
     Qga.load_nix_registration_action ~name:"ash-load-nix-registration"
@@ -555,28 +555,33 @@ esac|sh}
         (Util.shell_quote "failed to load Nix store registration")
   in
   let mount_commands =
-    mounts
-    |> List.map (fun (mount : Ash_config.mount) ->
-        let params = Qga.params (mount_action mount) in
+    mount_actions
+    |> List.map (fun (prepare, action, label, target) ->
+        let params = Qga.params action in
         Printf.sprintf
-          {sh|result=$(%s --manifest %s rpc guest-exec %s)
-case "$result" in
-  *'"exitCode":0'*)
-    ash_log INFO %s
-    ;;
-  *'"exitCode":42'*) ;;
-  *)
-    ash_log ERROR %s
-    printf '%%s\n' "$result" >&2
-    exit 1
-    ;;
-esac|sh}
+          {sh|if %s; then
+  result=$(%s --manifest %s rpc guest-exec %s)
+  case "$result" in
+    *'"exitCode":0'*)
+      ash_log INFO %s
+      ;;
+    *'"exitCode":42'*) ;;
+    *)
+      ash_log ERROR %s
+      printf '%%s\n' "$result" >&2
+      exit 1
+      ;;
+  esac
+else
+  ash_log WARN %s
+fi|sh}
+          prepare
           (Util.shell_quote virtle)
           (Util.shell_quote manifest_path)
           (Util.shell_quote params)
-          (Util.shell_quote ("mounted " ^ mount.tag ^ " at " ^ mount.target))
-          (Util.shell_quote
-             ("failed to mount " ^ mount.tag ^ " at " ^ mount.target)))
+          (Util.shell_quote ("mounted " ^ label ^ " at " ^ target))
+          (Util.shell_quote ("failed to mount " ^ label ^ " at " ^ target))
+          (Util.shell_quote ("could not stage " ^ label ^ " at " ^ target)))
     |> String.concat "\n"
   in
   let identity_file = Filename.concat (state_dir name) "id_ed25519" in
@@ -2216,6 +2221,19 @@ let runtime_mount_action ~name:action_name mount =
     ~relative_source:(Filename.concat "mounts/hotmounts" mount.id)
     ~guest_path:mount.guest_path ~read_only
 
+let runtime_mount_prepare_command ~bindfs ~name mount =
+  let source = Util.shell_quote mount.host_dir in
+  let target = Util.shell_quote (runtime_mount_staging_dir ~name mount) in
+  let bindfs_command =
+    String.concat " "
+      (List.map Util.shell_quote
+         (bindfs :: bindfs_args_for_mode mount.mode
+        @ [ mount.host_dir; runtime_mount_staging_dir ~name mount ]))
+  in
+  Printf.sprintf
+    "[ -d %s ] && install -d %s && { mountpoint -q %s || %s; }" source target
+    target bindfs_command
+
 let realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount =
   let staging = runtime_mount_staging_dir ~name mount in
   ensure_bindfs_mount ~bindfs ~mode:mount.mode ~source:mount.host_dir
@@ -3082,16 +3100,19 @@ let render_resolved_manifest inputs =
     :: (if inputs.mount_cwd then [ cwd_mount.target ] else [])
     @ List.map (fun (mount : Ash_config.mount) -> mount.target) resources.mounts
   in
-  (if has_saved_ash_config ~name:inputs.name then
-     load_runtime_mount_state ~name:inputs.name |> fun runtime ->
-     List.iter
-       (fun mount ->
-         if List.mem mount.guest_path launch_targets then
-           Log.fatal
-             "runtime mount target %S conflicts with a launch-time workspace \
-              or space mount; remove one of the conflicting desired mounts"
-             mount.guest_path)
-       runtime.mounts);
+  let runtime_mounts =
+    if has_saved_ash_config ~name:inputs.name then
+      (load_runtime_mount_state ~name:inputs.name).mounts
+    else []
+  in
+  List.iter
+    (fun mount ->
+      if List.mem mount.guest_path launch_targets then
+        Log.fatal
+          "runtime mount target %S conflicts with a launch-time workspace or \
+           space mount; remove one of the conflicting desired mounts"
+          mount.guest_path)
+    runtime_mounts;
   let store_mounts =
     match store_strategy with
     | Ash_config.Shared -> []
@@ -3127,22 +3148,37 @@ let render_resolved_manifest inputs =
           ~size:16384 ~label:"persist";
       ]
   in
-  let ssh_mounts =
-    (workspace_mount :: (if inputs.mount_cwd then [ cwd_mount ] else []))
-    @ resources.mounts
+  let ssh_mount_actions =
+    ((workspace_mount :: (if inputs.mount_cwd then [ cwd_mount ] else []))
+    @ resources.mounts)
+    |> List.map (fun (mount : Ash_config.mount) ->
+        ("true", mount_action mount, mount.tag, mount.target))
+    |> fun static_actions ->
+    let bindfs =
+      if runtime_mounts = [] then None else Some (find_bindfs ())
+    in
+    static_actions
+    @ List.map
+        (fun mount ->
+          ( runtime_mount_prepare_command ~bindfs:(Option.get bindfs)
+              ~name:inputs.name mount,
+            runtime_mount_action ~name:("ash-runtime-mount-" ^ mount.id) mount,
+            "runtime mount",
+            mount.guest_path ))
+        runtime_mounts
   in
   let ssh_wrapper =
     write_space_mount_ssh_wrapper ~name:inputs.name ~virtle:inputs.virtle
       ~manifest_path:(manifest_path ~name:inputs.name)
       ~registration_path:boot.registration ~load_registration:true
-      ~ssh_exec:real_ssh_exec ssh_mounts
+      ~ssh_exec:real_ssh_exec ssh_mount_actions
   in
   let kitty_wrapper =
     write_space_mount_ssh_wrapper ~kitty:true ~name:inputs.name
       ~virtle:inputs.virtle
       ~manifest_path:(manifest_path ~name:inputs.name)
       ~registration_path:boot.registration ~load_registration:true
-      ~ssh_exec:kitty_ssh_exec ssh_mounts
+      ~ssh_exec:kitty_ssh_exec ssh_mount_actions
   in
   let selected_ssh_wrapper = if kitty then kitty_wrapper else ssh_wrapper in
   let selected_ssh_exec =
@@ -3675,38 +3711,14 @@ let launch_background_and_attach ~resume (inputs : manifest_inputs) path
     (attach_running_code ~virtle:inputs.virtle ~name:inputs.name ~path
        ~kitty:false ~waypipe:None ~verbose ())
 
-let start_foreground_setup (inputs : manifest_inputs) path =
-  match Unix.fork () with
-  | 0 -> (
-      try
-        wait_and_mount inputs path;
-        exit 0
-      with exn ->
-        Log.error "foreground VM setup failed: %s" (Printexc.to_string exn);
-        exit 1)
-  | pid -> pid
-
-let finish_foreground_setup pid =
-  match Unix.waitpid [ Unix.WNOHANG ] pid with
-  | 0, _ ->
-      (try Unix.kill pid Sys.sigterm
-       with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
-      ignore (Unix.waitpid [] pid)
-  | _, Unix.WEXITED 0 -> ()
-  | _, status ->
-      Log.warn "foreground VM setup exited with code %d"
-        (Util.process_status_code status)
-
 let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
     path ~verbose =
   prepare_host_share_mounts inputs;
   let args = launch_args ~resume ~path ~verbose ~ssh:true in
-  let setup_pid = start_foreground_setup inputs path in
-  let code =
-    Fun.protect
-      ~finally:(fun () -> finish_foreground_setup setup_pid)
-      (fun () -> Util.run_foreground inputs.virtle args)
-  in
+  (* The manifest's SSH wrapper performs registration and all desired mounts
+     before it execs SSH. Running wait_and_mount concurrently here opens a
+     second QGA connection and can reset the wrapper's in-flight guest-exec. *)
+  let code = Util.run_foreground inputs.virtle args in
   Option.iter
     (fun dir ->
       Log.info "removing ephemeral VM state %s" dir;

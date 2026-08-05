@@ -1539,6 +1539,42 @@ let test_atomic_write_replaces_complete_file () =
     (In_channel.with_open_text path In_channel.input_all);
   assert_int "atomic temp files" 1 (Array.length (Sys.readdir root))
 
+let test_ssh_wrapper_restores_runtime_mounts () =
+  let root = temp_dir "ash-test-runtime-wrapper" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  let host_dir = Filename.concat root "project" in
+  let guest_path = "/home/agent/project" in
+  let name = "runtime-wrapper" in
+  mkdir_p home;
+  mkdir_p state;
+  mkdir_p host_dir;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let id = Virtle.hotmount_slug ~host_dir ~guest_path in
+  write_file
+    (Virtle.ash_config_path ~name)
+    (Printf.sprintf
+       {|[runtime]
+spaces = []
+
+[[runtime.mounts]]
+id = %S
+host_path = %S
+guest_path = %S
+mode = "rw"
+owners = ["manual"]
+|}
+       id host_dir guest_path);
+  let config = parse_toml "[spaces]\n" in
+  ignore (render ~config ~flake:"../my-nix#agent" ~name ());
+  let wrapper = Virtle.space_mount_ssh_wrapper_path ~name in
+  let content = In_channel.with_open_text wrapper In_channel.input_all in
+  assert_string_contains "runtime wrapper host source" content host_dir;
+  assert_string_contains "runtime wrapper staging source" content
+    ("mounts/hotmounts/" ^ id);
+  assert_string_contains "runtime wrapper guest target" content guest_path
+
 let test_kitty_selects_kitten_ssh_wrapper () =
   let root = temp_dir "ash-test-kitty" in
   let home = Filename.concat root "home" in
@@ -2321,6 +2357,8 @@ let () =
     test_runtime_mount_state_loads_from_ash_state;
   run "inspect includes config and hotmounts"
     test_inspect_includes_config_and_hotmounts;
+  run "SSH wrapper restores runtime mounts"
+    test_ssh_wrapper_restores_runtime_mounts;
   run "atomic write replaces complete file"
     test_atomic_write_replaces_complete_file;
   run "nix evaluation metadata parser" test_nix_evaluation_metadata_parser;

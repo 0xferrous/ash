@@ -28,6 +28,7 @@ and this project uses its existing Git tags for version history.
 
 ### Fixed
 
+- Prevented foreground SSH launches from racing duplicate guest-agent setup connections, and restored persisted runtime mounts through the SSH setup wrapper.
 - Corrected `mount-space` and `umount-space` positional parsing so the first space name is accepted.
 - Added guest-side source, ownership, and mount-table diagnostics when a staged bind mount cannot be realized.
 - Restored direct foreground Virtle launches for attached sessions without `--keep`, making interactive kernel serial consoles usable again while retaining foreground mount and registration setup.
