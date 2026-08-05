@@ -22,6 +22,7 @@ and this project uses its existing Git tags for version history.
 - Moved persistent runtime mount and `mount-space` desired state into atomically updated `ash-state.toml` records with ownership claims, restart reconciliation, overlapping-space handling, and migration from legacy per-mount metadata files.
 - Keyed image-backed Nix store caches by the exact toplevel store path, since native registration data is derived deterministically from that closure.
 - Generated Nix closure registration data directly from a single recursive store query instead of building a separate `pkgs.closureInfo` derivation.
+- Bundled spawn-time NixOS metadata lookups into one structured `nix eval`, reducing repeated flake evaluation while preserving the existing kernel, initrd, and toplevel builds.
 - Replaced the hand-written interactive selector terminal handling with Notty, including resize-aware list viewports and safe Unicode rendering.
 - Redesigned `ash rm` with separate VM-state and cached-image panes, labeled columns, independent selection with per-pane selected-size totals, selectable sort fields and directions, cache modification times and VM reference counts, and one-key selection of all unreferenced caches.
 
@@ -30,6 +31,7 @@ and this project uses its existing Git tags for version history.
 - Corrected `mount-space` and `umount-space` positional parsing so the first space name is accepted.
 - Added guest-side source, ownership, and mount-table diagnostics when a staged bind mount cannot be realized.
 - Restored direct foreground Virtle launches for attached sessions without `--keep`, making interactive kernel serial consoles usable again while retaining foreground mount and registration setup.
+- Fixed the bundled spawn metadata evaluation to emit valid Nix syntax.
 - Preserved the selected sort direction when cycling between sort fields in `ash rm`.
 
 ### Documentation

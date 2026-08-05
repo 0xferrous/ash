@@ -2123,6 +2123,19 @@ let test_nix_json_string_array_parser () =
   assert_equal "nix json array" "a,b c,d\ne"
     (String.concat "," (Nix.parse_json_string_array {|["a","b c","d\ne"]|}))
 
+let test_nix_evaluation_metadata_parser () =
+  let evaluation =
+    Nix.evaluation_of_json
+      {|{"defaultUser":null,"userNames":["agent","root"],"kernelFile":"bzImage","nixPackage":"/nix/store/nix","openssh":"/nix/store/openssh","systemd":"/nix/store/systemd","kernelParams":["quiet","loglevel=3"]}|}
+  in
+  assert_bool "missing default user is represented as None" true
+    (evaluation.default_user = None);
+  assert_equal "metadata kernel file" "bzImage" evaluation.kernel_file;
+  assert_equal "metadata user names" "agent,root"
+    (String.concat "," evaluation.user_names);
+  assert_equal "metadata kernel params" "quiet,loglevel=3"
+    (String.concat "," evaluation.kernel_params)
+
 let test_scp_args () =
   let args =
     Virtle.scp_args ~wrapper:"/state/ssh-wrapper" ~identity:"/state/id"
@@ -2310,6 +2323,7 @@ let () =
     test_inspect_includes_config_and_hotmounts;
   run "atomic write replaces complete file"
     test_atomic_write_replaces_complete_file;
+  run "nix evaluation metadata parser" test_nix_evaluation_metadata_parser;
   run "spawn reuses saved flake when omitted"
     test_spawn_reuses_saved_flake_when_omitted;
   run "nix storage flake refs absolutize relative paths"

@@ -3441,18 +3441,20 @@ let render_manifest (inputs : manifest_inputs) =
     | Some _ | None -> (None, None)
   in
   let target = Nix.resolve_target ~flake:inputs.flake in
+  let evaluation =
+    Nix.resolve_evaluation ~override_inputs:inputs.override_inputs ~target
+  in
   let user =
     match inputs.user with
     | Some user ->
-        Nix.validate_user ~override_inputs:inputs.override_inputs ~target ~user;
+        Nix.validate_user ~evaluation ~user;
         user
-    | None ->
-        Nix.resolve_ssh_user ~override_inputs:inputs.override_inputs ~target
+    | None -> Nix.resolve_ssh_user ~evaluation
   in
   let gcroots_dir = gcroots_dir ~name:inputs.name in
   Util.ensure_dir gcroots_dir;
   let boot =
-    Nix.resolve_boot ~override_inputs:inputs.override_inputs ~target
+    Nix.resolve_boot ~evaluation ~override_inputs:inputs.override_inputs ~target
       ~gcroots_dir
   in
   let store_strategy =

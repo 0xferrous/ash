@@ -876,37 +876,101 @@ let attr_segment segment =
   Buffer.add_char b '"';
   Buffer.contents b
 
-let rec resolve_ssh_user ~override_inputs ~target =
-  let attr = target.attr ^ ".config.services.getty.autologinUser" in
-  let user = eval_raw ~override_inputs ~label:"guest SSH user" attr in
-  if user = "" then
-    Log.fatal "guest SSH user resolved to an empty value\n\nNix attr: %s" attr;
-  validate_user ~override_inputs ~target ~user;
-  user
+type evaluation = {
+  default_user : string option;
+  user_names : string list;
+  kernel_file : string;
+  nix_package : string;
+  openssh : string;
+  systemd : string;
+  kernel_params : string list;
+}
 
-and validate_user ~override_inputs ~target ~user =
-  let attr =
-    target.attr ^ ".config.users.users." ^ attr_segment user ^ ".name"
+let string_field json field =
+  match Yojson.Safe.Util.member field json with
+  | `String value -> value
+  | _ -> Log.fatal "Nix evaluation metadata field %s is not a string" field
+
+let string_list_field json field =
+  match Yojson.Safe.Util.member field json with
+  | `List values ->
+      List.map
+        (function
+          | `String value -> value
+          | _ ->
+              Log.fatal
+                "Nix evaluation metadata field %s contains a non-string value"
+                field)
+        values
+  | _ -> Log.fatal "Nix evaluation metadata field %s is not a list" field
+
+let evaluation_of_json text =
+  let json =
+    try Yojson.Safe.from_string text
+    with Yojson.Json_error message ->
+      Log.fatal "Nix evaluation metadata was not valid JSON: %s" message
   in
-  let resolved = eval_raw ~override_inputs ~label:("guest user " ^ user) attr in
-  if resolved <> user then
+  {
+    default_user =
+      (match Yojson.Safe.Util.member "defaultUser" json with
+      | `String value -> Some value
+      | `Null -> None
+      | _ -> Log.fatal "Nix evaluation metadata defaultUser is invalid");
+    user_names = string_list_field json "userNames";
+    kernel_file = string_field json "kernelFile";
+    nix_package = string_field json "nixPackage";
+    openssh = string_field json "openssh";
+    systemd = string_field json "systemd";
+    kernel_params = string_list_field json "kernelParams";
+  }
+let resolve_evaluation ~override_inputs ~target =
+  let apply =
+    {|system:
+      let default = builtins.tryEval system.config.services.getty.autologinUser;
+      in {
+        defaultUser = if default.success then default.value else null;
+        userNames = builtins.attrNames system.config.users.users;
+        kernelFile = system.config.system.boot.loader.kernelFile;
+        nixPackage = system.config.nix.package.outPath;
+        openssh = system.pkgs.openssh.outPath;
+        systemd = system.config.systemd.package.outPath;
+        kernelParams = system.config.boot.kernelParams;
+      }|}
+  in
+  run_nix ~label:"Nix evaluation metadata" ~attr:target.attr
+    (subcommand_args "eval" override_inputs
+       ("--json --apply " ^ Util.shell_quote apply ^ " "
+      ^ Util.shell_quote target.attr))
+  |> evaluation_of_json
+
+let validate_evaluation_user ~user evaluation =
+  if not (List.mem user evaluation.user_names) then
     Log.fatal
       "guest user validation failed\n\n\
        Requested user: %s\n\
-       NixOS user attr resolved to: %s"
-      user resolved
+       User is not defined in the selected NixOS configuration"
+      user
 
-let resolve_boot ~override_inputs ~target ~gcroots_dir =
+let resolve_ssh_user ~evaluation =
+  match evaluation.default_user with
+  | Some user ->
+      if user = "" then Log.fatal "guest SSH user resolved to an empty value";
+      validate_evaluation_user ~user evaluation;
+      user
+  | None ->
+      Log.fatal
+        "guest SSH user could not be resolved; use --user to select one"
+
+let validate_user ~user ~evaluation =
+  validate_evaluation_user ~user evaluation
+
+let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
   let attr = target.attr in
   let root name = Filename.concat gcroots_dir name in
   let kernel_dir =
     build_path ~out_link:(root "kernel") ~override_inputs
       ~label:"kernel build output"
       (attr ^ ".config.system.build.kernel")
-  in
-  let kernel_file =
-    eval_raw ~override_inputs ~label:"kernel file name"
-      (attr ^ ".config.system.boot.loader.kernelFile")
   in
   let initrd_output =
     build_path ~out_link:(root "initrd") ~override_inputs
@@ -929,11 +993,8 @@ let resolve_boot ~override_inputs ~target ~gcroots_dir =
       ~label:"NixOS toplevel build output"
       (attr ^ ".config.system.build.toplevel")
   in
-  let nix_package =
-    eval_raw ~override_inputs ~label:"Nix package" (attr ^ ".config.nix.package")
-  in
-  let nix = Filename.concat nix_package "bin/nix" in
-  let nix_store = Filename.concat nix_package "bin/nix-store" in
+  let nix = Filename.concat evaluation.nix_package "bin/nix" in
+  let nix_store = Filename.concat evaluation.nix_package "bin/nix-store" in
   let ( registration,
         registration_sha256,
         closure_nar_size_bytes,
@@ -941,29 +1002,18 @@ let resolve_boot ~override_inputs ~target ~gcroots_dir =
     resolve_registration ~nix ~nix_store ~toplevel
       ~out_link:(root "registration")
   in
-  let openssh =
-    eval_raw ~override_inputs ~label:"OpenSSH package" (attr ^ ".pkgs.openssh")
-  in
-  let systemd =
-    eval_raw ~override_inputs ~label:"systemd package"
-      (attr ^ ".config.systemd.package")
-  in
-  let kernel_params =
-    eval_json ~override_inputs ~label:"kernel parameters"
-      (attr ^ ".config.boot.kernelParams")
-    |> parse_json_string_array
-  in
   let init_param = "init=" ^ Filename.concat toplevel "init" in
   let has_init_param =
     List.exists
       (fun param -> String.starts_with ~prefix:"init=" param)
-      kernel_params
+      evaluation.kernel_params
   in
   let kernel_params =
-    if has_init_param then kernel_params else init_param :: kernel_params
+    if has_init_param then evaluation.kernel_params
+    else init_param :: evaluation.kernel_params
   in
   {
-    kernel = Filename.concat kernel_dir kernel_file;
+    kernel = Filename.concat kernel_dir evaluation.kernel_file;
     initrd;
     kernel_params;
     toplevel;
@@ -973,6 +1023,7 @@ let resolve_boot ~override_inputs ~target ~gcroots_dir =
     closure_path_count;
     nix;
     nix_store;
-    ssh = Filename.concat openssh "bin/ssh";
-    systemd_ssh_proxy = Filename.concat systemd "lib/systemd/systemd-ssh-proxy";
+    ssh = Filename.concat evaluation.openssh "bin/ssh";
+    systemd_ssh_proxy =
+      Filename.concat evaluation.systemd "lib/systemd/systemd-ssh-proxy";
   }
