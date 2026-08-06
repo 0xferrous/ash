@@ -107,7 +107,8 @@ Some operations execute commands inside the guest through `virtle rpc guest-exec
 
 Spawn options:
 
-- `-s`, `--space SPACE` — repeatable ash config space; spaces supply mount points. New VMs apply no spaces when omitted; existing named VMs reuse the saved space list.
+- `--eval` — re-evaluate and regenerate an existing named VM before launching it. Evaluation is always implied for a new VM; an existing VM otherwise launches from its saved manifest and GC-rooted outputs.
+- `-s`, `--space SPACE` — repeatable ash config space; spaces supply mount points. New VMs apply no spaces when omitted; evaluated existing named VMs reuse the saved space list when omitted.
 - `-f`, `--flake FLAKE#HOST` — flake directory plus host reference, e.g. `../my-nix#agent`. Required for a new VM; when spawning an existing named VM, omitting it reuses the value saved in `ash-state.toml`. `HOST` is resolved as `nixosConfigurations.<HOST>`. Pass the flake directory, not `flake.nix`.
 - `--override-input NAME=FLAKE` — override an input of the selected flake during every Nix evaluation and build. Repeatable. Relative path references are resolved before being saved in `ash-state.toml`; an existing named VM reuses saved overrides when none are supplied.
 - `--name NAME` — VM/state name. Default: current directory basename plus timestamp, e.g. `ash-20260708193000`.
@@ -150,7 +151,14 @@ For `attach`, `--keep` is valid only with `--spawn`; `ash attach --keep` is reje
 
 ## What `spawn` does
 
-For:
+A new VM always evaluates and generates its NixOS boot inputs. An existing named VM launches from its saved `ash-state.toml` and `virtle.toml` without evaluation unless `--eval` is passed:
+
+```sh
+ash spawn --name work             # reuse saved manifest
+ash spawn --name work --eval      # evaluate, regenerate, and launch
+```
+
+For a new or explicitly evaluated VM:
 
 ```sh
 ash spawn -s rust -s go -f ../my-nix#agent
@@ -190,13 +198,13 @@ nixosConfigurations.<HOST>.config.users.users.<USER>.name
 
 Then it reads `$XDG_CONFIG_HOME/$ASH_NAME/config.toml` (falling back to `~/.config/$ASH_NAME/config.toml`, with `ASH_NAME` defaulting to `ash`, or using `--config`). The optional `global.memory` setting selects VM memory in MiB and defaults to 4096. `global.kitty` defaults to false; when true, spawned manifests and attached sessions use `kitten ssh` unless another feature wraps that SSH command. An explicit `--kitty` also enables Kitty for the requested operation. `global.network_bridge` defaults to `ash0`, and `global.qemu_bridge_helper` defaults to `/run/wrappers/bin/qemu-bridge-helper`. `global.nix_store.strategy` selects `shared` (the default) or `image`; `global.nix_store.image_size_mib` defaults to 16384. `--nix-store-strategy` and `--nix-store-image-size-mib` override those defaults for one VM; explicit overrides are saved in its `ash-state.toml` and reused by later spawns and regeneration. Pass `--shares-ro-socket` (or the compatibility alias `--ro-store-socket`) to select an existing virtiofsd socket for the consolidated read-only share. An explicit enabled `[portal]` section enables Portal integration. Selected spaces stage their `rw_mounts` and `ro_mounts` beneath the consolidated share roots and turn their `files` into Virtle `write_files` entries. A space may define `extends = ["base", ...]`; ash traverses these dependencies recursively in declaration order, evaluates dependencies before dependents, and evaluates each reachable space once. Unknown spaces and inheritance cycles are fatal configuration errors.
 
-Space selection is explicit:
+Space selection during evaluation is explicit:
 
 - If no `-s`/`--space` option is passed for a new VM, no configured spaces are applied.
-- If no `-s`/`--space` option is passed for an existing named VM, `ash` reuses the saved space list.
-- If `-f`/`--flake` is omitted for an existing named VM with saved `ash-state.toml`, `ash` reuses the saved flake; new VMs still require it.
-- If no `--override-input` option is passed for an existing named VM, `ash` reuses the saved override inputs. Passing one or more overrides replaces the saved list.
-- If one or more spaces are passed, `ash` uses exactly those spaces and replaces the saved selection.
+- If no `-s`/`--space` option is passed for an existing named VM with `--eval`, `ash` reuses the saved space list.
+- If `-f`/`--flake` is omitted for an existing named VM with `--eval`, `ash` reuses the saved flake; new VMs still require it.
+- If no `--override-input` option is passed for an existing named VM with `--eval`, `ash` reuses the saved override inputs. Passing one or more overrides replaces the saved list.
+- If one or more spaces are passed during evaluation, `ash` uses exactly those spaces and replaces the saved selection.
 
 Each mount or file entry is either `HOST_PATH` or `HOST_PATH:GUEST_PATH`. Host `~` resolves against the host user's home. Guest `~` resolves against the evaluated guest SSH user's home. When the guest path is omitted, the original host path string is reused and resolved for the guest. Absolute paths are accepted on both sides. Missing host paths are skipped with a warning. Mounts are deduplicated after parsing and path expansion by source, target, and read-only mode, preserving the first occurrence.
 

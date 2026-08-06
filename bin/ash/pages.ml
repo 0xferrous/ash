@@ -90,34 +90,24 @@ let spawn =
            logs -f NAME hint for following its logs.";
         `S "MANIFEST GENERATION";
         `P
-          "spawn writes ash-state.toml and virtle.toml before launching \
-           virtle. Both files live in the VM state directory. Virtle's own \
-           runtime state and control sockets use its nested virtle_state \
-           directory.";
+          "A new VM is always evaluated before spawn writes ash-state.toml and \
+           virtle.toml and launches virtle. Both files live in the VM state \
+           directory. Virtle's own runtime state and control sockets use its \
+           nested virtle_state directory.";
         `P
-          "For an existing named VM, spawn first builds new spawn inputs from \
-           the current command line and defaults.";
+          "An existing named VM reuses its saved ash-state.toml and \
+           virtle.toml without Nix evaluation. Pass --eval to re-evaluate the \
+           selected NixOS configuration, refresh its generated state and \
+           manifest, and then launch it.";
         `P
-          "For an existing named VM, omitting --flake reuses the flake saved \
-           in ash-state.toml. A new VM still requires --flake, and an explicit \
-           --flake overrides the saved value.";
-        `P
-          "Repeatable --override-input NAME=FLAKE options are forwarded to \
-           every Nix evaluation and build of the selected flake. Existing VMs \
-           reuse their saved overrides when none are supplied; passing any \
-           overrides replaces the saved list.";
-        `P
-          "For a new VM, no configured spaces are applied unless --space is \
-           passed. For an existing named VM, omitting --space reuses the space \
-           list saved in ash-state.toml. Passing --space explicitly replaces \
-           the saved selection.";
+          "For a new VM, --flake is required and --eval is implied. For an \
+           existing VM spawned with --eval, omitting --flake, \
+           --override-input, or --space reuses the corresponding saved values; \
+           explicitly passing them replaces the saved selection.";
         `P
           "--nix-store-strategy and --nix-store-image-size-mib override the \
-           [global.nix_store] defaults for this VM. Explicit overrides are \
-           saved in ash-state.toml and reused when later spawns omit them.";
-        `P
-          "After inputs are built, spawn overwrites ash-state.toml with the \
-           new inputs and renders virtle.toml from those same new inputs.";
+           [global.nix_store] defaults during evaluation. Explicit overrides \
+           are saved in ash-state.toml and reused by later evaluated spawns.";
         `S "PORTAL";
         `P
           "When the config contains an enabled [portal] section with \

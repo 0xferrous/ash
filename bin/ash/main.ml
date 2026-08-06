@@ -16,7 +16,7 @@ let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     nix_store_image_size_mib config flake override_inputs name user spaces
-    kernel_serial mount_cwd ephemeral attach keep kitty waypipe =
+    kernel_serial mount_cwd eval ephemeral attach keep kitty waypipe =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
@@ -24,7 +24,8 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?name ?user
     ~config_path:config ?flake ~override_inputs ~spaces ~kernel_serial
-    ~mount_cwd ~ephemeral ~attach ~keep ~kitty ~waypipe ~verbose:opts.verbose ()
+    ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe
+    ~verbose:opts.verbose ()
 
 let list_vms global cache =
   Log.set_debug global.debug;
@@ -235,6 +236,14 @@ let mount_cwd_arg =
         ~doc:
           "Mount the current host working directory under the guest workspace.")
 
+let eval_flag =
+  Arg.(
+    value & flag
+    & info [ "eval" ]
+        ~doc:
+          "Re-evaluate and regenerate an existing VM before spawning it. New \
+           VMs are always evaluated.")
+
 let ephemeral_arg =
   Arg.(
     value & flag
@@ -303,8 +312,8 @@ let spawn_cmd =
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ ro_store_socket_arg $ nix_store_strategy_arg $ nix_store_image_size_arg
       $ config_arg $ flake_arg $ override_input_arg $ name_arg $ user_arg
-      $ spaces_arg $ kernel_serial_arg $ mount_cwd_arg $ ephemeral_arg
-      $ attach_flag $ keep_flag $ kitty_flag $ waypipe_flag)
+      $ spaces_arg $ kernel_serial_arg $ mount_cwd_arg $ eval_flag
+      $ ephemeral_arg $ attach_flag $ keep_flag $ kitty_flag $ waypipe_flag)
 
 let attach_name_arg =
   Arg.(

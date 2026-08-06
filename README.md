@@ -27,10 +27,17 @@ nix run github:0xferrous/ash -- --help
 
 ## Quickstart
 
-Start a reusable background VM:
+Start a reusable background VM. New VMs evaluate their NixOS configuration automatically:
 
 ```sh
 ash spawn --name work -f ../my-nix#agent
+```
+
+Later spawns of the same named VM reuse its saved manifest without evaluation. Pass `--eval` to refresh the NixOS configuration first:
+
+```sh
+ash spawn --name work
+ash spawn --name work --eval
 ```
 
 Attach to it:

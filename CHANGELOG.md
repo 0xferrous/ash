@@ -18,6 +18,7 @@ and this project uses its existing Git tags for version history.
 
 ### Changed
 
+- Existing named `ash spawn` launches now reuse saved manifests and GC-rooted NixOS outputs by default; `--eval` explicitly re-evaluates and regenerates them, while new VMs continue to evaluate automatically.
 - Consolidated directory sharing into the `shares-ro` and `shares-rw` VirtioFS roots. Workspace, cwd, configured spaces, the shared host Nix store, and runtime mounts now use structured bindfs staging paths beneath those roots; the Nix package includes `bindfs` at runtime, while Virtle supplies the shares' standard virtiofsd arguments.
 - Moved persistent runtime mount and `mount-space` desired state into atomically updated `ash-state.toml` records with ownership claims, restart reconciliation, overlapping-space handling, and migration from legacy per-mount metadata files.
 - Keyed image-backed Nix store caches by the exact toplevel store path, since native registration data is derived deterministically from that closure.

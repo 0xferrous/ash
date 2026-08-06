@@ -3750,24 +3750,6 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
     cleanup_dir;
   exit code
 
-let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
-    ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~ephemeral ~attach ~keep
-    ~kitty ~waypipe ~verbose () =
-  require_console_lifecycle ~kernel_serial ~attach ~keep;
-  let inputs, path =
-    prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
-      ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
-      ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
-  in
-  if attach && keep then
-    launch_background_and_attach ~resume:None inputs path ~verbose
-  else if attach then
-    launch_foreground_attached
-      ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
-      ~resume:None inputs path ~verbose
-  else launch_background ~resume:None inputs path ~verbose
-
 let saved_inputs ?virtle ~name () =
   let name = Util.name_slug name in
   let saved = load_ash_config ~name in
@@ -3777,6 +3759,49 @@ let saved_inputs ?virtle ~name () =
       ~default:saved.virtle
   in
   { saved with name; virtle }
+
+let reused_spawn ?virtle ~name () =
+  let inputs = saved_inputs ?virtle ~name () in
+  Log.info "reusing saved NixOS evaluation for existing VM %s" inputs.name;
+  let path = manifest_path ~name:inputs.name in
+  if not (Sys.file_exists path) then
+    Log.fatal "VM %S has no saved manifest; run `ash spawn --name %s --eval`"
+      inputs.name
+      (Util.shell_quote inputs.name);
+  ignore (registration_for_inputs inputs);
+  (inputs, path)
+
+let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
+    ?nix_store_strategy ?nix_store_image_size_mib ~config_path ?flake
+    ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach
+    ~keep ~kitty ~waypipe ~verbose () =
+  let existing_name =
+    match Option.map Util.name_slug name with
+    | Some name when has_saved_ash_config ~name -> Some name
+    | Some _ | None -> None
+  in
+  let inputs, path =
+    match (existing_name, eval) with
+    | Some name, false -> reused_spawn ?virtle ~name ()
+    | Some name, true ->
+        prepare_spawn ?virtle ~name ?user ?ssh ?systemd_ssh_proxy
+          ?ro_store_socket ?nix_store_strategy ?nix_store_image_size_mib
+          ~config_path ?flake ~override_inputs ~spaces ~kernel_serial ~mount_cwd
+          ~kitty ~waypipe ()
+    | None, _ ->
+        prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy
+          ?ro_store_socket ?nix_store_strategy ?nix_store_image_size_mib
+          ~config_path ?flake ~override_inputs ~spaces ~kernel_serial ~mount_cwd
+          ~kitty ~waypipe ()
+  in
+  require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach ~keep;
+  if attach && keep then
+    launch_background_and_attach ~resume:None inputs path ~verbose
+  else if attach then
+    launch_foreground_attached
+      ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
+      ~resume:None inputs path ~verbose
+  else launch_background ~resume:None inputs path ~verbose
 
 let resume ?virtle ~name ~attach ~keep ~verbose () =
   let name = Util.name_slug name in
