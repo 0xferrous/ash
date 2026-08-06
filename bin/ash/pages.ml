@@ -324,15 +324,11 @@ let spawn =
            shares/rw/mounts/cwd and binds it to /mnt/cwd in the guest.";
         `S "SSH AUTOPROVISIONING";
         `P
-          "spawn writes virtle.toml with ssh.autoprovision enabled. This \
-           records that ash should manage an SSH key for attached sessions.";
-        `P
-          "The key is installed when an attached session first needs it, not \
-           during a plain background spawn. Foreground attached launches use \
-           virtle launch --ssh, whose autoprovisioning creates or reuses \
-           id_ed25519 and installs it through QGA after an authentication \
-           failure. Background attached launches perform the equivalent \
-           guest-exec installation before running ssh.";
+          "Ash creates or reuses id_ed25519 in the VM state directory and \
+           installs its public key through QGA before an attached SSH session. \
+           Foreground launches perform this in the generated SSH setup \
+           wrapper; background attaches perform the equivalent guest-exec \
+           installation before running ssh.";
         `P
           "Pass --kitty to spawn to use kitten ssh instead of ssh for attached \
            spawn sessions and save that choice in ash-state.toml for later \
@@ -402,9 +398,9 @@ let attach =
            running after SSH exits.";
         `S "SSH AUTOPROVISIONING";
         `P
-          "If the manifest has ssh.autoprovision enabled, attach creates or \
-           reuses id_ed25519 in the VM state directory, installs the public \
-           key through virtle guest-exec, and passes that identity to ssh.";
+          "Attach creates or reuses id_ed25519 in the VM state directory, \
+           installs the public key through virtle guest-exec, and passes that \
+           identity to ssh.";
         `P
           "Pass --kitty to use kitten ssh instead of ssh for this attached \
            session. The current config's global.kitty setting also provides \

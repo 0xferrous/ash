@@ -329,7 +329,7 @@ The lazy variants handle virtiofsd briefly keeping the staging mount busy.
 
 `ash` uses `/home/<ssh-user>/workspace` as the guest workspace directory and binds it from `shares/rw/mounts/workspace`. For the default `agent` user, this is `/home/agent/workspace`. The SSH user can be overridden per run with `--user`; `ash` validates that the selected NixOS configuration defines `users.users.<user>`.
 
-`ash` currently enables `ssh.autoprovision = true` in the generated manifest, so the guest should run QEMU Guest Agent and respond on the generated `qga.sock`. Passing `--mount-cwd` also requires QGA because `virtle` uses guest commands to bind-mount the workspace. For NixOS guests, enable:
+`ash` provisions its SSH identity through QEMU Guest Agent, so the guest should run QGA and respond on the generated `qga.sock`. Passing `--mount-cwd` also requires QGA because `virtle` uses guest commands to bind-mount the workspace. For NixOS guests, enable:
 
 ```nix
 services.qemuGuest.enable = true;
@@ -341,7 +341,7 @@ services.qemuGuest.enable = true;
 
 The guest must provide `waypipe` and `xwayland-satellite` in its SSH command `PATH`; for NixOS, include `pkgs.waypipe` and `pkgs.xwayland-satellite` in `environment.systemPackages`. The host must be running a Wayland session with usable `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` values. Ash passes `--no-gpu` because its generated VM currently has no guest GPU, and passes `--xwls` so Waypipe starts `xwayland-satellite` and exports `DISPLAY` for X11 applications such as `glxgears`. Waypipe and `kitten ssh` compose by selecting Ash's Kitty SSH wrapper as Waypipe's `--ssh-bin`.
 
-Ash enables Virtle's SSH autoprovisioning in generated manifests. Foreground attached launches execute `virtle launch --ssh` directly, allowing `kernel.serial = "console"` to own the terminal; a concurrent Ash setup process loads Nix registration metadata and restores configured and runtime mounts. Virtle provisions the shared `<state>/id_ed25519` key if authentication initially fails, then invokes the selected OpenSSH, Kitty, or Waypipe wrapper. `--attach --keep` instead starts a background user unit and uses Ash's control-RPC key installation before attaching.
+Foreground attached launches execute `virtle launch --ssh` directly, allowing `kernel.serial = "console"` to own the terminal. Ash's generated SSH wrapper creates or reuses `<state>/id_ed25519`, installs its public key through QGA, loads Nix registration metadata, restores configured and runtime mounts, and then invokes the selected OpenSSH, Kitty, or Waypipe command with that identity. `--attach --keep` instead starts a background user unit and uses Ash's control-RPC key installation before attaching.
 
 Waypipe forwards compositor protocols rather than creating a strong sandbox boundary. Only use it with guests and applications trusted with access to the host Wayland compositor.
 
@@ -358,7 +358,6 @@ The guest is expected to provide an SSH service reachable through that vsock/sys
 ```toml
 [ssh]
 ready_socket = "ready.sock"
-autoprovision = true
 ```
 
 For readiness, the guest must write this exact token:
@@ -375,7 +374,7 @@ to the virtio-serial port exposed by `virtle`:
 
 The current agent guest config implements this with a `virtle-ssh-signal.service` that runs after `sshd.service`.
 
-For attached flows, `ash` uses SSH key autoprovisioning when the manifest has `ssh.autoprovision = true`. Foreground `virtle launch --ssh` sessions let Virtle create or reuse `id_ed25519` under the VM state directory and install it through QGA after an authentication failure. Background-spawned VMs use Ash's equivalent control-RPC installation before attaching because Virtle's own autoprovisioning only runs from `virtle launch --ssh`.
+For attached flows, Ash creates or reuses `id_ed25519` under the VM state directory and installs it through QGA before attempting authentication. Foreground `virtle launch --ssh` sessions do this in Ash's generated SSH setup wrapper; background-spawned VMs use Ash's equivalent control-RPC installation before attaching.
 
 Current assumption: the guest SSH user's primary writable group is `users`. During ash-side autoprovisioning, ash creates `/home/<user>/.ssh` or `/root/.ssh`, appends its public key to `authorized_keys`, then runs `chown <user>:users` and sets OpenSSH-compatible permissions. This matches the current NixOS agent guest setup; guests with a different group convention should either provide compatible users/groups or disable ash/virtle SSH autoprovisioning and preconfigure authorized keys.
 

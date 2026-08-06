@@ -32,11 +32,6 @@ let find_int doc path =
   | Some value -> value
   | None -> fail ("missing int: " ^ String.concat "." path)
 
-let find_bool doc path =
-  match Otoml.find_opt doc Otoml.get_boolean path with
-  | Some value -> value
-  | None -> fail ("missing bool: " ^ String.concat "." path)
-
 let find_strings doc path =
   match Otoml.find_opt doc (Otoml.get_array Otoml.get_string) path with
   | Some value -> value
@@ -244,6 +239,10 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     "nix-store --load-db";
   assert_string_contains "SSH wrapper uses registration path" wrapper_content
     test_boot.registration;
+  assert_string_contains "SSH wrapper provisions its public key" wrapper_content
+    "ash-ssh-autoprovision";
+  assert_string_contains "SSH wrapper pins its identity" wrapper_content
+    "IdentitiesOnly=yes";
   let mounts = table_array doc "mounts" in
   assert_int "consolidated mount count" 3 (List.length mounts);
   let shares_ro = find_table_by_string mounts "tag" "shares-ro" in
@@ -1617,8 +1616,6 @@ let test_waypipe_wraps_openssh_and_kitty () =
   let waypipe_wrapper = Filename.concat state "ash/wayland/ssh-with-waypipe" in
   assert_equal "Waypipe manifest wrapper" waypipe_wrapper (List.hd exec);
   assert_int "Waypipe manifest exec count" 1 (List.length exec);
-  assert_bool "Virtle SSH autoprovision enabled" true
-    (find_bool manifest_doc [ "ssh"; "autoprovision" ]);
   let waypipe_content =
     In_channel.with_open_text waypipe_wrapper In_channel.input_all
   in

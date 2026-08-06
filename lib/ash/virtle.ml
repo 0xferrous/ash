@@ -525,9 +525,74 @@ let mount_action (mount : Ash_config.mount) =
     ~share_guest_dir ~relative_source ~guest_path:mount.target
     ~read_only:mount.read_only
 
-let write_space_mount_ssh_wrapper ?(kitty = false) ~name ~virtle ~manifest_path
-    ~registration_path ~load_registration ~ssh_exec mount_actions =
+let ssh_identity_path ~name = Filename.concat (state_dir name) "id_ed25519"
+
+let ensure_ssh_identity ~name =
+  let identity = ssh_identity_path ~name in
+  let public_key = identity ^ ".pub" in
+  if Sys.file_exists identity && Sys.file_exists public_key then identity
+  else
+    let ssh_keygen =
+      match Util.find_in_path "ssh-keygen" with
+      | Some path -> path
+      | None -> Log.fatal ~code:127 "could not find executable %S" "ssh-keygen"
+    in
+    let args =
+      [
+        "-q";
+        "-t";
+        "ed25519";
+        "-N";
+        "";
+        "-C";
+        "ash-autoprovision-" ^ name;
+        "-f";
+        identity;
+      ]
+    in
+    let code = Util.run_foreground ssh_keygen args in
+    if code <> 0 then Log.fatal "ssh-keygen failed with exit code %d" code;
+    identity
+
+let write_space_mount_ssh_wrapper ?(kitty = false) ~name ~user ~virtle
+    ~manifest_path ~registration_path ~load_registration ~ssh_exec mount_actions
+    =
   let path = space_mount_ssh_wrapper_path_for ~kitty ~name in
+  let identity_file = ensure_ssh_identity ~name in
+  let authorized_key =
+    try
+      String.trim
+        (In_channel.with_open_text (identity_file ^ ".pub") In_channel.input_all)
+    with Sys_error err ->
+      Log.fatal "could not read SSH public key for VM %S: %s" name err
+  in
+  let authorized_keys =
+    if user = "root" then "/root/.ssh/authorized_keys"
+    else "/home/" ^ user ^ "/.ssh/authorized_keys"
+  in
+  let provision_action =
+    Qga.install_ssh_key_action ~name:"ash-ssh-autoprovision" ~user
+      ~target:authorized_keys ~authorized_key
+  in
+  let provision_command =
+    Printf.sprintf
+      {sh|result=$(%s --manifest %s rpc guest-exec %s)
+case "$result" in
+  *'"exitCode":0'*)
+    ash_log INFO %s
+    ;;
+  *)
+    ash_log ERROR %s
+    printf '%%s\n' "$result" >&2
+    exit 1
+    ;;
+esac|sh}
+      (Util.shell_quote virtle)
+      (Util.shell_quote manifest_path)
+      (Util.shell_quote (Qga.params provision_action))
+      (Util.shell_quote "provisioned SSH key")
+      (Util.shell_quote "failed to provision SSH key")
+  in
   let registration_action =
     Qga.load_nix_registration_action ~name:"ash-load-nix-registration"
       ~registration:registration_path
@@ -575,8 +640,7 @@ esac|sh}
 else
   ash_log WARN %s
 fi|sh}
-          prepare
-          (Util.shell_quote virtle)
+          prepare (Util.shell_quote virtle)
           (Util.shell_quote manifest_path)
           (Util.shell_quote params)
           (Util.shell_quote ("mounted " ^ label ^ " at " ^ target))
@@ -584,19 +648,10 @@ fi|sh}
           (Util.shell_quote ("could not stage " ^ label ^ " at " ^ target)))
     |> String.concat "\n"
   in
-  let identity_file = Filename.concat (state_dir name) "id_ed25519" in
   let ssh_command = String.concat " " (List.map Util.shell_quote ssh_exec) in
   let exec_ssh =
-    Printf.sprintf
-      {sh|if [ -r %s ]; then
-  exec %s -i %s -o IdentitiesOnly=yes "$@"
-else
-  exec %s "$@"
-fi|sh}
+    Printf.sprintf {sh|exec %s -i %s -o IdentitiesOnly=yes "$@"|sh} ssh_command
       (Util.shell_quote identity_file)
-      ssh_command
-      (Util.shell_quote identity_file)
-      ssh_command
   in
   let content =
     Printf.sprintf
@@ -630,8 +685,10 @@ ash_log() {
 %s
 
 %s
+
+%s
 |sh}
-      registration_command mount_commands exec_ssh
+      provision_command registration_command mount_commands exec_ssh
   in
   Util.write_file path content;
   Unix.chmod path 0o755;
@@ -2227,12 +2284,11 @@ let runtime_mount_prepare_command ~bindfs ~name mount =
   let bindfs_command =
     String.concat " "
       (List.map Util.shell_quote
-         (bindfs :: bindfs_args_for_mode mount.mode
-        @ [ mount.host_dir; runtime_mount_staging_dir ~name mount ]))
+         ((bindfs :: bindfs_args_for_mode mount.mode)
+         @ [ mount.host_dir; runtime_mount_staging_dir ~name mount ]))
   in
-  Printf.sprintf
-    "[ -d %s ] && install -d %s && { mountpoint -q %s || %s; }" source target
-    target bindfs_command
+  Printf.sprintf "[ -d %s ] && install -d %s && { mountpoint -q %s || %s; }"
+    source target target bindfs_command
 
 let realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount =
   let staging = runtime_mount_staging_dir ~name mount in
@@ -2686,35 +2742,6 @@ let hotunmount_spaces ?virtle ~name ~spaces () =
            state");
       Printf.printf "unmounted runtime spaces: %s\n" (String.concat "," spaces))
 
-let ssh_identity_path ~name = Filename.concat (state_dir name) "id_ed25519"
-
-let ensure_ssh_identity ~name =
-  let identity = ssh_identity_path ~name in
-  let public_key = identity ^ ".pub" in
-  if Sys.file_exists identity && Sys.file_exists public_key then identity
-  else
-    let ssh_keygen =
-      match Util.find_in_path "ssh-keygen" with
-      | Some path -> path
-      | None -> Log.fatal ~code:127 "could not find executable %S" "ssh-keygen"
-    in
-    let args =
-      [
-        "-q";
-        "-t";
-        "ed25519";
-        "-N";
-        "";
-        "-C";
-        "ash-autoprovision-" ^ name;
-        "-f";
-        identity;
-      ]
-    in
-    let code = Util.run_foreground ssh_keygen args in
-    if code <> 0 then Log.fatal "ssh-keygen failed with exit code %d" code;
-    identity
-
 let install_ssh_key ~virtle ~path ~name ~user =
   let identity = ensure_ssh_identity ~name in
   Log.debug "installing SSH key for VM %s user %s using identity %s" name user
@@ -3149,14 +3176,12 @@ let render_resolved_manifest inputs =
       ]
   in
   let ssh_mount_actions =
-    ((workspace_mount :: (if inputs.mount_cwd then [ cwd_mount ] else []))
-    @ resources.mounts)
+    (workspace_mount :: (if inputs.mount_cwd then [ cwd_mount ] else []))
+    @ resources.mounts
     |> List.map (fun (mount : Ash_config.mount) ->
         ("true", mount_action mount, mount.tag, mount.target))
     |> fun static_actions ->
-    let bindfs =
-      if runtime_mounts = [] then None else Some (find_bindfs ())
-    in
+    let bindfs = if runtime_mounts = [] then None else Some (find_bindfs ()) in
     static_actions
     @ List.map
         (fun mount ->
@@ -3168,13 +3193,13 @@ let render_resolved_manifest inputs =
         runtime_mounts
   in
   let ssh_wrapper =
-    write_space_mount_ssh_wrapper ~name:inputs.name ~virtle:inputs.virtle
+    write_space_mount_ssh_wrapper ~name:inputs.name ~user ~virtle:inputs.virtle
       ~manifest_path:(manifest_path ~name:inputs.name)
       ~registration_path:boot.registration ~load_registration:true
       ~ssh_exec:real_ssh_exec ssh_mount_actions
   in
   let kitty_wrapper =
-    write_space_mount_ssh_wrapper ~kitty:true ~name:inputs.name
+    write_space_mount_ssh_wrapper ~kitty:true ~name:inputs.name ~user
       ~virtle:inputs.virtle
       ~manifest_path:(manifest_path ~name:inputs.name)
       ~registration_path:boot.registration ~load_registration:true
@@ -3235,7 +3260,6 @@ let render_resolved_manifest inputs =
               ("user", Otoml.string user);
               ("exec", string_array selected_ssh_exec);
               ("ready_socket", Otoml.string "ready.sock");
-              ("autoprovision", Otoml.boolean true);
             ] );
         ( "workspace",
           Otoml.table

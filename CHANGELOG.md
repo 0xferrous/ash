@@ -28,6 +28,7 @@ and this project uses its existing Git tags for version history.
 
 ### Fixed
 
+- Provisioned Ash's SSH identity through QGA in foreground setup wrappers before authentication, avoiding public-key failures after Virtle SSH provisioning was removed.
 - Prevented foreground SSH launches from racing duplicate guest-agent setup connections, and restored persisted runtime mounts through the SSH setup wrapper.
 - Corrected `mount-space` and `umount-space` positional parsing so the first space name is accepted.
 - Added guest-side source, ownership, and mount-table diagnostics when a staged bind mount cannot be realized.
