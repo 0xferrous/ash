@@ -923,6 +923,7 @@ let evaluation_of_json text =
     systemd = string_field json "systemd";
     kernel_params = string_list_field json "kernelParams";
   }
+
 let resolve_evaluation ~override_inputs ~target =
   let apply =
     {|system:
@@ -940,7 +941,7 @@ let resolve_evaluation ~override_inputs ~target =
   run_nix ~label:"Nix evaluation metadata" ~attr:target.attr
     (subcommand_args "eval" override_inputs
        ("--json --apply " ^ Util.shell_quote apply ^ " "
-      ^ Util.shell_quote target.attr))
+       ^ Util.shell_quote target.attr))
   |> evaluation_of_json
 
 let validate_evaluation_user ~user evaluation =
@@ -958,11 +959,9 @@ let resolve_ssh_user ~evaluation =
       validate_evaluation_user ~user evaluation;
       user
   | None ->
-      Log.fatal
-        "guest SSH user could not be resolved; use --user to select one"
+      Log.fatal "guest SSH user could not be resolved; use --user to select one"
 
-let validate_user ~user ~evaluation =
-  validate_evaluation_user ~user evaluation
+let validate_user ~user ~evaluation = validate_evaluation_user ~user evaluation
 
 let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
   let attr = target.attr in
