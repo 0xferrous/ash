@@ -7,6 +7,8 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.7] - 2026-08-07
+
 ### Added
 
 - TOML metadata sidecars for cached and writable image-backed Nix stores, including closure metrics, creation and last-use timestamps, registration hashes, and deduplicated flake/lock/override provenance.
@@ -131,7 +133,8 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.7...HEAD
+[v0.1.7]: https://github.com/0xferrous/ash/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/0xferrous/ash/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/0xferrous/ash/compare/v0.1.4...v0.1.5
 [v0.1.4]: https://github.com/0xferrous/ash/compare/v0.1.3...v0.1.4
