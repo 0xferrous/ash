@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # Point at 0xferrous's fork branch until the manifest/qemu extraction lands
+    # in upstream shazow/virtle.
+    virtle.url = "github:0xferrous/virtle/push-tmopowoytwzm";
+    virtle.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -11,6 +15,7 @@
       self,
       nixpkgs,
       flake-utils,
+      virtle,
     }:
     let
       testSystem = "x86_64-linux";
@@ -78,6 +83,8 @@
           propagatedBuildInputs = [
             ocamlPackages.base64
             ocamlPackages.cmdliner
+            ocamlPackages.ctypes
+            ocamlPackages.ctypes-foreign
             ocamlPackages.msgpck
             ocamlPackages.notty-community
             ocamlPackages.otoml
@@ -93,6 +100,35 @@
           strictDeps = true;
         };
 
+        # The virtle manifest -> QEMU pipeline exposed as a C shared library
+        # for in-process FFI from OCaml (lib/ash/virtle_ffi). The cgo shim in
+        # ./ffi/shim.go is dropped into the pinned virtle flake input at build
+        # time, so the module graph, go.sum, and vendorHash are virtle's own.
+        libvirtle =
+          let
+            virtleSource = self.inputs.virtle;
+            virtleRelease = import "${virtleSource}/release.nix";
+            ffiSource = pkgs.runCommand "virtle-ffi-src" { } ''
+              cp -r ${virtleSource} "$out"
+              chmod -R u+w "$out"
+              mkdir -p "$out/ffishim"
+              cp ${./ffi}/*.go "$out/ffishim/"
+            '';
+          in
+          pkgs.buildGoModule {
+            pname = "ash-libvirtle";
+            inherit (virtleRelease) version vendorHash;
+            src = ffiSource;
+            nativeBuildInputs = [ pkgs.gcc ];
+            env.CGO_ENABLED = "1";
+            buildPhase = ''
+              runHook preBuild
+              mkdir -p "$out/lib"
+              go build -buildmode=c-shared -trimpath -o "$out/lib/libvirtle.so" ./ffishim
+            '';
+            installPhase = "true";
+          };
+
         ash = pkgs.runCommand "${ashBuild.pname}-${ashBuild.version}"
           {
             nativeBuildInputs = [ pkgs.makeWrapper ];
@@ -101,7 +137,8 @@
             install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
             install -Dm755 ${ashBuild}/bin/ash-dbus-proxy "$out/bin/ash-dbus-proxy"
             wrapProgram "$out/bin/ash" \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bindfs pkgs.waypipe ]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bindfs pkgs.waypipe ]} \
+              --set ASH_LIBVIRTLE ${libvirtle}/lib/libvirtle.so
           '';
 
         agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
@@ -178,6 +215,7 @@
           default = ash;
           ash = ash;
           all = ashBuild;
+          libvirtle = libvirtle;
           "agent-portal-cli" = agentPortalCli;
           "agent-portal-host" = agentPortalHost;
           "agent-portal-wrappers" = agentPortalWrappers;
@@ -214,6 +252,8 @@
             ocamlPackages.ocaml
             ocamlPackages.dune_3
             ocamlPackages.ocamlformat
+            ocamlPackages.ctypes
+            ocamlPackages.ctypes-foreign
             ocamlPackages.msgpck
             ocamlPackages.notty-community
             ocamlPackages.otoml
@@ -221,8 +261,13 @@
             ocamlPackages.uutf
             pkgs.bindfs
             pkgs.e2fsprogs
+            pkgs.gcc
+            pkgs.go
             pkgs.waypipe
           ];
+          shellHook = ''
+            export ASH_LIBVIRTLE=${libvirtle}/lib/libvirtle.so
+          '';
         };
       }
     )

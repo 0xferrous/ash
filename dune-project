@@ -20,6 +20,8 @@
   dune
   base64
   cmdliner
+  ctypes
+  ctypes-foreign
   msgpck
   notty-community
   otoml

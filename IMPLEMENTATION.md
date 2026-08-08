@@ -212,6 +212,25 @@ Space `files` entries must resolve to regular host files. Ash reads their conten
 
 The guest SSH user defaults to `config.services.getty.autologinUser` from the selected NixOS configuration. `--user` overrides it, and ash validates the result through `config.users.users.<user>.name`.
 
+Ash executes a manifest by rendering its launch plan through the virtle Go
+library (the `ash-libvirtle` cgo shim, `libvirtle.so`) and running it from
+OCaml (`Virtle_plan`): ash prepares runtime directories, starts the resolved
+run processes (virtiofsd daemons), spawns QEMU, and waits for the virtiofs
+and QMP sockets. While the VM runs, a background thread serves the same
+`virtle.sock` control socket under the manifest state directory with a
+minimal `status` (allocated vsock CID and SSH readiness timestamp) and
+`guest-exec` (proxied to the guest agent) surface, so `ash ls`, `attach`,
+`stop`, and `inspect` behave as before. Spawn-time guest setup (SSH
+readiness, Nix registration import, space mounts, runtime hotmount
+restoration) and attach key installation go through that control socket
+instead of `virtle rpc` CLI subprocesses; the virtle CLI is only invoked by
+the generated SSH wrapper scripts. Background spawns start an
+`ash launch-ffi --manifest PATH` transient user unit (with
+`KillMode=process`); `ash stop` signals the unit, which asks the guest to
+power down before exiting. Foreground attached spawns run QEMU in the ash
+process, exec the manifest SSH wrapper after SSH readiness, and ask the
+guest to power down when the session exits.
+
 Every generated manifest exposes exactly two virtiofs directory devices:
 
 - `shares-ro` — `<state_dir>/shares/ro`, mounted read-only in the guest. It uses `--sandbox=none` so the staged host Nix store retains root ownership.

@@ -1310,16 +1310,24 @@ let select_attach_vm name =
               Log.info "attach cancelled";
               exit 0))
 
-let virtle_rpc ?(debug = true) ~virtle ~path ~method_name ?params () =
-  let args = [ virtle; "--manifest"; path; "rpc"; method_name ] in
-  let args =
-    match params with Some params -> args @ [ params ] | None -> args
-  in
-  Util.command_output ~debug
-    (String.concat " " (List.map Util.shell_quote args))
+let rpc_status ~name () =
+  let path = control_socket_path (virtle_state_dir name) in
+  match control_socket_rpc path ~method_name:"status" ~params:(`Assoc []) with
+  | Some status -> status
+  | None ->
+      raise
+        (Failure
+           (Printf.sprintf
+              "virtle control socket %s is not accepting connections" path))
 
-let rpc_status ?(debug = true) ~virtle ~path () =
-  virtle_rpc ~debug ~virtle ~path ~method_name:"status" ()
+let control_guest_exec ~name action =
+  let path = control_socket_path (virtle_state_dir name) in
+  match
+    control_socket_rpc path ~method_name:"guest-exec"
+      ~params:(Yojson.Safe.from_string (Qga.params action))
+  with
+  | Some output -> output
+  | None -> Log.fatal "VM %S guest agent is unreachable via %s" name path
 
 let contains_substring text needle =
   let text_len = String.length text in
@@ -1334,25 +1342,24 @@ let contains_substring text needle =
     in
     loop 0
 
-let wait_for_ssh_ready ~virtle ~path ~name =
+let wait_for_ssh_ready ~name =
+  let path = control_socket_path (virtle_state_dir name) in
   let deadline = Unix.gettimeofday () +. 120. in
   let rec loop () =
     if Unix.gettimeofday () > deadline then
       Log.fatal "timed out waiting for VM %S SSH readiness" name;
-    try
-      let status = rpc_status ~debug:false ~virtle ~path () in
-      if
-        contains_substring status "\"sshReadyAt\""
-        && not
-             (contains_substring status
-                "\"sshReadyAt\":\"0001-01-01T00:00:00Z\"")
-      then ()
-      else (
+    match control_socket_rpc path ~method_name:"status" ~params:(`Assoc []) with
+    | Some status when contains_substring status "\"state\":\"stopped\"" ->
+        Log.fatal "VM %S exited before SSH readiness: %s" name status
+    | Some status
+      when contains_substring status "\"sshReadyAt\""
+           && not
+                (contains_substring status
+                   "\"sshReadyAt\":\"0001-01-01T00:00:00Z\"") ->
+        ()
+    | _ ->
         Unix.sleepf 0.25;
-        loop ())
-    with Failure _ ->
-      Unix.sleepf 0.25;
-      loop ()
+        loop ()
   in
   loop ()
 
@@ -1386,15 +1393,13 @@ let space_mounts_for_inputs (inputs : manifest_inputs) =
    else [])
   @ resources.mounts
 
-let execute_nix_registration ~virtle ~path registration =
+let execute_nix_registration ~name registration =
   let action =
     Qga.load_nix_registration_action ~name:"ash-load-nix-registration"
       ~registration
   in
   let output =
-    try
-      virtle_rpc ~virtle ~path ~method_name:"guest-exec"
-        ~params:(Qga.params action) ()
+    try control_guest_exec ~name action
     with Failure message ->
       Log.fatal "failed to run Nix store registration guest-exec: %s" message
   in
@@ -1408,14 +1413,11 @@ let execute_nix_registration ~virtle ~path registration =
         | None -> ""
         | Some decoded -> "\ndecoded guest output:\n" ^ decoded)
 
-let execute_space_mounts ~virtle ~path mounts =
+let execute_space_mounts ~name mounts =
   List.iter
     (fun (mount : Ash_config.mount) ->
       let action = mount_action mount in
-      let output =
-        virtle_rpc ~virtle ~path ~method_name:"guest-exec"
-          ~params:(Qga.params action) ()
-      in
+      let output = control_guest_exec ~name action in
       match (Qga.result action output).exit_code with
       | Some 0 -> Log.info "mounted %s at %s" mount.tag mount.target
       | Some 42 -> ()
@@ -2290,15 +2292,12 @@ let runtime_mount_prepare_command ~bindfs ~name mount =
   Printf.sprintf "[ -d %s ] && install -d %s && { mountpoint -q %s || %s; }"
     source target target bindfs_command
 
-let realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount =
+let realize_runtime_mount ~bindfs ~name mount =
   let staging = runtime_mount_staging_dir ~name mount in
   ensure_bindfs_mount ~bindfs ~mode:mount.mode ~source:mount.host_dir
     ~target:staging;
   let action = runtime_mount_action ~name:"ash-runtime-mount" mount in
-  let output =
-    virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-      ~params:(Qga.params action) ()
-  in
+  let output = control_guest_exec ~name action in
   match (Qga.result action output).exit_code with
   | Some 0 ->
       Log.info "mounted %s at %s (%s)" mount.host_dir mount.guest_path
@@ -2334,8 +2333,7 @@ let ensure_runtime_target_not_static ~name guest_path =
        from the VM's selected spaces before adding a runtime mount"
       guest_path
 
-let add_runtime_mount_claim ~bindfs ~virtle ~manifest_path ~name ~owner ~mode
-    ~host_dir ~guest_path =
+let add_runtime_mount_claim ~bindfs ~name ~owner ~mode ~host_dir ~guest_path =
   let host_dir = normalize_hotmount_host_dir host_dir in
   ensure_runtime_target_not_static ~name guest_path;
   let desired = runtime_mount ~host_dir ~guest_path ~mode ~owners:[ owner ] in
@@ -2356,36 +2354,34 @@ let add_runtime_mount_claim ~bindfs ~virtle ~manifest_path ~name ~owner ~mode
     | None -> (desired, state.mounts @ [ desired ])
   in
   write_runtime_mount_state_unlocked ~name { state with mounts };
-  if not (realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount) then
+  if not (realize_runtime_mount ~bindfs ~name mount) then
     Log.fatal
       "saved runtime mount state, but could not realize %s; it will be retried \
        on the next start"
       guest_path;
   mount
 
-let hotmount_path ~bindfs ~virtle ~manifest_path ~name ~owner ~mode ~host_dir
-    ~guest_path () =
+let hotmount_path ~bindfs ~name ~owner ~mode ~host_dir ~guest_path () =
   with_state_lock ~name (fun () ->
       let mount =
-        add_runtime_mount_claim ~bindfs ~virtle ~manifest_path ~name ~owner
-          ~mode ~host_dir ~guest_path
+        add_runtime_mount_claim ~bindfs ~name ~owner ~mode ~host_dir ~guest_path
       in
       Printf.printf "%s -> %s (%s)\n" mount.host_dir mount.guest_path
         (hotmount_mode_name mount.mode))
 
 let hotmount ?virtle ~mode ~name ~spec () =
   let bindfs = find_bindfs () in
-  let virtle = find_virtle virtle in
+  let _virtle = find_virtle virtle in
   let host_path, guest_path = split_hotmount_spec spec in
   if host_path = "" then Log.fatal "host path is empty";
   let host_dir = resolve_hotmount_host_path host_path in
-  let name, manifest_path = select_attach_vm (Some name) in
+  let name, _manifest_path = select_attach_vm (Some name) in
   let user =
-    manifest_string (load_manifest_doc manifest_path) [ "ssh"; "user" ]
+    manifest_string (load_manifest_doc (manifest_path ~name)) [ "ssh"; "user" ]
   in
   let guest_path = resolve_hotmount_guest_path ~user ~host_dir guest_path in
-  hotmount_path ~bindfs ~virtle ~manifest_path ~name ~owner:manual_mount_owner
-    ~mode ~host_dir ~guest_path ()
+  hotmount_path ~bindfs ~name ~owner:manual_mount_owner ~mode ~host_dir
+    ~guest_path ()
 
 let try_unmount_hotmount_staging = try_unmount_staging
 
@@ -2430,7 +2426,7 @@ let cleanup_legacy_hotmount_state ~name =
           try Util.remove_tree ~force:true path with _ -> ());
     Util.remove_tree ~force:true dir)
 
-let restore_hotmounts ~virtle ~manifest_path ~name =
+let restore_hotmounts ~name =
   with_state_lock ~name (fun () ->
       let state = load_runtime_mount_state ~name in
       (* Writing the complete state also migrates legacy per-mount sidecars into
@@ -2457,10 +2453,8 @@ let restore_hotmounts ~virtle ~manifest_path ~name =
                       "cannot restore runtime mount %s: host directory %S does \
                        not exist"
                       mount.guest_path mount.host_dir)
-                  else if
-                    realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name
-                      mount
-                  then incr restored
+                  else if realize_runtime_mount ~bindfs ~name mount then
+                    incr restored
                   else incr failed)
                 mounts;
               if !failed = 0 then cleanup_legacy_hotmount_state ~name;
@@ -2468,7 +2462,7 @@ let restore_hotmounts ~virtle ~manifest_path ~name =
                 "runtime mount restoration complete: %d restored, %d failed"
                 !restored !failed))
 
-let hotunmount_path ~virtle ~manifest_path ~name ~owner ~guest_path () =
+let hotunmount_path ~name ~owner ~guest_path () =
   with_state_lock ~name (fun () ->
       let state = load_runtime_mount_state ~name in
       match find_runtime_mount_by_guest_path state guest_path with
@@ -2496,9 +2490,7 @@ let hotunmount_path ~virtle ~manifest_path ~name ~owner ~guest_path () =
               Qga.unmount_action ~name:"ash-runtime-unmount" ~guest_path
             in
             let output =
-              try
-                virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-                  ~params:(Qga.params action) ()
+              try control_guest_exec ~name action
               with exn ->
                 write_runtime_mount_state_unlocked ~name state;
                 raise exn
@@ -2517,16 +2509,15 @@ let hotunmount_path ~virtle ~manifest_path ~name ~owner ~guest_path () =
             Printf.printf "unmounted %s\n" guest_path)
 
 let hotunmount ?virtle ~name ~guest_path () =
-  let virtle = find_virtle virtle in
-  let name, manifest_path = select_attach_vm (Some name) in
+  let _virtle = find_virtle virtle in
+  let name, _manifest_path = select_attach_vm (Some name) in
   let user =
-    manifest_string (load_manifest_doc manifest_path) [ "ssh"; "user" ]
+    manifest_string (load_manifest_doc (manifest_path ~name)) [ "ssh"; "user" ]
   in
   let guest_path =
     resolve_hotmount_guest_path ~user ~host_dir:"" (Some guest_path)
   in
-  hotunmount_path ~virtle ~manifest_path ~name ~owner:manual_mount_owner
-    ~guest_path ()
+  hotunmount_path ~name ~owner:manual_mount_owner ~guest_path ()
 
 let space_resources_for_running_vm ~name ~manifest_path spaces =
   let saved_doc = load_manifest_doc (ash_config_path ~name) in
@@ -2571,7 +2562,7 @@ let hotmount_spaces ?virtle ~name ~spaces () =
   in
   if spaces = [] then Log.fatal "mount-space requires at least one SPACE";
   let bindfs = find_bindfs () in
-  let virtle = find_virtle virtle in
+  let _virtle = find_virtle virtle in
   let name, manifest_path = select_attach_vm (Some name) in
   let resolved =
     List.map
@@ -2633,10 +2624,7 @@ let hotmount_spaces ?virtle ~name ~spaces () =
             Qga.unmount_action ~name:"ash-runtime-space-refresh"
               ~guest_path:mount.guest_path
           in
-          let output =
-            virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-              ~params:(Qga.params action) ()
-          in
+          let output = control_guest_exec ~name action in
           match (Qga.result action output).exit_code with
           | Some 0 | Some 42 -> (
               let staging = runtime_mount_staging_dir ~name mount in
@@ -2657,10 +2645,7 @@ let hotmount_spaces ?virtle ~name ~spaces () =
       in
       List.iter
         (fun mount ->
-          if
-            not
-              (realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount)
-          then incr failures)
+          if not (realize_runtime_mount ~bindfs ~name mount) then incr failures)
         requested_mounts;
       if !failures <> 0 then
         Log.fatal
@@ -2678,8 +2663,8 @@ let hotunmount_spaces ?virtle ~name ~spaces () =
   in
   if spaces = [] then Log.fatal "umount-space requires at least one SPACE";
   let bindfs = find_bindfs () in
-  let virtle = find_virtle virtle in
-  let name, manifest_path = select_attach_vm (Some name) in
+  let _virtle = find_virtle virtle in
+  let name, _manifest_path = select_attach_vm (Some name) in
   with_state_lock ~name (fun () ->
       let previous = load_runtime_mount_state ~name in
       let owners = List.map space_mount_owner spaces in
@@ -2705,9 +2690,7 @@ let hotunmount_spaces ?virtle ~name ~spaces () =
       let restore_previous () =
         write_runtime_mount_state_unlocked ~name previous;
         List.iter
-          (fun mount ->
-            ignore
-              (realize_runtime_mount ~bindfs ~virtle ~manifest_path ~name mount))
+          (fun mount -> ignore (realize_runtime_mount ~bindfs ~name mount))
           removed
       in
       let failed = ref false in
@@ -2718,10 +2701,7 @@ let hotunmount_spaces ?virtle ~name ~spaces () =
                Qga.unmount_action ~name:"ash-runtime-space-unmount"
                  ~guest_path:mount.guest_path
              in
-             let output =
-               virtle_rpc ~virtle ~path:manifest_path ~method_name:"guest-exec"
-                 ~params:(Qga.params action) ()
-             in
+             let output = control_guest_exec ~name action in
              match (Qga.result action output).exit_code with
              | Some 0 | Some 42 -> (
                  let staging = runtime_mount_staging_dir ~name mount in
@@ -2742,7 +2722,7 @@ let hotunmount_spaces ?virtle ~name ~spaces () =
            state");
       Printf.printf "unmounted runtime spaces: %s\n" (String.concat "," spaces))
 
-let install_ssh_key ~virtle ~path ~name ~user =
+let install_ssh_key ~name ~user =
   let identity = ensure_ssh_identity ~name in
   Log.debug "installing SSH key for VM %s user %s using identity %s" name user
     identity;
@@ -2762,10 +2742,7 @@ let install_ssh_key ~virtle ~path ~name ~user =
     Qga.install_ssh_key_action ~name:"ash-ssh-autoprovision" ~user ~target
       ~authorized_key
   in
-  let output =
-    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
-      ~params:(Qga.params action) ()
-  in
+  let output = control_guest_exec ~name action in
   match (Qga.result action output).exit_code with
   | Some 0 -> identity
   | _ -> Log.fatal "SSH autoprovision failed: %s" output
@@ -2789,18 +2766,18 @@ let scp_args ~wrapper ~identity ~host_name ~recursive ~source ~destination =
   @ [ "--"; source; destination ]
 
 let copy ?virtle ~name ~recursive ~verbose ~from_path ~to_path ~source () =
-  let virtle = find_virtle virtle in
+  let _virtle = find_virtle virtle in
   let scp = find_scp () in
-  let name, path = select_attach_vm (Some name) in
-  let status = rpc_status ~virtle ~path () in
+  let name, _path = select_attach_vm (Some name) in
+  let status = rpc_status ~name () in
   let cid =
     match Qga.int_field ~field:"cid" status with
     | Some cid when cid > 0 -> cid
     | _ -> Log.fatal "could not read VM cid from virtle status: %s" status
   in
-  let doc = load_manifest_doc path in
+  let doc = load_manifest_doc (manifest_path ~name) in
   let user = manifest_string doc [ "ssh"; "user" ] in
-  let identity = install_ssh_key ~virtle ~path ~name ~user in
+  let identity = install_ssh_key ~name ~user in
   let wrapper = space_mount_ssh_wrapper_path ~name in
   if not (Sys.file_exists wrapper) then
     Log.fatal "missing SSH wrapper %s; run `ash regenerate %s`" wrapper name;
@@ -2827,10 +2804,11 @@ let copy ?virtle ~name ~recursive ~verbose ~from_path ~to_path ~source () =
   exit code
 
 let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~verbose () =
-  let virtle = find_virtle virtle in
+  (* The SSH wrapper runs virtle rpc guest-exec, so the CLI must exist. *)
+  let _virtle = find_virtle virtle in
   if kitty then ignore (find_kitten ());
   Log.debug "attaching to VM %s using manifest %s" name path;
-  let status = rpc_status ~virtle ~path () in
+  let status = rpc_status ~name () in
   let cid =
     match Qga.int_field ~field:"cid" status with
     | Some cid when cid > 0 -> cid
@@ -2850,7 +2828,7 @@ let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~verbose () =
       | None -> [ ssh_wrapper ])
     else manifest_string_array doc [ "ssh"; "exec" ]
   in
-  let identity = install_ssh_key ~virtle ~path ~name ~user in
+  let identity = install_ssh_key ~name ~user in
   let identity_args = [ "-i"; identity; "-o"; "IdentitiesOnly=yes" ] in
   let destination = user ^ "@vsock/" ^ string_of_int cid in
   let verbose_args = List.map (fun _ -> "-v") verbose in
@@ -3691,15 +3669,22 @@ let print_background_started ~name =
   Printf.printf "logs: %s\n" (Systemd_run.logs_hint ~name);
   Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
 
-let start_background ~announce ~resume ~name ~virtle ~path ~verbose =
-  let args = launch_args ~resume ~path ~verbose ~ssh:false in
+let start_background ~announce ~resume ~ffi ~name ~virtle ~path ~verbose =
   let description =
     match resume with
     | Some _ -> "ash VM " ^ name ^ " (resume)"
     | None -> "ash VM " ^ name
   in
   let code =
-    Systemd_run.start_user_unit ~name ~description ~program:virtle ~args
+    if ffi then
+      (* The unit renders the launch plan through the virtle library FFI and
+         executes it in-process (see launch-ffi). *)
+      Systemd_run.start_user_unit ~name ~description
+        ~program:Sys.executable_name
+        ~args:[ "launch-ffi"; "--manifest"; path ]
+    else
+      let args = launch_args ~resume ~path ~verbose ~ssh:false in
+      Systemd_run.start_user_unit ~name ~description ~program:virtle ~args
   in
   if code <> 0 then exit code;
   if announce then print_background_started ~name
@@ -3713,42 +3698,85 @@ let registration_for_inputs (inputs : manifest_inputs) =
         inputs.name
         (Util.shell_quote inputs.name)
 
-let wait_and_mount (inputs : manifest_inputs) path =
+let wait_and_mount (inputs : manifest_inputs) =
   let registration = registration_for_inputs inputs in
-  wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name;
-  execute_nix_registration ~virtle:inputs.virtle ~path registration;
-  execute_space_mounts ~virtle:inputs.virtle ~path
-    (space_mounts_for_inputs inputs);
-  restore_hotmounts ~virtle:inputs.virtle ~manifest_path:path ~name:inputs.name
+  wait_for_ssh_ready ~name:inputs.name;
+  execute_nix_registration ~name:inputs.name registration;
+  execute_space_mounts ~name:inputs.name (space_mounts_for_inputs inputs);
+  restore_hotmounts ~name:inputs.name
 
-let launch_background ?(announce = true) ~resume (inputs : manifest_inputs) path
-    ~verbose =
+let launch_background ?(announce = true) ~resume ~ffi (inputs : manifest_inputs)
+    path ~verbose =
   prepare_host_share_mounts inputs;
-  start_background ~announce ~resume ~name:inputs.name ~virtle:inputs.virtle
-    ~path ~verbose;
-  wait_and_mount inputs path
+  start_background ~announce ~resume ~ffi ~name:inputs.name
+    ~virtle:inputs.virtle ~path ~verbose;
+  wait_and_mount inputs
 
-let launch_background_and_attach ~resume (inputs : manifest_inputs) path
+let launch_background_and_attach ~resume ~ffi (inputs : manifest_inputs) path
     ~verbose =
-  launch_background ~resume inputs path ~verbose;
+  launch_background ~resume ~ffi inputs path ~verbose;
   exit
     (attach_running_code ~virtle:inputs.virtle ~name:inputs.name ~path
        ~kitty:false ~waypipe:None ~verbose ())
 
-let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
-    path ~verbose =
-  prepare_host_share_mounts inputs;
-  let args = launch_args ~resume ~path ~verbose ~ssh:true in
-  (* The manifest's SSH wrapper performs registration and all desired mounts
-     before it execs SSH. Running wait_and_mount concurrently here opens a
-     second QGA connection and can reset the wrapper's in-flight guest-exec. *)
-  let code = Util.run_foreground inputs.virtle args in
+let render_plan path =
+  let data =
+    try In_channel.with_open_bin path In_channel.input_all
+    with Sys_error message -> Log.fatal "read manifest %S: %s" path message
+  in
+  let render m = Virtle_ffi.plan m ~cid:0 ~incoming:false in
+  match Virtle_ffi.with_manifest data render with
+  | Ok (Ok json) -> Virtle_plan.of_json json
+  | Ok (Error message) | Error message ->
+      Log.fatal "plan render failed: %s" message
+
+let launch_foreground_ffi ?cleanup_dir (inputs : manifest_inputs) path ~verbose
+    =
+  (* Execute the rendered plan in-process: QEMU runs in the foreground of
+     this process while a background thread serves the virtle control socket.
+     The manifest's SSH wrapper performs registration and all desired mounts
+     through that socket before it execs SSH. *)
+  let plan = render_plan path in
+  let session =
+    match Virtle_plan.start plan with
+    | Ok session -> session
+    | Error message -> Log.fatal "vm startup: %s" message
+  in
+  wait_for_ssh_ready ~name:inputs.name;
+  let doc = load_manifest_doc path in
+  let user = manifest_string doc [ "ssh"; "user" ] in
+  let ssh_exec = manifest_string_array doc [ "ssh"; "exec" ] in
+  let destination = user ^ "@vsock/" ^ string_of_int plan.cid in
+  let verbose_args = List.map (fun _ -> "-v") verbose in
+  let code =
+    match ssh_exec with
+    | [] -> Log.fatal "manifest ssh.exec is empty"
+    | program :: args ->
+        Util.run_foreground program (args @ verbose_args @ [ destination ])
+  in
+  (match Virtle_plan.shutdown_and_wait session with
+  | Ok _ -> ()
+  | Error message -> Log.warn "vm teardown: %s" message);
   Option.iter
     (fun dir ->
       Log.info "removing ephemeral VM state %s" dir;
       Util.remove_tree ~force:true dir)
     cleanup_dir;
   exit code
+
+let launch_foreground_attached ?cleanup_dir ~resume ~ffi
+    (inputs : manifest_inputs) path ~verbose =
+  prepare_host_share_mounts inputs;
+  if ffi then launch_foreground_ffi ?cleanup_dir inputs path ~verbose
+  else
+    let args = launch_args ~resume ~path ~verbose ~ssh:true in
+    let code = Util.run_foreground inputs.virtle args in
+    Option.iter
+      (fun dir ->
+        Log.info "removing ephemeral VM state %s" dir;
+        Util.remove_tree ~force:true dir)
+      cleanup_dir;
+    exit code
 
 let saved_inputs ?virtle ~name () =
   let name = Util.name_slug name in
@@ -3796,12 +3824,12 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
   in
   require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach ~keep;
   if attach && keep then
-    launch_background_and_attach ~resume:None inputs path ~verbose
+    launch_background_and_attach ~resume:None ~ffi:true inputs path ~verbose
   else if attach then
     launch_foreground_attached
       ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
-      ~resume:None inputs path ~verbose
-  else launch_background ~resume:None inputs path ~verbose
+      ~resume:None ~ffi:true inputs path ~verbose
+  else launch_background ~resume:None ~ffi:true inputs path ~verbose
 
 let resume ?virtle ~name ~attach ~keep ~verbose () =
   let name = Util.name_slug name in
@@ -3815,10 +3843,12 @@ let resume ?virtle ~name ~attach ~keep ~verbose () =
   if not (Sys.file_exists path) then
     Log.fatal "no VM manifest for %S (expected %s)" inputs.name path;
   if attach && keep then
-    launch_background_and_attach ~resume:(Some "force") inputs path ~verbose
+    launch_background_and_attach ~resume:(Some "force") ~ffi:false inputs path
+      ~verbose
   else if attach then
-    launch_foreground_attached ~resume:(Some "force") inputs path ~verbose
-  else launch_background ~resume:(Some "force") inputs path ~verbose
+    launch_foreground_attached ~resume:(Some "force") ~ffi:false inputs path
+      ~verbose
+  else launch_background ~resume:(Some "force") ~ffi:false inputs path ~verbose
 
 let rewrite_saved_manifest (inputs : manifest_inputs) =
   Log.debug "regenerating VM manifest for %s" inputs.name;
@@ -3877,8 +3907,9 @@ let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~verbose =
   require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach:true
     ~keep;
   let inputs, path = rewrite_saved_manifest inputs in
-  if keep then launch_background_and_attach ~resume:None inputs path ~verbose
-  else launch_foreground_attached ~resume:None inputs path ~verbose
+  if keep then
+    launch_background_and_attach ~resume:None ~ffi:true inputs path ~verbose
+  else launch_foreground_attached ~resume:None ~ffi:true inputs path ~verbose
 
 let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
   let vms = list_vms () in

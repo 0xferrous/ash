@@ -7,6 +7,57 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Added
+
+- `ash spawn` now executes the virtle launch plan in-process through the
+  virtle library FFI instead of invoking the virtle CLI `launch` command:
+  ash renders the plan (virtle_plan), starts the resolved run processes and
+  QEMU itself, and serves a minimal virtle control socket (status and
+  guest-exec, proxied to the guest agent) for the VM's lifetime, so
+  ls/attach/stop/inspect keep working unchanged. Background spawns run an
+  `ash launch-ffi` user unit (with KillMode=process), foreground attached
+  spawns shut the guest down gracefully when the SSH session exits, and
+  guest setup (SSH readiness, registration, space mounts, hotmounts) now
+  goes through the control socket instead of `virtle rpc` CLI calls.
+
+### Fixed
+
+- Fixed the FFI launch passing each manifest run process its own binary path
+  as an extra argv argument (`virtiofsd`, `agent-portal-host`, and
+  `ash-dbus-proxy` rejected it as an unexpected argument and exited). Run
+  processes now run in their working directory with exec as argv[0] exactly
+  once.
+- Ignored SIGPIPE in the plan executor so writes to a disconnected guest
+  agent or control-socket client raise EPIPE instead of deadlocking the
+  process; the control server now survives connect-and-close probes (as
+  issued by `ash ls`) and failed guest-exec requests.
+- The FFI executor now fails fast when QEMU (or a run process) dies during
+  startup, even if it already created its sockets, reporting the exit code
+  instead of hanging. A watcher thread reaps QEMU and the control socket
+  reports `state: stopped` once it exits, so spawn/attach abort immediately
+  with the VM's exit code instead of polling SSH readiness for two minutes
+  after a failed launch (e.g. a missing drive image).
+- The FFI executor now creates missing auto-create volume images (sparse
+  ext4 with the volume label) before QEMU starts, matching virtle's startup
+  behavior, so `persist.img` (and any image mount with `image.create`)
+  no longer needs to pre-exist when launching through `ash launch-ffi`.
+- In-process virtle manifest validation via FFI: a cgo shim
+  (`ffi/shim.go`, built as `ash-libvirtle`) exposes virtle's manifest
+  decode/resolve and QEMU argv generation as a C shared library, bound from
+  OCaml through `Virtle_ffi` (ctypes). `ash manifest-check --manifest PATH`
+  validates a generated manifest without spawning the virtle CLI; `--json`
+  prints the resolved manifest, otherwise it prints the rendered QEMU argv.
+- `ash launch-ffi --manifest PATH [--cid N] [--incoming]` renders a virtle
+  manifest's launch plan through the virtle library FFI and executes it from
+  OCaml: ash prepares runtime directories, starts host run processes and
+  QEMU, waits for the virtiofs and QMP sockets, holds until the VM exits, and
+  terminates the remaining host processes. Guest serial output goes to
+  stderr; the VM's allocated CID, exit code, and QMP socket are printed on
+  exit. Requires qemu-system-* on PATH.
+  The virtle flake input currently tracks the `push-tmopowoytwzm` branch of
+  `0xferrous/virtle` and should be switched back to upstream `shazow/virtle`
+  once the extraction is merged.
+
 ## [v0.1.7] - 2026-08-07
 
 ### Added

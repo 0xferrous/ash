@@ -2,11 +2,15 @@
  (name ash)
  (libraries
   agent_portal
+  ash.ext2fs
   image_import_core
   unix
   base64
+  ctypes
+  ctypes-foreign
   notty-community
   notty-community.unix
   otoml
+  threads
   uutf
   yojson))

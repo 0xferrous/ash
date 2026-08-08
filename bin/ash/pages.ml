@@ -64,11 +64,14 @@ let spawn =
         `S Manpage.s_description;
         `P
           "Creates or updates ash VM state, renders a virtle manifest, and \
-           starts virtle.";
+           starts the VM. Launching executes the manifest's plan in-process \
+           through the virtle Go library (libvirtle.so); the virtle CLI is no \
+           longer spawned for launch.";
         `S "LIFECYCLE";
         `P
-          "Plain spawn starts the VM as a background user systemd unit and \
-           returns. The VM keeps running until stopped with ash stop.";
+          "Plain spawn starts the VM as a background user systemd unit \
+           (running ash launch-ffi) and returns. The VM keeps running until \
+           stopped with ash stop, which asks the guest to power down.";
         `P
           "--attach starts the VM in the foreground and opens SSH. Without \
            --keep, the VM stops when the attached session exits. Interactive \
@@ -82,9 +85,8 @@ let spawn =
            directory after the foreground attached session exits.";
         `S "BACKGROUND UNITS";
         `P
-          "Background spawns use systemd-run --user to start virtle as a \
-           transient unit named ash-NAME.service. ash stop NAME stops that \
-           unit.";
+          "Background spawns use systemd-run --user to start an ash launch-ffi \
+           unit named ash-NAME.service. ash stop NAME stops that unit.";
         `P
           "After starting a background VM, ash prints the unit name and an ash \
            logs -f NAME hint for following its logs.";
@@ -482,6 +484,52 @@ let ls =
         `S Manpage.s_examples;
         `Pre "ash ls";
         `Pre "ash ls --cache";
+      ];
+  }
+
+let manifest_check =
+  {
+    file = "ash-manifest-check";
+    command = Some "manifest-check";
+    summary = "validate a virtle manifest in-process via the virtle library";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Decodes, resolves, and validates a virtle manifest in-process \
+           through the virtle Go library (libvirtle.so) instead of spawning \
+           the virtle CLI. The default output is the rendered QEMU argv; with \
+           --json it prints the resolved manifest as JSON.";
+        `S Manpage.s_examples;
+        `Pre "ash manifest-check --manifest virtle.toml";
+        `Pre "ash manifest-check --json --manifest virtle.toml | jq .qemu";
+      ];
+  }
+
+let launch_ffi =
+  {
+    file = "ash-launch-ffi";
+    command = Some "launch-ffi";
+    summary =
+      "execute a virtle manifest's plan in-process via the virtle library";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Renders a virtle manifest's launch plan through the virtle Go \
+           library (libvirtle.so) and executes it from ash: prepares runtime \
+           directories, creates missing auto-create volume images (sparse ext4 \
+           with the volume label, like persist.img), starts host run processes \
+           and QEMU, waits for the QMP socket, and holds until the VM exits. \
+           While running it serves the virtle control socket (virtle.sock \
+           under the manifest state directory) with status and guest-exec \
+           proxied to the guest agent, so the VM is visible to ash \
+           ls/attach/stop/inspect. On SIGTERM (ash stop) it asks the guest to \
+           power down before exiting. Guest serial output goes to stderr. \
+           Requires qemu-system-* on PATH.";
+        `S Manpage.s_examples;
+        `Pre "ash launch-ffi --manifest virtle.toml";
+        `Pre "ash launch-ffi --manifest virtle.toml --cid 7";
       ];
   }
 
