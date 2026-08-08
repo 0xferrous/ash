@@ -1,3 +1,7 @@
 (test
  (name test_manifest)
  (libraries ash unix otoml yojson))
+
+(test
+ (name test_virtle_ffi)
+ (libraries ash unix))

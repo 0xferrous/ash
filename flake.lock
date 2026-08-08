@@ -37,7 +37,8 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "virtle": "virtle"
       }
     },
     "systems": {
@@ -52,6 +53,26 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
+        "type": "github"
+      }
+    },
+    "virtle": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786162126,
+        "narHash": "sha256-CHVKEVEL90QgHrTa70OZJanKJ9UWfcYipZoCjTWjbDE=",
+        "owner": "shazow",
+        "repo": "virtle",
+        "rev": "1492c9d94d06ec4d2651f5bd0626faedcc46678b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "shazow",
+        "repo": "virtle",
         "type": "github"
       }
     }

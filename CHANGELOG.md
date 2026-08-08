@@ -7,6 +7,16 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Added
+
+- In-process virtle manifest validation via FFI: a cgo shim
+  (`ffi/shim.go`, built as `ash-libvirtle`) exposes virtle's manifest
+  decode/resolve and QEMU argv generation as a C shared library, bound from
+  OCaml through `Virtle_ffi` (ctypes). `ash manifest-check --manifest PATH`
+  validates a generated manifest without spawning the virtle CLI; `--json`
+  prints the resolved manifest, otherwise it prints the rendered QEMU argv.
+  Requires the virtle input to contain the public `manifest`/`qemu` packages.
+
 ## [v0.1.7] - 2026-08-07
 
 ### Added

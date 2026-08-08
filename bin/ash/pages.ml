@@ -485,6 +485,25 @@ let ls =
       ];
   }
 
+let manifest_check =
+  {
+    file = "ash-manifest-check";
+    command = Some "manifest-check";
+    summary = "validate a virtle manifest in-process via the virtle library";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Decodes, resolves, and validates a virtle manifest in-process \
+           through the virtle Go library (libvirtle.so) instead of spawning \
+           the virtle CLI. The default output is the rendered QEMU argv; with \
+           --json it prints the resolved manifest as JSON.";
+        `S Manpage.s_examples;
+        `Pre "ash manifest-check --manifest virtle.toml";
+        `Pre "ash manifest-check --json --manifest virtle.toml | jq .qemu";
+      ];
+  }
+
 let inspect =
   {
     file = "ash-inspect";

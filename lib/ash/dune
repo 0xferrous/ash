@@ -5,6 +5,8 @@
   image_import_core
   unix
   base64
+  ctypes
+  ctypes-foreign
   notty-community
   notty-community.unix
   otoml

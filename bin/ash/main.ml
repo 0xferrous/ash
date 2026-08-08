@@ -360,6 +360,52 @@ let ls_cmd =
        ~man:ls_man)
     Term.(const list_vms $ global_opts_arg $ ls_cache_flag)
 
+let manifest_check_manifest_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info [ "manifest" ] ~docv:"PATH"
+        ~doc:"virtle manifest to decode, resolve, and validate in-process.")
+
+let manifest_check_json_flag =
+  Arg.(
+    value & flag
+    & info [ "json" ]
+        ~doc:"Print the resolved manifest JSON instead of the QEMU argv.")
+
+let manifest_check_cid_arg =
+  Arg.(
+    value & opt int 3
+    & info [ "cid" ] ~docv:"CID"
+        ~doc:"vsock CID used to render the QEMU argv (default 3).")
+
+let manifest_check manifest json cid =
+  let data =
+    try In_channel.with_open_bin manifest In_channel.input_all
+    with Sys_error message -> Log.fatal "read manifest %S: %s" manifest message
+  in
+  let run m =
+    if json then Virtle_ffi.resolved_json m
+    else
+      Virtle_ffi.qemu_argv m ~cid ~incoming:false
+      |> Result.map (fun argv -> String.concat "\n" (Array.to_list argv))
+  in
+  match Virtle_ffi.with_manifest data run with
+  | Ok (Ok output) -> print_endline output
+  | Ok (Error message) | Error message ->
+      Log.fatal "manifest check failed: %s" message
+
+let manifest_check_man = Pages.manifest_check.man
+
+let manifest_check_cmd =
+  Cmd.v
+    (Cmd.info "manifest-check"
+       ~doc:"validate a virtle manifest via the virtle library FFI"
+       ~man:manifest_check_man)
+    Term.(
+      const manifest_check $ manifest_check_manifest_arg
+      $ manifest_check_json_flag $ manifest_check_cid_arg)
+
 let inspect_name_arg =
   Arg.(
     required
@@ -601,6 +647,7 @@ let main_cmd =
       rebuild_db_cmd;
       inspect_cmd;
       ls_cmd;
+      manifest_check_cmd;
       rm_cmd;
     ]
 
