@@ -4,7 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    virtle.url = "github:shazow/virtle";
+    # Point at 0xferrous's fork branch until the manifest/qemu extraction lands
+    # in upstream shazow/virtle.
+    virtle.url = "github:0xferrous/virtle/push-tmopowoytwzm";
     virtle.inputs.nixpkgs.follows = "nixpkgs";
   };
 

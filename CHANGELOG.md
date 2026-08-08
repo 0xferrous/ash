@@ -15,7 +15,9 @@ and this project uses its existing Git tags for version history.
   OCaml through `Virtle_ffi` (ctypes). `ash manifest-check --manifest PATH`
   validates a generated manifest without spawning the virtle CLI; `--json`
   prints the resolved manifest, otherwise it prints the rendered QEMU argv.
-  Requires the virtle input to contain the public `manifest`/`qemu` packages.
+  The virtle flake input currently tracks the `push-tmopowoytwzm` branch of
+  `0xferrous/virtle` and should be switched back to upstream `shazow/virtle`
+  once the extraction is merged.
 
 ## [v0.1.7] - 2026-08-07
 
