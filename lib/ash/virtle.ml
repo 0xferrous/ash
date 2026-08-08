@@ -1349,6 +1349,8 @@ let wait_for_ssh_ready ~name =
     if Unix.gettimeofday () > deadline then
       Log.fatal "timed out waiting for VM %S SSH readiness" name;
     match control_socket_rpc path ~method_name:"status" ~params:(`Assoc []) with
+    | Some status when contains_substring status "\"state\":\"stopped\"" ->
+        Log.fatal "VM %S exited before SSH readiness: %s" name status
     | Some status
       when contains_substring status "\"sshReadyAt\""
            && not

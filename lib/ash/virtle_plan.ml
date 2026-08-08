@@ -314,16 +314,21 @@ let format_rfc3339 time =
   Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
 
-let status_result_json plan ssh_ready =
+let status_result_json plan ssh_ready vm_exit =
   let ssh_ready_at =
     match !ssh_ready with
     | Some time -> `String (format_rfc3339 time)
     | None -> `String "0001-01-01T00:00:00Z"
   in
+  let state, exit_code =
+    match !vm_exit with
+    | Some code -> (`String "stopped", `Assoc [ ("exitCode", `Int code) ])
+    | None -> (`String "ready", `Assoc [])
+  in
   Yojson.Safe.to_string
     (`Assoc
        [
-         ("state", `String "ready");
+         ("state", state);
          ("cid", `Int plan.cid);
          ( "paths",
            `Assoc
@@ -334,6 +339,7 @@ let status_result_json plan ssh_ready =
                ("sshReadySocket", `String plan.ssh_ready_socket);
              ] );
          ("stats", `Assoc [ ("sshReadyAt", ssh_ready_at) ]);
+         ("vm", exit_code);
        ])
 
 let guest_exec_result_from_params plan params =
@@ -354,7 +360,7 @@ let guest_exec_result_from_params plan params =
     qga_guest_exec ~socket:plan.guest_agent_socket ~path ~args
       ~timeout_seconds:120.
 
-let handle_connection plan ssh_ready fd =
+let handle_connection plan ssh_ready vm_exit fd =
   let request =
     let buffer = Bytes.create 4096 in
     let rec read acc =
@@ -404,8 +410,8 @@ let handle_connection plan ssh_ready fd =
                 [
                   ("id", id);
                   ( "result",
-                    Yojson.Safe.from_string (status_result_json plan ssh_ready)
-                  );
+                    Yojson.Safe.from_string
+                      (status_result_json plan ssh_ready vm_exit) );
                 ]
           | "guest-exec" -> (
               match guest_exec_result_from_params plan params with
@@ -448,16 +454,16 @@ let handle_connection plan ssh_ready fd =
   try ignore (Unix.write_substring fd payload 0 (String.length payload))
   with Unix.Unix_error _ -> ()
 
-let serve_control_loop plan ssh_ready listener stop_flag () =
+let serve_control_loop plan ssh_ready vm_exit listener stop_flag () =
   while not !stop_flag do
     match Unix.accept listener with
     | fd, _ -> (
-        handle_connection plan ssh_ready fd;
+        handle_connection plan ssh_ready vm_exit fd;
         try Unix.close fd with Unix.Unix_error _ -> ())
     | exception Unix.Unix_error _ -> ()
   done
 
-let start_control_server plan =
+let start_control_server ~vm_exit plan =
   let socket_path = control_socket_path plan in
   if not (Sys.file_exists plan.state_dir) then Unix.mkdir plan.state_dir 0o755;
   (try Unix.unlink socket_path with Unix.Unix_error _ -> ());
@@ -477,7 +483,9 @@ let start_control_server plan =
            with Failure _ -> ())
          ());
   let server_thread =
-    Thread.create (serve_control_loop plan ssh_ready listener stop_flag) ()
+    Thread.create
+      (serve_control_loop plan ssh_ready vm_exit listener stop_flag)
+      ()
   in
   ignore server_thread;
   { stop = (fun () -> stop_flag := true) }
@@ -491,6 +499,7 @@ type session = {
   control : control_server;
   sigterm : bool ref;
   shutdown_sent : bool ref;
+  vm_exit : int option ref;
 }
 
 let ensure_dir dir = if not (Sys.file_exists dir) then Unix.mkdir dir 0o755
@@ -498,7 +507,7 @@ let ensure_dir dir = if not (Sys.file_exists dir) then Unix.mkdir dir 0o755
 let spawn ~env ~dir prog args =
   (* Fork so the child can chdir to the run directory without changing this
      process's working directory; [args] already includes [prog] as argv[0]. *)
-  (if dir <> "" then ensure_dir dir);
+  if dir <> "" then ensure_dir dir;
   match Unix.fork () with
   | 0 -> (
       try
@@ -512,26 +521,42 @@ let spawn_qemu plan =
     (Array.append [| plan.qemu_binary |] plan.qemu_argv)
     (Unix.environment ()) Unix.stdin Unix.stderr Unix.stderr
 
-let alive pid =
-  match Unix.waitpid [ Unix.WNOHANG ] pid with 0, _ -> true | _, _ -> false
-
 let exited_status = function
   | Unix.WEXITED code -> code
   | Unix.WSIGNALED n -> 128 + n
   | Unix.WSTOPPED n -> 128 + n
 
+(* Reap a watched child if it has exited, returning its exit code; [None]
+   while it is still running. ECHILD means another reaper (the QEMU watcher
+   thread) already collected it, so treat the process as gone. *)
+let process_exit_code pid =
+  match Unix.waitpid [ Unix.WNOHANG ] pid with
+  | 0, _ -> None
+  | _, status -> Some (exited_status status)
+  | exception Unix.Unix_error (Unix.ECHILD, _, _) -> Some 127
+
 let wait_sockets ~stage ~paths ~pids =
   let rec loop () =
-    if List.for_all Sys.file_exists paths then ()
-    else
-      match List.find_opt (fun pid -> not (alive pid)) pids with
-      | Some pid ->
-          failwith
-            (Printf.sprintf "%s: watched process exited early (pid %d)" stage
-               pid)
-      | None ->
+    (* Watch process liveness before socket existence: a watched process may
+       create its socket and then die (e.g. QEMU failing on a missing drive
+       image), which must abort startup instead of waiting forever. *)
+    match
+      List.find_map
+        (fun pid ->
+          match process_exit_code pid with
+          | Some code -> Some (pid, code)
+          | None -> None)
+        pids
+    with
+    | Some (pid, code) ->
+        failwith
+          (Printf.sprintf "%s: watched process exited early (pid %d, code %d)"
+             stage pid code)
+    | None ->
+        if List.for_all Sys.file_exists paths then ()
+        else (
           Unix.sleepf 0.1;
-          loop ()
+          loop ())
   in
   loop ()
 
@@ -566,13 +591,23 @@ let start plan =
     track qemu_pid;
     wait_sockets ~stage:"vm startup" ~paths:[ plan.qmp_socket ]
       ~pids:(qemu_pid :: run_pids);
-    let control = start_control_server plan in
+    (* A dedicated thread reaps QEMU and records its exit, so the control
+       socket can report when the VM has stopped and wait does not race the
+       reaper. *)
+    let vm_exit = ref None in
+    ignore
+      (Thread.create
+         (fun () ->
+           let _, status = Unix.waitpid [] qemu_pid in
+           vm_exit := Some (exited_status status))
+         ());
+    let control = start_control_server ~vm_exit plan in
     let sigterm = ref false in
     let shutdown_sent = ref false in
     (try
        Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> sigterm := true))
      with Invalid_argument _ -> ());
-    Ok { plan; qemu_pid; run_pids; control; sigterm; shutdown_sent }
+    Ok { plan; qemu_pid; run_pids; control; sigterm; shutdown_sent; vm_exit }
   with
   | Unix.Unix_error (errno, fn, arg) ->
       List.iter
@@ -589,23 +624,14 @@ let start plan =
 
 (* Hold until the VM exits: when SIGTERM arrives (e.g. ash stop) or a
    graceful shutdown was requested, ask the guest to power down, wait for
-   QEMU to exit, and tear down the remaining host processes and the control
-   socket. Falls back to killing QEMU after a timeout. *)
+   the watcher to report QEMU's exit, and tear down the remaining host
+   processes and the control socket. Falls back to killing QEMU after a
+   timeout. *)
 let wait session =
   let deadline = Unix.gettimeofday () +. 30. in
   let rec loop () =
-    match Unix.waitpid [ Unix.WNOHANG ] session.qemu_pid with
-    | 0, _ ->
-        if !(session.sigterm) && not !(session.shutdown_sent) then (
-          session.shutdown_sent := true;
-          ignore (qga_guest_shutdown ~socket:session.plan.guest_agent_socket));
-        (if !(session.shutdown_sent) && Unix.gettimeofday () > deadline then
-           try Unix.kill session.qemu_pid Sys.sigkill
-           with Unix.Unix_error _ -> ());
-        Unix.sleepf 0.1;
-        loop ()
-    | _, status ->
-        let code = exited_status status in
+    match !(session.vm_exit) with
+    | Some code ->
         session.control.stop ();
         List.iter
           (fun pid ->
@@ -617,11 +643,17 @@ let wait session =
             try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ())
           session.run_pids;
         Ok code
+    | None ->
+        if !(session.sigterm) && not !(session.shutdown_sent) then (
+          session.shutdown_sent := true;
+          ignore (qga_guest_shutdown ~socket:session.plan.guest_agent_socket));
+        (if !(session.shutdown_sent) && Unix.gettimeofday () > deadline then
+           try Unix.kill session.qemu_pid Sys.sigkill
+           with Unix.Unix_error _ -> ());
+        Unix.sleepf 0.1;
+        loop ()
   in
-  try loop () with
-  | Unix.Unix_error (errno, fn, arg) ->
-      Error (Printf.sprintf "%s(%s): %s" fn arg (Unix.error_message errno))
-  | Failure message -> Error message
+  loop ()
 
 (* Gracefully shut the guest down and wait for the VM to exit. *)
 let shutdown_and_wait session =

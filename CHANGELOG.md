@@ -31,6 +31,12 @@ and this project uses its existing Git tags for version history.
   agent or control-socket client raise EPIPE instead of deadlocking the
   process; the control server now survives connect-and-close probes (as
   issued by `ash ls`) and failed guest-exec requests.
+- The FFI executor now fails fast when QEMU (or a run process) dies during
+  startup, even if it already created its sockets, reporting the exit code
+  instead of hanging. A watcher thread reaps QEMU and the control socket
+  reports `state: stopped` once it exits, so spawn/attach abort immediately
+  with the VM's exit code instead of polling SSH readiness for two minutes
+  after a failed launch (e.g. a missing drive image).
 - In-process virtle manifest validation via FFI: a cgo shim
   (`ffi/shim.go`, built as `ash-libvirtle`) exposes virtle's manifest
   decode/resolve and QEMU argv generation as a C shared library, bound from

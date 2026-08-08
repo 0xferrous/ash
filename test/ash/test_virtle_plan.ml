@@ -186,8 +186,7 @@ let test_run_argv_no_duplicate () =
       let script =
         Printf.sprintf
           "printf '%%s\\n' \"$0\" \"$@\" > %s && touch %s && exec sleep 30"
-          (Filename.quote argv_out)
-          (Filename.quote fs_sock)
+          (Filename.quote argv_out) (Filename.quote fs_sock)
       in
       let plan =
         Virtle_plan.of_json
@@ -225,6 +224,106 @@ let test_run_argv_no_duplicate () =
           | Ok code -> fail (Printf.sprintf "plan wait: exit %d" code)
           | Error message -> fail ("plan wait: " ^ message)))
 
+let control_rpc socket_path method_name params =
+  let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Fun.protect
+    ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ())
+    (fun () ->
+      Unix.connect fd (Unix.ADDR_UNIX socket_path);
+      let request =
+        Yojson.Safe.to_string
+          (`Assoc
+             [
+               ("id", `Int 1);
+               ("method", `String method_name);
+               ("params", params);
+             ])
+        ^ "\n"
+      in
+      ignore (Unix.write_substring fd request 0 (String.length request));
+      socket_read_line fd)
+
+let test_qemu_early_exit_fails_start () =
+  (* A watched process may create its socket and then die (QEMU failing on a
+     missing drive image); startup must fail fast with its exit code. *)
+  with_temp_dir (fun dir ->
+      let qmp = Filename.concat dir "qmp.sock" in
+      let plan =
+        Virtle_plan.of_json
+          (Printf.sprintf
+             {|{
+  "cid": 1,
+  "incoming": false,
+  "stateDir": %S,
+  "qmpSocket": %S,
+  "guestAgentSocket": "",
+  "sshReadySocket": "",
+  "qemuBinary": "sh",
+  "qemuArgv": ["-c", "touch %s; exit 3"],
+  "runs": [],
+  "virtiofsSockets": [],
+  "cleanupFiles": [],
+  "prepareDirs": [%S]
+}|}
+             dir qmp (Filename.quote qmp) dir)
+      in
+      match Virtle_plan.start plan with
+      | Error message ->
+          assert_bool "reports early exit" true
+            (contains message "exited early");
+          assert_bool "reports exit code" true (contains message "code 3")
+      | Ok _ -> fail "expected QEMU early exit to fail start")
+
+let test_qemu_exit_reports_stopped () =
+  (* After startup, QEMU's exit must be reaped by the watcher and reported
+     through the control socket as state stopped, so readiness waits abort
+     instead of polling until timeout. *)
+  with_temp_dir (fun dir ->
+      let qmp = Filename.concat dir "qmp.sock" in
+      let plan =
+        Virtle_plan.of_json
+          (Printf.sprintf
+             {|{
+  "cid": 1,
+  "incoming": false,
+  "stateDir": %S,
+  "qmpSocket": %S,
+  "guestAgentSocket": "",
+  "sshReadySocket": "",
+  "qemuBinary": "sh",
+  "qemuArgv": ["-c", "touch %s && exec sleep 1"],
+  "runs": [],
+  "virtiofsSockets": [],
+  "cleanupFiles": [],
+  "prepareDirs": [%S]
+}|}
+             dir qmp (Filename.quote qmp) dir)
+      in
+      match Virtle_plan.start plan with
+      | Error message -> fail ("plan start: " ^ message)
+      | Ok session -> (
+          let deadline = Unix.gettimeofday () +. 10. in
+          let rec poll () =
+            if Unix.gettimeofday () > deadline then
+              fail "status never reported stopped"
+            else
+              let status =
+                control_rpc
+                  (Filename.concat dir "virtle.sock")
+                  "status" (`Assoc [])
+              in
+              if contains status "\"state\":\"stopped\"" then status
+              else (
+                Unix.sleepf 0.2;
+                poll ())
+          in
+          let status = poll () in
+          assert_bool "reports stopped" true
+            (contains status "\"state\":\"stopped\"");
+          match Virtle_plan.wait session with
+          | Ok code -> assert_equal_int "qemu exit code" 0 code
+          | Error message -> fail ("plan wait: " ^ message)))
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -239,4 +338,6 @@ let () =
   run "qga guest-exec polls until exit" test_qga_guest_exec;
   run "qga guest shutdown" test_qga_guest_shutdown;
   run "ssh ready token" test_ssh_ready_token;
-  run "run process argv has no duplicate program" test_run_argv_no_duplicate
+  run "run process argv has no duplicate program" test_run_argv_no_duplicate;
+  run "qemu early exit fails start" test_qemu_early_exit_fails_start;
+  run "qemu exit reports stopped" test_qemu_exit_reports_stopped
