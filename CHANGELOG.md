@@ -19,6 +19,18 @@ and this project uses its existing Git tags for version history.
   spawns shut the guest down gracefully when the SSH session exits, and
   guest setup (SSH readiness, registration, space mounts, hotmounts) now
   goes through the control socket instead of `virtle rpc` CLI calls.
+
+### Fixed
+
+- Fixed the FFI launch passing each manifest run process its own binary path
+  as an extra argv argument (`virtiofsd`, `agent-portal-host`, and
+  `ash-dbus-proxy` rejected it as an unexpected argument and exited). Run
+  processes now run in their working directory with exec as argv[0] exactly
+  once.
+- Ignored SIGPIPE in the plan executor so writes to a disconnected guest
+  agent or control-socket client raise EPIPE instead of deadlocking the
+  process; the control server now survives connect-and-close probes (as
+  issued by `ash ls`) and failed guest-exec requests.
 - In-process virtle manifest validation via FFI: a cgo shim
   (`ffi/shim.go`, built as `ash-libvirtle`) exposes virtle's manifest
   decode/resolve and QEMU argv generation as a C shared library, bound from

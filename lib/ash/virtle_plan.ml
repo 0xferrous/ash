@@ -496,16 +496,16 @@ type session = {
 let ensure_dir dir = if not (Sys.file_exists dir) then Unix.mkdir dir 0o755
 
 let spawn ~env ~dir prog args =
-  let args = Array.append [| prog |] args in
-  let dir =
-    if dir = "" then Unix.getcwd ()
-    else (
-      ensure_dir dir;
-      Unix.chdir dir;
-      Unix.getcwd ())
-  in
-  ignore dir;
-  Unix.create_process_env prog args env Unix.stdin Unix.stderr Unix.stderr
+  (* Fork so the child can chdir to the run directory without changing this
+     process's working directory; [args] already includes [prog] as argv[0]. *)
+  (if dir <> "" then ensure_dir dir);
+  match Unix.fork () with
+  | 0 -> (
+      try
+        if dir <> "" then Unix.chdir dir;
+        Unix.execvpe prog args env
+      with _ -> exit 127)
+  | pid -> pid
 
 let spawn_qemu plan =
   Unix.create_process_env plan.qemu_binary
@@ -540,6 +540,10 @@ let wait_sockets ~stage ~paths ~pids =
    control socket in a background thread. Returns a session; the caller must
    finish it with [wait]. *)
 let start plan =
+  (* Writes to peer-closed sockets (control clients, QGA) must raise EPIPE
+     instead of delivering SIGPIPE, which can deadlock the process. *)
+  (try Sys.set_signal Sys.sigpipe Sys.Signal_ignore
+   with Invalid_argument _ -> ());
   let cleanup = ref [] in
   let track pid = cleanup := pid :: !cleanup in
   try

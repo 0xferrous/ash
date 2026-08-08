@@ -174,14 +174,69 @@ let test_ssh_ready_token () =
       Thread.join server;
       Unix.close listener)
 
+let test_run_argv_no_duplicate () =
+  (* Regression: run processes must be spawned with exec as argv[0] exactly
+     once, in the run's working directory. A duplicated program path used to
+     make virtiofsd/agent-portal-host reject their own binary as an
+     argument. *)
+  with_temp_dir (fun dir ->
+      let argv_out = Filename.concat dir "argv.out" in
+      let fs_sock = Filename.concat dir "fs.sock" in
+      let qmp_sock = Filename.concat dir "qmp.sock" in
+      let script =
+        Printf.sprintf
+          "printf '%%s\\n' \"$0\" \"$@\" > %s && touch %s && exec sleep 30"
+          (Filename.quote argv_out)
+          (Filename.quote fs_sock)
+      in
+      let plan =
+        Virtle_plan.of_json
+          (Printf.sprintf
+             {|{
+  "cid": 1,
+  "incoming": false,
+  "stateDir": %S,
+  "qmpSocket": %S,
+  "guestAgentSocket": "",
+  "sshReadySocket": "",
+  "qemuBinary": "sh",
+  "qemuArgv": ["-c", "touch %s && exec sleep 2"],
+  "runs": [
+    { "exec": ["sh", "-c", %S, "prog0", "first", "second"], "env": [], "dir": %S }
+  ],
+  "virtiofsSockets": [%S],
+  "cleanupFiles": [],
+  "prepareDirs": [%S]
+}|}
+             dir qmp_sock (Filename.quote qmp_sock) script dir fs_sock dir)
+      in
+      match Virtle_plan.start plan with
+      | Error message -> fail ("plan start: " ^ message)
+      | Ok session -> (
+          let argv =
+            In_channel.with_open_text argv_out In_channel.input_all
+            |> String.trim |> String.split_on_char '\n'
+          in
+          assert_equal_string "argv[0]" "prog0" (List.nth argv 0);
+          assert_equal_string "argv[1]" "first" (List.nth argv 1);
+          assert_equal_string "argv[2]" "second" (List.nth argv 2);
+          match Virtle_plan.wait session with
+          | Ok 0 -> ()
+          | Ok code -> fail (Printf.sprintf "plan wait: exit %d" code)
+          | Error message -> fail ("plan wait: " ^ message)))
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
   Printf.printf "ok\n%!"
 
 let () =
+  (* The fake guest agent writes to clients that may have already closed;
+     treat those as EPIPE instead of SIGPIPE. *)
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   run "virtle plan parses rendered plan json" test_of_json_fields;
   run "virtle plan rejects malformed json" test_of_json_malformed;
   run "qga guest-exec polls until exit" test_qga_guest_exec;
   run "qga guest shutdown" test_qga_guest_shutdown;
-  run "ssh ready token" test_ssh_ready_token
+  run "ssh ready token" test_ssh_ready_token;
+  run "run process argv has no duplicate program" test_run_argv_no_duplicate
