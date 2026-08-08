@@ -4,11 +4,12 @@
 //
 // The shim is consumer-owned glue over the importable virtle packages:
 // manifest decode/resolve/validate, QEMU argv generation, and plan
-// execution. Manifests are passed as TOML or JSON bytes and returned as JSON
-// (resolved manifest) or as a freshly allocated argv array; virtle_launch
-// executes a manifest's plan to completion (host run processes, QEMU,
-// socket readiness) using Go-side process and socket backends. Handles are
-// small integers into a Go registry so the Go garbage collector keeps parsed
+// rendering. Manifests are passed as TOML or JSON bytes and returned as JSON
+// (resolved manifest), as a freshly allocated argv array, or as a complete
+// executable launch plan: resolved run processes, the QEMU command, runtime
+// socket paths, virtiofs sockets, directories to prepare, and the allocated
+// vsock CID. Plan execution happens on the caller's side. Handles are small
+// integers into a Go registry so the Go garbage collector keeps parsed
 // manifests alive for the lifetime of the process.
 //
 // Memory ownership: strings and argv arrays returned by this library are
@@ -25,15 +26,11 @@ package main
 import "C"
 
 import (
-	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"sync"
-	"time"
 	"unsafe"
 
-	"github.com/shazow/virtle/executor"
 	"github.com/shazow/virtle/manifest"
 	"github.com/shazow/virtle/plan"
 	"github.com/shazow/virtle/qemu"
@@ -177,164 +174,116 @@ func virtle_manifest_free(handle C.int64_t) {
 	reg.del(int64(handle))
 }
 
-// statSocketWaiter is a plan.SocketWaiter that polls with os.Stat.
-type statSocketWaiter struct{ poll time.Duration }
-
-func (w statSocketWaiter) Wait(ctx context.Context, paths []string) error {
-	for {
-		all := true
-		for _, p := range paths {
-			if _, err := os.Stat(p); err != nil {
-				all = false
-				break
-			}
-		}
-		if all {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(w.poll):
-		}
-	}
+// ffiRun is a resolved host run process in the rendered plan.
+type ffiRun struct {
+	Exec []string `json:"exec"`
+	Env  []string `json:"env"`
+	Dir  string   `json:"dir"`
 }
 
-// launchPlan executes a resolved manifest's plan to completion: prepare
-// runtime directories, start host run processes (virtiofsd daemons lower
-// into runs), start QEMU, wait for the QMP socket, hold until the VM exits,
-// then tear everything down. It returns the allocated CID and the QMP socket
-// path on success. This mirrors example/launch in the virtle repo, but is
-// driven through the plan package's execution primitives.
-func launchPlan(ctx context.Context, m *manifest.Manifest, cid int, incoming bool) (usedCID int, qmpSocket string, err error) {
-	p, err := plan.BuildPlan(plan.Spec{Manifest: m}, nil, nil)
-	if err != nil {
-		return 0, "", err
-	}
-	q, err := m.ResolvedQEMU()
-	if err != nil {
-		return 0, "", err
-	}
-	if cid <= 0 {
-		cid, err = plan.AcquireCID(m, nil, hostVSockCIDChecker{})
-		if err != nil {
-			return 0, "", err
+// ffiPlan is the executable launch plan for a manifest: everything the
+// caller needs to run the VM without virtle's runtime manager.
+type ffiPlan struct {
+	CID              int      `json:"cid"`
+	Incoming         bool     `json:"incoming"`
+	StateDir         string   `json:"stateDir"`
+	QMPSocket        string   `json:"qmpSocket"`
+	GuestAgentSocket string   `json:"guestAgentSocket"`
+	SSHReadySocket   string   `json:"sshReadySocket"`
+	QEMUBinary       string   `json:"qemuBinary"`
+	QEMUArgv         []string `json:"qemuArgv"`
+	Runs             []ffiRun `json:"runs"`
+	VirtioFSSockets  []string `json:"virtiofsSockets"`
+	CleanupFiles     []string `json:"cleanupFiles"`
+	PrepareDirs      []string `json:"prepareDirs"`
+}
+
+// prepareDirs collects every directory the plan needs to exist before
+// spawning processes: persistence directories and the parent directories of
+// all runtime sockets and cleanup files.
+func prepareDirs(m *manifest.Manifest, p *plan.Plan) []string {
+	seen := map[string]bool{}
+	dirs := make([]string, 0, 4)
+	add := func(dir string) {
+		if dir != "" && !seen[dir] {
+			seen[dir] = true
+			dirs = append(dirs, dir)
 		}
 	}
-	argv, err := qemu.BuildArgs(q, cid, incoming)
-	if err != nil {
-		return 0, "", err
-	}
-
-	runner := &executor.Runner{}
-	processes := plan.NewProcessSet()
-	cleanup := func() { _ = processes.Close(context.Background()) }
-
-	// Prepare the runtime directories and clear stale sockets.
 	for _, dir := range m.ResolvedPersistenceDirectories() {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return 0, "", err
-		}
+		add(dir)
 	}
 	for _, path := range p.RuntimeSocketCleanupFiles() {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return 0, "", err
-		}
-		_ = os.Remove(path)
+		add(filepath.Dir(path))
 	}
-
-	// Start host run processes (virtiofsd daemons are lowered into runs).
-	runs, err := m.ResolvedRuns(cid)
-	if err != nil {
-		return 0, "", err
-	}
-	started := executor.NewGroup()
-	for _, run := range runs {
-		if len(run.Exec) == 0 {
-			continue
-		}
-		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
-		cmd.Dir = run.Dir
-		proc, err := runner.Start(cmd)
-		if err != nil {
-			cleanup()
-			return 0, "", err
-		}
-		started.Add(proc)
-	}
-	processes.AddGroup(started)
-
-	// Wait for virtiofs daemon sockets to appear.
-	if err := plan.WaitForSockets(ctx, plan.SocketWait{
-		Stage:        "host startup",
-		SocketPaths:  p.VirtioFSSocketPaths,
-		SocketWaiter: statSocketWaiter{poll: 100 * time.Millisecond},
-		Watchers:     processes.Watchers(),
-	}); err != nil {
-		cleanup()
-		return 0, "", err
-	}
-
-	// Start QEMU; guest serial output goes to stderr so it is observable.
-	qemuCmd := executor.Command(q.BinaryPath, argv, nil)
-	qemuCmd.Dir = m.Paths.WorkingDir
-	qemuCmd.Stdout = os.Stderr
-	qemuCmd.Stderr = os.Stderr
-	qemuProc, err := runner.Start(qemuCmd)
-	if err != nil {
-		cleanup()
-		return 0, "", err
-	}
-	processes.SetQEMU(qemuProc)
-
-	// Wait for the QMP socket, then hold until the VM exits.
-	if err := plan.WaitForSockets(ctx, plan.SocketWait{
-		Stage:        "vm startup",
-		SocketPaths:  []string{p.Paths.QMPSocket},
-		SocketWaiter: statSocketWaiter{poll: 100 * time.Millisecond},
-		Watchers:     processes.Watchers(),
-	}); err != nil {
-		cleanup()
-		return 0, "", err
-	}
-	if err := plan.WaitForLifecycleProcess(ctx, plan.LifecycleProcessWait{
-		Stage:    "vm",
-		Process:  qemuProc,
-		Watchers: processes.VMWatchers(),
-	}); err != nil {
-		cleanup()
-		return 0, "", err
-	}
-	cleanup()
-	return cid, p.Paths.QMPSocket, nil
+	return dirs
 }
 
-// virtle_launch executes the plan for a parsed manifest to completion and
-// returns a JSON result {"cid":N,"qmpSocket":"..."}. cid <= 0 allocates a
-// free vsock CID from the manifest range. On failure returns non-zero with
-// *err set.
+// virtle_plan renders the executable launch plan for a parsed manifest as
+// JSON: resolved run processes, the QEMU command, runtime socket paths,
+// virtiofs sockets, directories to prepare, stale-socket cleanup files, and
+// the allocated vsock CID. cid <= 0 allocates a free CID from the manifest
+// range. The caller executes the plan; nothing is spawned by this call.
 //
-//export virtle_launch
-func virtle_launch(handle C.int64_t, cid C.int, incoming C.int, outJSON **C.char, err **C.char) C.int {
+//export virtle_plan
+func virtle_plan(handle C.int64_t, cid C.int, incoming C.int, outJSON **C.char, err **C.char) C.int {
 	m := reg.get(int64(handle))
 	if m == nil {
 		*err = C.CString("invalid manifest handle")
 		return 1
 	}
-	usedCID, qmpSocket, e := launchPlan(context.Background(), m, int(cid), incoming != 0)
+	p, e := plan.BuildPlan(plan.Spec{Manifest: m}, nil, nil)
 	if e != nil {
 		*err = C.CString(e.Error())
 		return 1
 	}
-	result, e := json.Marshal(map[string]any{
-		"cid":       usedCID,
-		"qmpSocket": qmpSocket,
-	})
+	q, e := m.ResolvedQEMU()
 	if e != nil {
 		*err = C.CString(e.Error())
 		return 1
 	}
-	*outJSON = C.CString(string(result))
+	usedCID := int(cid)
+	if usedCID <= 0 {
+		usedCID, e = plan.AcquireCID(m, nil, hostVSockCIDChecker{})
+		if e != nil {
+			*err = C.CString(e.Error())
+			return 1
+		}
+	}
+	argv, e := qemu.BuildArgs(q, usedCID, incoming != 0)
+	if e != nil {
+		*err = C.CString(e.Error())
+		return 1
+	}
+	runs, e := m.ResolvedRuns(usedCID)
+	if e != nil {
+		*err = C.CString(e.Error())
+		return 1
+	}
+	ffiRuns := make([]ffiRun, 0, len(runs))
+	for _, run := range runs {
+		ffiRuns = append(ffiRuns, ffiRun{Exec: run.Exec, Env: run.Env, Dir: run.Dir})
+	}
+	result := ffiPlan{
+		CID:              usedCID,
+		Incoming:         incoming != 0,
+		StateDir:         p.Paths.StateDir,
+		QMPSocket:        p.Paths.QMPSocket,
+		GuestAgentSocket: p.Paths.GuestAgentSocket,
+		SSHReadySocket:   p.Paths.SSHReadySocket,
+		QEMUBinary:       q.BinaryPath,
+		QEMUArgv:         argv,
+		Runs:             ffiRuns,
+		VirtioFSSockets:  p.VirtioFSSocketPaths,
+		CleanupFiles:     p.RuntimeSocketCleanupFiles(),
+		PrepareDirs:      prepareDirs(m, p),
+	}
+	data, e := json.MarshalIndent(result, "", "  ")
+	if e != nil {
+		*err = C.CString(e.Error())
+		return 1
+	}
+	*outJSON = C.CString(string(data))
 	return 0
 }
 

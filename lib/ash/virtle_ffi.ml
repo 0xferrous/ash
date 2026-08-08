@@ -33,8 +33,6 @@ let version () =
 
 type manifest = int64
 
-type launch_result = { cid : int; qmp_socket : string }
-
 let parse data =
   let parse = load "virtle_manifest_parse" (string @-> size_t @-> ptr int64_t @-> ptr (ptr char) @-> returning int) in
   let string_free = load "virtle_string_free" (ptr char @-> returning void) in
@@ -83,25 +81,19 @@ let qemu_argv m ~cid ~incoming =
     argv_free argv !@argc_out;
     Ok args
 
-let launch m ~cid ~incoming =
-  let launch = load "virtle_launch" (int64_t @-> int @-> int @-> ptr (ptr char) @-> ptr (ptr char) @-> returning int) in
+let plan m ~cid ~incoming =
+  let plan = load "virtle_plan" (int64_t @-> int @-> int @-> ptr (ptr char) @-> ptr (ptr char) @-> returning int) in
   let string_free = load "virtle_string_free" (ptr char @-> returning void) in
   let out = allocate (ptr char) (from_voidp char null) in
   let err = allocate (ptr char) (from_voidp char null) in
-  if launch m cid (if incoming then 1 else 0) out err <> 0 then
+  if plan m cid (if incoming then 1 else 0) out err <> 0 then
     let message = cstring !@err in
     string_free !@err;
     Error message
   else
     let json = cstring !@out in
     string_free !@out;
-    match Yojson.Safe.from_string json with
-    | `Assoc fields -> (
-        match (List.assoc_opt "cid" fields, List.assoc_opt "qmpSocket" fields) with
-        | Some (`Int cid), Some (`String qmp_socket) ->
-            Ok { cid; qmp_socket }
-        | _ -> Error ("unexpected launch result: " ^ json))
-    | _ -> Error ("unexpected launch result: " ^ json)
+    Ok json
 
 let free m =
   let manifest_free = load "virtle_manifest_free" (int64_t @-> returning void) in

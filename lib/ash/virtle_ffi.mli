@@ -29,17 +29,14 @@ val free : manifest -> unit
 (** [free m] releases the manifest handle. Must be called exactly once and
     only after no other call uses [m]. *)
 
-type launch_result = { cid : int; qmp_socket : string }
-(** Result of a plan execution: the allocated vsock CID and the QMP socket. *)
-
-val launch :
-  manifest -> cid:int -> incoming:bool -> (launch_result, string) result
-(** [launch m ~cid ~incoming] executes the manifest's plan to completion:
-    prepares runtime directories, starts host run processes and QEMU, waits
-    for the QMP socket, holds until the VM exits, then tears everything down.
-    [cid] is the vsock CID to use (0 allocates one from the manifest range);
-    [incoming] adds "-incoming defer" for state restore. Blocks for the VM's
-    lifetime; guest serial output goes to stderr. *)
+val plan : manifest -> cid:int -> incoming:bool -> (string, string) result
+(** [plan m ~cid ~incoming] renders the executable launch plan for the
+    manifest as JSON: resolved run processes, the QEMU command, runtime
+    socket paths, virtiofs sockets, directories to prepare, stale-socket
+    cleanup files, and the allocated vsock CID. [cid] 0 allocates one from
+    the manifest range; [incoming] adds "-incoming defer" for state restore.
+    Nothing is spawned by this call; execute the returned plan with
+    [Virtle_plan.execute]. *)
 
 val with_manifest : string -> (manifest -> 'a) -> ('a, string) result
 (** [with_manifest data f] parses [data], applies [f], and always releases the

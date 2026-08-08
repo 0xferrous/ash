@@ -5,3 +5,7 @@
 (test
  (name test_virtle_ffi)
  (libraries ash unix))
+
+(test
+ (name test_virtle_plan)
+ (libraries ash unix yojson))

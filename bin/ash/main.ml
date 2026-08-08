@@ -430,13 +430,17 @@ let launch_ffi manifest cid incoming =
     try In_channel.with_open_bin manifest In_channel.input_all
     with Sys_error message -> Log.fatal "read manifest %S: %s" manifest message
   in
-  let run m = Virtle_ffi.launch m ~cid ~incoming in
-  match Virtle_ffi.with_manifest data run with
-  | Ok (Ok result) ->
-      Printf.printf "vm exited cid=%d qmp_socket=%s\n" result.cid
-        result.qmp_socket
+  let render m = Virtle_ffi.plan m ~cid ~incoming in
+  match Virtle_ffi.with_manifest data render with
+  | Ok (Ok json) -> (
+      let plan = Virtle_plan.of_json json in
+      match Virtle_plan.execute plan with
+      | Ok exit_code ->
+          Printf.printf "vm exited cid=%d exit_code=%d qmp_socket=%s\n"
+            plan.cid exit_code plan.qmp_socket
+      | Error message -> Log.fatal "plan execution failed: %s" message)
   | Ok (Error message) | Error message ->
-      Log.fatal "plan launch failed: %s" message
+      Log.fatal "plan render failed: %s" message
 
 let launch_ffi_man = Pages.launch_ffi.man
 

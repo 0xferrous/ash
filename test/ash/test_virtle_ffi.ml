@@ -55,6 +55,18 @@ let test_qemu_argv () =
   | Error message -> failwith ("ffi parse: " ^ message)
   | Ok () -> ()
 
+let test_plan_json () =
+  Virtle_ffi.with_manifest manifest (fun m ->
+      match Virtle_ffi.plan m ~cid:0 ~incoming:false with
+      | Error message -> failwith ("ffi plan: " ^ message)
+      | Ok json ->
+          assert_bool "plan json has qemuBinary" true (contains json "qemuBinary");
+          assert_bool "plan json has runs" true (contains json "\"runs\"");
+          assert_bool "plan json has a cid" true (contains json "\"cid\""))
+  |> function
+  | Error message -> failwith ("ffi parse: " ^ message)
+  | Ok () -> ()
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -69,4 +81,5 @@ let () =
   | Ok version ->
       assert_equal "virtle ffi version" "0.1.0" version;
       run "virtle ffi parse + resolved json" test_parse_and_resolved_json;
-      run "virtle ffi qemu argv" test_qemu_argv
+      run "virtle ffi qemu argv" test_qemu_argv;
+      run "virtle ffi plan json" test_plan_json

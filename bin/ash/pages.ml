@@ -513,12 +513,12 @@ let launch_ffi =
       [
         `S Manpage.s_description;
         `P
-          "Executes a virtle manifest's plan through the virtle Go library \
-           (libvirtle.so) instead of the virtle CLI: prepares runtime \
+          "Renders a virtle manifest's launch plan through the virtle Go \
+           library (libvirtle.so) and executes it from ash: prepares runtime \
            directories, starts host run processes and QEMU, waits for the QMP \
-           socket, holds until the VM exits, then tears everything down. \
-           Blocks for the VM's lifetime; guest serial output goes to stderr. \
-           Requires qemu-system-* on PATH.";
+           socket, holds until the VM exits, then terminates the remaining \
+           host processes. Guest serial output goes to stderr. Requires \
+           qemu-system-* on PATH.";
         `S Manpage.s_examples;
         `Pre "ash launch-ffi --manifest virtle.toml";
         `Pre "ash launch-ffi --manifest virtle.toml --cid 7";
