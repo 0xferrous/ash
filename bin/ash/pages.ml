@@ -504,6 +504,27 @@ let manifest_check =
       ];
   }
 
+let launch_ffi =
+  {
+    file = "ash-launch-ffi";
+    command = Some "launch-ffi";
+    summary = "execute a virtle manifest's plan in-process via the virtle library";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Executes a virtle manifest's plan through the virtle Go library \
+           (libvirtle.so) instead of the virtle CLI: prepares runtime \
+           directories, starts host run processes and QEMU, waits for the QMP \
+           socket, holds until the VM exits, then tears everything down. \
+           Blocks for the VM's lifetime; guest serial output goes to stderr. \
+           Requires qemu-system-* on PATH.";
+        `S Manpage.s_examples;
+        `Pre "ash launch-ffi --manifest virtle.toml";
+        `Pre "ash launch-ffi --manifest virtle.toml --cid 7";
+      ];
+  }
+
 let inspect =
   {
     file = "ash-inspect";

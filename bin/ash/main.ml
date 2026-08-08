@@ -406,6 +406,49 @@ let manifest_check_cmd =
       const manifest_check $ manifest_check_manifest_arg
       $ manifest_check_json_flag $ manifest_check_cid_arg)
 
+let launch_ffi_manifest_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info [ "manifest" ] ~docv:"PATH"
+        ~doc:"virtle manifest whose plan to execute in-process.")
+
+let launch_ffi_cid_arg =
+  Arg.(
+    value & opt int 0
+    & info [ "cid" ] ~docv:"CID"
+        ~doc:"vsock CID to use (default 0 allocates one from the manifest range).")
+
+let launch_ffi_incoming_flag =
+  Arg.(
+    value & flag
+    & info [ "incoming" ]
+        ~doc:"Add -incoming defer for VM state restore.")
+
+let launch_ffi manifest cid incoming =
+  let data =
+    try In_channel.with_open_bin manifest In_channel.input_all
+    with Sys_error message -> Log.fatal "read manifest %S: %s" manifest message
+  in
+  let run m = Virtle_ffi.launch m ~cid ~incoming in
+  match Virtle_ffi.with_manifest data run with
+  | Ok (Ok result) ->
+      Printf.printf "vm exited cid=%d qmp_socket=%s\n" result.cid
+        result.qmp_socket
+  | Ok (Error message) | Error message ->
+      Log.fatal "plan launch failed: %s" message
+
+let launch_ffi_man = Pages.launch_ffi.man
+
+let launch_ffi_cmd =
+  Cmd.v
+    (Cmd.info "launch-ffi"
+       ~doc:"execute a virtle manifest's plan in-process via the virtle library FFI"
+       ~man:launch_ffi_man)
+    Term.(
+      const launch_ffi $ launch_ffi_manifest_arg $ launch_ffi_cid_arg
+      $ launch_ffi_incoming_flag)
+
 let inspect_name_arg =
   Arg.(
     required
@@ -648,6 +691,7 @@ let main_cmd =
       inspect_cmd;
       ls_cmd;
       manifest_check_cmd;
+      launch_ffi_cmd;
       rm_cmd;
     ]
 

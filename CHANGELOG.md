@@ -15,6 +15,12 @@ and this project uses its existing Git tags for version history.
   OCaml through `Virtle_ffi` (ctypes). `ash manifest-check --manifest PATH`
   validates a generated manifest without spawning the virtle CLI; `--json`
   prints the resolved manifest, otherwise it prints the rendered QEMU argv.
+- `ash launch-ffi --manifest PATH [--cid N] [--incoming]` executes a virtle
+  manifest's plan in-process through the virtle library FFI: it prepares
+  runtime directories, starts host run processes and QEMU, waits for the QMP
+  socket, holds until the VM exits, and tears everything down. Guest serial
+  output goes to stderr; the VM's allocated CID and QMP socket are printed on
+  exit. Requires qemu-system-* on PATH.
   The virtle flake input currently tracks the `push-tmopowoytwzm` branch of
   `0xferrous/virtle` and should be switched back to upstream `shazow/virtle`
   once the extraction is merged.

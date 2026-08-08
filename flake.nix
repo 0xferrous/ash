@@ -112,7 +112,7 @@
               cp -r ${virtleSource} "$out"
               chmod -R u+w "$out"
               mkdir -p "$out/ffishim"
-              cp ${./ffi/shim.go} "$out/ffishim/main.go"
+              cp ${./ffi}/*.go "$out/ffishim/"
             '';
           in
           pkgs.buildGoModule {

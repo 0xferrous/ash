@@ -3,11 +3,13 @@
 // in-process instead of spawning the virtle CLI.
 //
 // The shim is consumer-owned glue over the importable virtle packages:
-// manifest decode/resolve/validate and QEMU argv generation. Manifests are
-// passed as TOML or JSON bytes and returned as JSON (resolved manifest) or
-// as a freshly allocated argv array. Handles are small integers into a Go
-// registry so the Go garbage collector keeps parsed manifests alive for the
-// lifetime of the process.
+// manifest decode/resolve/validate, QEMU argv generation, and plan
+// execution. Manifests are passed as TOML or JSON bytes and returned as JSON
+// (resolved manifest) or as a freshly allocated argv array; virtle_launch
+// executes a manifest's plan to completion (host run processes, QEMU,
+// socket readiness) using Go-side process and socket backends. Handles are
+// small integers into a Go registry so the Go garbage collector keeps parsed
+// manifests alive for the lifetime of the process.
 //
 // Memory ownership: strings and argv arrays returned by this library are
 // allocated with C malloc and must be released with virtle_string_free and
@@ -23,11 +25,17 @@ package main
 import "C"
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
+	"time"
 	"unsafe"
 
+	"github.com/shazow/virtle/executor"
 	"github.com/shazow/virtle/manifest"
+	"github.com/shazow/virtle/plan"
 	"github.com/shazow/virtle/qemu"
 )
 
@@ -167,6 +175,167 @@ func virtle_string_free(s *C.char) {
 //export virtle_manifest_free
 func virtle_manifest_free(handle C.int64_t) {
 	reg.del(int64(handle))
+}
+
+// statSocketWaiter is a plan.SocketWaiter that polls with os.Stat.
+type statSocketWaiter struct{ poll time.Duration }
+
+func (w statSocketWaiter) Wait(ctx context.Context, paths []string) error {
+	for {
+		all := true
+		for _, p := range paths {
+			if _, err := os.Stat(p); err != nil {
+				all = false
+				break
+			}
+		}
+		if all {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(w.poll):
+		}
+	}
+}
+
+// launchPlan executes a resolved manifest's plan to completion: prepare
+// runtime directories, start host run processes (virtiofsd daemons lower
+// into runs), start QEMU, wait for the QMP socket, hold until the VM exits,
+// then tear everything down. It returns the allocated CID and the QMP socket
+// path on success. This mirrors example/launch in the virtle repo, but is
+// driven through the plan package's execution primitives.
+func launchPlan(ctx context.Context, m *manifest.Manifest, cid int, incoming bool) (usedCID int, qmpSocket string, err error) {
+	p, err := plan.BuildPlan(plan.Spec{Manifest: m}, nil, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	q, err := m.ResolvedQEMU()
+	if err != nil {
+		return 0, "", err
+	}
+	if cid <= 0 {
+		cid, err = plan.AcquireCID(m, nil, hostVSockCIDChecker{})
+		if err != nil {
+			return 0, "", err
+		}
+	}
+	argv, err := qemu.BuildArgs(q, cid, incoming)
+	if err != nil {
+		return 0, "", err
+	}
+
+	runner := &executor.Runner{}
+	processes := plan.NewProcessSet()
+	cleanup := func() { _ = processes.Close(context.Background()) }
+
+	// Prepare the runtime directories and clear stale sockets.
+	for _, dir := range m.ResolvedPersistenceDirectories() {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return 0, "", err
+		}
+	}
+	for _, path := range p.RuntimeSocketCleanupFiles() {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return 0, "", err
+		}
+		_ = os.Remove(path)
+	}
+
+	// Start host run processes (virtiofsd daemons are lowered into runs).
+	runs, err := m.ResolvedRuns(cid)
+	if err != nil {
+		return 0, "", err
+	}
+	started := executor.NewGroup()
+	for _, run := range runs {
+		if len(run.Exec) == 0 {
+			continue
+		}
+		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
+		cmd.Dir = run.Dir
+		proc, err := runner.Start(cmd)
+		if err != nil {
+			cleanup()
+			return 0, "", err
+		}
+		started.Add(proc)
+	}
+	processes.AddGroup(started)
+
+	// Wait for virtiofs daemon sockets to appear.
+	if err := plan.WaitForSockets(ctx, plan.SocketWait{
+		Stage:        "host startup",
+		SocketPaths:  p.VirtioFSSocketPaths,
+		SocketWaiter: statSocketWaiter{poll: 100 * time.Millisecond},
+		Watchers:     processes.Watchers(),
+	}); err != nil {
+		cleanup()
+		return 0, "", err
+	}
+
+	// Start QEMU; guest serial output goes to stderr so it is observable.
+	qemuCmd := executor.Command(q.BinaryPath, argv, nil)
+	qemuCmd.Dir = m.Paths.WorkingDir
+	qemuCmd.Stdout = os.Stderr
+	qemuCmd.Stderr = os.Stderr
+	qemuProc, err := runner.Start(qemuCmd)
+	if err != nil {
+		cleanup()
+		return 0, "", err
+	}
+	processes.SetQEMU(qemuProc)
+
+	// Wait for the QMP socket, then hold until the VM exits.
+	if err := plan.WaitForSockets(ctx, plan.SocketWait{
+		Stage:        "vm startup",
+		SocketPaths:  []string{p.Paths.QMPSocket},
+		SocketWaiter: statSocketWaiter{poll: 100 * time.Millisecond},
+		Watchers:     processes.Watchers(),
+	}); err != nil {
+		cleanup()
+		return 0, "", err
+	}
+	if err := plan.WaitForLifecycleProcess(ctx, plan.LifecycleProcessWait{
+		Stage:    "vm",
+		Process:  qemuProc,
+		Watchers: processes.VMWatchers(),
+	}); err != nil {
+		cleanup()
+		return 0, "", err
+	}
+	cleanup()
+	return cid, p.Paths.QMPSocket, nil
+}
+
+// virtle_launch executes the plan for a parsed manifest to completion and
+// returns a JSON result {"cid":N,"qmpSocket":"..."}. cid <= 0 allocates a
+// free vsock CID from the manifest range. On failure returns non-zero with
+// *err set.
+//
+//export virtle_launch
+func virtle_launch(handle C.int64_t, cid C.int, incoming C.int, outJSON **C.char, err **C.char) C.int {
+	m := reg.get(int64(handle))
+	if m == nil {
+		*err = C.CString("invalid manifest handle")
+		return 1
+	}
+	usedCID, qmpSocket, e := launchPlan(context.Background(), m, int(cid), incoming != 0)
+	if e != nil {
+		*err = C.CString(e.Error())
+		return 1
+	}
+	result, e := json.Marshal(map[string]any{
+		"cid":       usedCID,
+		"qmpSocket": qmpSocket,
+	})
+	if e != nil {
+		*err = C.CString(e.Error())
+		return 1
+	}
+	*outJSON = C.CString(string(result))
+	return 0
 }
 
 func main() {}
