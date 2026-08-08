@@ -181,6 +181,17 @@ type ffiRun struct {
 	Dir  string   `json:"dir"`
 }
 
+// ffiVolume is a disk image volume in the rendered plan. The caller creates
+// and formats it (sparse ext4) when autoCreate is set and the path does not
+// exist, mirroring what virtle's runtime does at startup.
+type ffiVolume struct {
+	Path       string `json:"path"`
+	SizeMiB    int64  `json:"sizeMiB"`
+	FSType     string `json:"fsType"`
+	Label      string `json:"label,omitempty"`
+	AutoCreate bool   `json:"autoCreate"`
+}
+
 // ffiPlan is the executable launch plan for a manifest: everything the
 // caller needs to run the VM without virtle's runtime manager.
 type ffiPlan struct {
@@ -193,6 +204,7 @@ type ffiPlan struct {
 	QEMUBinary       string   `json:"qemuBinary"`
 	QEMUArgv         []string `json:"qemuArgv"`
 	Runs             []ffiRun `json:"runs"`
+	Volumes          []ffiVolume `json:"volumes"`
 	VirtioFSSockets  []string `json:"virtiofsSockets"`
 	CleanupFiles     []string `json:"cleanupFiles"`
 	PrepareDirs      []string `json:"prepareDirs"`
@@ -264,6 +276,16 @@ func virtle_plan(handle C.int64_t, cid C.int, incoming C.int, outJSON **C.char, 
 	for _, run := range runs {
 		ffiRuns = append(ffiRuns, ffiRun{Exec: run.Exec, Env: run.Env, Dir: run.Dir})
 	}
+	volumes := make([]ffiVolume, 0, len(p.Volumes))
+	for _, v := range p.Volumes {
+		volumes = append(volumes, ffiVolume{
+			Path:       v.ImagePath,
+			SizeMiB:    int64(v.Size),
+			FSType:     v.FSType,
+			Label:      v.Label,
+			AutoCreate: v.AutoCreate,
+		})
+	}
 	result := ffiPlan{
 		CID:              usedCID,
 		Incoming:         incoming != 0,
@@ -274,6 +296,7 @@ func virtle_plan(handle C.int64_t, cid C.int, incoming C.int, outJSON **C.char, 
 		QEMUBinary:       q.BinaryPath,
 		QEMUArgv:         argv,
 		Runs:             ffiRuns,
+		Volumes:          volumes,
 		VirtioFSSockets:  p.VirtioFSSocketPaths,
 		CleanupFiles:     p.RuntimeSocketCleanupFiles(),
 		PrepareDirs:      prepareDirs(m, p),

@@ -4,6 +4,17 @@
 type run = { exec : string array; env : string array; dir : string }
 (** A resolved host run process (e.g. a virtiofsd daemon). *)
 
+type volume = {
+  path : string;
+  size_mib : int64;
+  fs : string;
+  label : string;
+  auto_create : bool;
+}
+(** A disk image volume. When [auto_create] is set, [start] creates a sparse
+    ext4 image at [path] with [label] if it does not exist, like virtle does at
+    startup. *)
+
 type t = {
   cid : int;
   incoming : bool;
@@ -14,6 +25,7 @@ type t = {
   qemu_binary : string;
   qemu_argv : string array;
   runs : run list;
+  volumes : volume list;
   virtiofs_sockets : string list;
   cleanup_files : string list;
   prepare_dirs : string list;
@@ -30,13 +42,14 @@ type session
     tracked. Finish it with [wait]. *)
 
 val start : t -> (session, string) result
-(** [start plan] runs the plan up to VM launch: prepares directories, starts
-    host run processes, waits for the virtiofs sockets, starts QEMU, waits for
-    the QMP socket, and serves a minimal virtle control socket (virtle.sock
-    under the plan state directory) in a background thread. The control socket
-    reports status (CID, SSH readiness) and proxies guest-exec to the guest
-    agent, so the VM is visible to the rest of ash. Requires qemu-system-* on
-    PATH. *)
+(** [start plan] runs the plan up to VM launch: prepares directories, creates
+    missing auto-create volume images (sparse ext4 with the volume label),
+    starts host run processes, waits for the virtiofs sockets, starts QEMU,
+    waits for the QMP socket, and serves a minimal virtle control socket
+    (virtle.sock under the plan state directory) in a background thread. The
+    control socket reports status (CID, SSH readiness, stopped state) and
+    proxies guest-exec to the guest agent, so the VM is visible to the rest of
+    ash. Requires qemu-system-* on PATH. *)
 
 val wait : session -> (int, string) result
 (** [wait session] holds until QEMU exits, then tears down the remaining host

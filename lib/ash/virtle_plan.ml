@@ -17,6 +17,14 @@
 
 type run = { exec : string array; env : string array; dir : string }
 
+type volume = {
+  path : string;
+  size_mib : int64;
+  fs : string;
+  label : string;
+  auto_create : bool;
+}
+
 type t = {
   cid : int;
   incoming : bool;
@@ -27,6 +35,7 @@ type t = {
   qemu_binary : string;
   qemu_argv : string array;
   runs : run list;
+  volumes : volume list;
   virtiofs_sockets : string list;
   cleanup_files : string list;
   prepare_dirs : string list;
@@ -85,6 +94,41 @@ let of_json json =
               items
         | _ -> []
       in
+      let volumes =
+        match f "volumes" with
+        | Some (`List items) ->
+            List.filter_map
+              (function
+                | `Assoc fields -> (
+                    let str name =
+                      match List.assoc_opt name fields with
+                      | Some (`String s) -> Some s
+                      | _ -> None
+                    in
+                    let int64_field name =
+                      match List.assoc_opt name fields with
+                      | Some (`Int i) -> Some (Int64.of_int i)
+                      | Some (`Intlit i) -> Int64.of_string_opt i
+                      | _ -> None
+                    in
+                    match (str "path", int64_field "sizeMiB") with
+                    | Some path, Some size_mib ->
+                        Some
+                          {
+                            path;
+                            size_mib;
+                            fs = Option.value ~default:"" (str "fsType");
+                            label = Option.value ~default:"" (str "label");
+                            auto_create =
+                              (match List.assoc_opt "autoCreate" fields with
+                              | Some (`Bool b) -> b
+                              | _ -> false);
+                          }
+                    | _ -> None)
+                | _ -> None)
+              items
+        | _ -> []
+      in
       {
         cid = int_field "cid";
         incoming = (match f "incoming" with Some (`Bool b) -> b | _ -> false);
@@ -100,6 +144,7 @@ let of_json json =
           | Some args -> string_array args
           | None -> [||]);
         runs;
+        volumes;
         virtiofs_sockets =
           (match f "virtiofsSockets" with
           | Some s -> string_list s
@@ -560,10 +605,34 @@ let wait_sockets ~stage ~paths ~pids =
   in
   loop ()
 
-(* Start the plan: prepare directories, start host run processes, wait for
-   virtiofs sockets, start QEMU, wait for the QMP socket, and serve the
-   control socket in a background thread. Returns a session; the caller must
-   finish it with [wait]. *)
+(* Create disk image volumes that are missing, mirroring virtle's startup:
+   a sparse file formatted as ext4 with the volume's label. *)
+let prepare_volumes plan =
+  List.iter
+    (fun (volume : volume) ->
+      if not volume.auto_create then ()
+      else if Sys.file_exists volume.path then (
+        if Sys.is_directory volume.path then
+          failwith (Printf.sprintf "volume image %S is a directory" volume.path))
+      else (
+        Util.ensure_dir (Filename.dirname volume.path);
+        let bytes = Int64.mul volume.size_mib 1048576L in
+        let inodes = max 128 (Int64.to_int (Int64.div bytes 16384L)) in
+        Log.info "creating volume image %s (%d MiB, %s)" volume.path
+          (Int64.to_int volume.size_mib)
+          volume.fs;
+        let fs =
+          Ash_ext2fs.Ext2fs.create ~path:volume.path ~size:bytes ~inodes
+            ~label:volume.label ()
+        in
+        Ash_ext2fs.Ext2fs.close fs;
+        Log.info "created volume image %s" volume.path))
+    plan.volumes
+
+(* Start the plan: prepare directories, create missing volume images, start
+   host run processes, wait for virtiofs sockets, start QEMU, wait for the
+   QMP socket, and serve the control socket in a background thread. Returns a
+   session; the caller must finish it with [wait]. *)
 let start plan =
   (* Writes to peer-closed sockets (control clients, QGA) must raise EPIPE
      instead of delivering SIGPIPE, which can deadlock the process. *)
@@ -573,6 +642,7 @@ let start plan =
   let track pid = cleanup := pid :: !cleanup in
   try
     List.iter ensure_dir plan.prepare_dirs;
+    prepare_volumes plan;
     List.iter
       (fun f -> try Unix.unlink f with Unix.Unix_error _ -> ())
       plan.cleanup_files;

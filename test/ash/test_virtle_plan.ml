@@ -324,6 +324,52 @@ let test_qemu_exit_reports_stopped () =
           | Ok code -> assert_equal_int "qemu exit code" 0 code
           | Error message -> fail ("plan wait: " ^ message)))
 
+let test_volume_auto_create () =
+  (* A missing auto-create volume image must be created and formatted before
+     QEMU starts, like virtle's startup does (e.g. persist.img). *)
+  with_temp_dir (fun dir ->
+      let qmp = Filename.concat dir "qmp.sock" in
+      let image = Filename.concat dir "persist.img" in
+      let plan =
+        Virtle_plan.of_json
+          (Printf.sprintf
+             {|{
+  "cid": 1,
+  "incoming": false,
+  "stateDir": %S,
+  "qmpSocket": %S,
+  "guestAgentSocket": "",
+  "sshReadySocket": "",
+  "qemuBinary": "sh",
+  "qemuArgv": ["-c", "touch %s && exec sleep 1"],
+  "runs": [],
+  "volumes": [
+    { "path": %S, "sizeMiB": 256, "fsType": "ext4", "label": "persist", "autoCreate": true }
+  ],
+  "virtiofsSockets": [],
+  "cleanupFiles": [],
+  "prepareDirs": [%S]
+}|}
+             dir qmp (Filename.quote qmp) image dir)
+      in
+      match Virtle_plan.start plan with
+      | Error message -> fail ("plan start: " ^ message)
+      | Ok session -> (
+          if not (Sys.file_exists image) then
+            fail "auto-create volume image was not created";
+          let stat = Unix.stat image in
+          assert_bool "volume is a regular file" true
+            (match stat.st_kind with Unix.S_REG -> true | _ -> false);
+          assert_equal_int "volume size" 268435456 (Unix.stat image).st_size;
+          (* The image must be a formatted filesystem, not an empty file: the
+             volume handle must be closed so ext4 metadata is flushed. *)
+          let fs = Ash_ext2fs.Ext2fs.open_existing ~path:image in
+          Ash_ext2fs.Ext2fs.close fs;
+          match Virtle_plan.wait session with
+          | Ok 0 -> ()
+          | Ok code -> fail (Printf.sprintf "plan wait: exit %d" code)
+          | Error message -> fail ("plan wait: " ^ message)))
+
 let run name test =
   Printf.printf "test %s ... %!" name;
   test ();
@@ -340,4 +386,5 @@ let () =
   run "ssh ready token" test_ssh_ready_token;
   run "run process argv has no duplicate program" test_run_argv_no_duplicate;
   run "qemu early exit fails start" test_qemu_early_exit_fails_start;
-  run "qemu exit reports stopped" test_qemu_exit_reports_stopped
+  run "qemu exit reports stopped" test_qemu_exit_reports_stopped;
+  run "volume auto-create" test_volume_auto_create

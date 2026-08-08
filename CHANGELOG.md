@@ -37,6 +37,10 @@ and this project uses its existing Git tags for version history.
   reports `state: stopped` once it exits, so spawn/attach abort immediately
   with the VM's exit code instead of polling SSH readiness for two minutes
   after a failed launch (e.g. a missing drive image).
+- The FFI executor now creates missing auto-create volume images (sparse
+  ext4 with the volume label) before QEMU starts, matching virtle's startup
+  behavior, so `persist.img` (and any image mount with `image.create`)
+  no longer needs to pre-exist when launching through `ash launch-ffi`.
 - In-process virtle manifest validation via FFI: a cgo shim
   (`ffi/shim.go`, built as `ash-libvirtle`) exposes virtle's manifest
   decode/resolve and QEMU argv generation as a C shared library, bound from

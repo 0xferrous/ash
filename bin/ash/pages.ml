@@ -518,13 +518,15 @@ let launch_ffi =
         `P
           "Renders a virtle manifest's launch plan through the virtle Go \
            library (libvirtle.so) and executes it from ash: prepares runtime \
-           directories, starts host run processes and QEMU, waits for the QMP \
-           socket, and holds until the VM exits. While running it serves the \
-           virtle control socket (virtle.sock under the manifest state \
-           directory) with status and guest-exec proxied to the guest agent, \
-           so the VM is visible to ash ls/attach/stop/inspect. On SIGTERM (ash \
-           stop) it asks the guest to power down before exiting. Guest serial \
-           output goes to stderr. Requires qemu-system-* on PATH.";
+           directories, creates missing auto-create volume images (sparse ext4 \
+           with the volume label, like persist.img), starts host run processes \
+           and QEMU, waits for the QMP socket, and holds until the VM exits. \
+           While running it serves the virtle control socket (virtle.sock \
+           under the manifest state directory) with status and guest-exec \
+           proxied to the guest agent, so the VM is visible to ash \
+           ls/attach/stop/inspect. On SIGTERM (ash stop) it asks the guest to \
+           power down before exiting. Guest serial output goes to stderr. \
+           Requires qemu-system-* on PATH.";
         `S Manpage.s_examples;
         `Pre "ash launch-ffi --manifest virtle.toml";
         `Pre "ash launch-ffi --manifest virtle.toml --cid 7";

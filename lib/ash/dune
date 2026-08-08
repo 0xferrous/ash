@@ -2,6 +2,7 @@
  (name ash)
  (libraries
   agent_portal
+  ash.ext2fs
   image_import_core
   unix
   base64
