@@ -10,5 +10,6 @@
   notty-community
   notty-community.unix
   otoml
+  threads
   uutf
   yojson))

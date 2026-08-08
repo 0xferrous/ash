@@ -25,6 +25,9 @@ let start_user_unit ~name ~description ~program ~args =
   let systemd_args =
     [ "--user"; "--unit"; unit; "--description"; description; "--same-dir" ]
     @ (if default_options.collect then [ "--collect" ] else [])
+    (* SIGTERM only the unit's main process (the ash launch-ffi executor),
+       which then asks the guest to power down before exiting. *)
+    @ [ "--property=KillMode=process" ]
     @ (program :: args)
   in
   Util.run_foreground systemd_run systemd_args

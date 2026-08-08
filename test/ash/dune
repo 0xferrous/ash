@@ -8,4 +8,4 @@
 
 (test
  (name test_virtle_plan)
- (libraries ash unix yojson))
+ (libraries ash unix yojson threads))

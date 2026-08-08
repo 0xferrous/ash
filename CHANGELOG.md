@@ -9,6 +9,16 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- `ash spawn` now executes the virtle launch plan in-process through the
+  virtle library FFI instead of invoking the virtle CLI `launch` command:
+  ash renders the plan (virtle_plan), starts the resolved run processes and
+  QEMU itself, and serves a minimal virtle control socket (status and
+  guest-exec, proxied to the guest agent) for the VM's lifetime, so
+  ls/attach/stop/inspect keep working unchanged. Background spawns run an
+  `ash launch-ffi` user unit (with KillMode=process), foreground attached
+  spawns shut the guest down gracefully when the SSH session exits, and
+  guest setup (SSH readiness, registration, space mounts, hotmounts) now
+  goes through the control socket instead of `virtle rpc` CLI calls.
 - In-process virtle manifest validation via FFI: a cgo shim
   (`ffi/shim.go`, built as `ash-libvirtle`) exposes virtle's manifest
   decode/resolve and QEMU argv generation as a C shared library, bound from
