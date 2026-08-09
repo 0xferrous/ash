@@ -78,6 +78,16 @@ let global_nix_store_image_size config =
     Log.fatal "global.nix_store.image_size_mib must be greater than zero";
   size
 
+let global_persist_image_size config =
+  let size =
+    Otoml.find_opt config Otoml.get_integer
+      [ "global"; "persist"; "image_size_mib" ]
+    |> Option.value ~default:16384
+  in
+  if size <= 0 then
+    Log.fatal "global.persist.image_size_mib must be greater than zero";
+  size
+
 let portal config =
   if Otoml.path_exists config [ "portal" ] then
     Some (Agent_portal.Config.of_document config)

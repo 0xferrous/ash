@@ -133,7 +133,7 @@ let test_target : Nix.target =
 
 let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
     ?(mount_cwd = false) ?nix_store_strategy ?nix_store_image_size_mib
-    ?ro_store_socket ?(kitty = false) ?waypipe
+    ?persist_image_size_mib ?ro_store_socket ?(kitty = false) ?waypipe
     ?(config_path = "/tmp/config.toml") ~config ~flake ~name () =
   let nix_store_strategy =
     Option.value nix_store_strategy
@@ -142,6 +142,10 @@ let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
   let nix_store_image_size_mib =
     Option.value nix_store_image_size_mib
       ~default:(Ash_config.global_nix_store_image_size config)
+  in
+  let persist_image_size_mib =
+    Option.value persist_image_size_mib
+      ~default:(Ash_config.global_persist_image_size config)
   in
   Virtle.render_resolved_manifest
     {
@@ -157,6 +161,7 @@ let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
       mount_cwd;
       nix_store_strategy;
       nix_store_image_size_mib;
+      persist_image_size_mib;
       ro_store_socket;
       ssh = test_boot.ssh;
       systemd_ssh_proxy = test_boot.systemd_ssh_proxy;
@@ -1647,6 +1652,42 @@ let test_waypipe_wraps_openssh_and_kitty () =
     (In_channel.with_open_text kitty_waypipe_wrapper In_channel.input_all)
     kitty_wrapper
 
+let test_persist_image_size_in_manifest () =
+  let root = temp_dir "ash-test-persist-size" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config_path = Filename.concat root "config.toml" in
+  write_file config_path {|[global.persist]
+image_size_mib = 8192
+|};
+  let config = Ash_config.load config_path in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"unit-test" ()
+  in
+  let doc = parse_toml manifest in
+  let mounts = table_array doc "mounts" in
+  let persist_source = Filename.concat state "ash/unit-test/persist.img" in
+  let persist =
+    List.find_opt
+      (fun mount ->
+        List.assoc_opt "source" mount = Some (Otoml.TomlString persist_source))
+      mounts
+  in
+  match persist with
+  | None -> fail "missing persist image mount"
+  | Some mount -> (
+      match table_field mount "image" with
+      | Otoml.TomlTable image | Otoml.TomlInlineTable image -> (
+          match List.assoc_opt "size" image with
+          | Some (Otoml.TomlInteger size) ->
+              assert_int "persist image size from [global.persist]" 8192 size
+          | _ -> fail "persist image size is not an integer")
+      | _ -> fail "persist image mount has no image table")
+
 let test_spawn_reuses_saved_flake_when_omitted () =
   let root = temp_dir "ash-test-saved-flake" in
   Unix.putenv "XDG_STATE_HOME" root;
@@ -1665,6 +1706,7 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       mount_cwd = false;
       nix_store_strategy = Some Ash_config.Image;
       nix_store_image_size_mib = Some 32768;
+      persist_image_size_mib = Some 32768;
       ro_store_socket = None;
       ssh = None;
       systemd_ssh_proxy = None;
@@ -2361,6 +2403,8 @@ let () =
   run "nix evaluation metadata parser" test_nix_evaluation_metadata_parser;
   run "spawn reuses saved flake when omitted"
     test_spawn_reuses_saved_flake_when_omitted;
+  run "persist image size from global config"
+    test_persist_image_size_in_manifest;
   run "nix storage flake refs absolutize relative paths"
     test_nix_storage_flake_ref_absolutizes_relative_paths;
   run "nix override input arguments" test_nix_override_input_args;

@@ -106,8 +106,10 @@ let spawn =
            explicitly passing them replaces the saved selection.";
         `P
           "--nix-store-strategy and --nix-store-image-size-mib override the \
-           [global.nix_store] defaults during evaluation. Explicit overrides \
-           are saved in ash-state.toml and reused by later evaluated spawns.";
+           [global.nix_store] defaults during evaluation. \
+           --persist-image-size-mib overrides [global.persist].image_size_mib. \
+           Explicit overrides are saved in ash-state.toml and reused by later \
+           evaluated spawns.";
         `S "PORTAL";
         `P
           "When the config contains an enabled [portal] section with \
@@ -206,9 +208,11 @@ let spawn =
         `P
           "Set [global.nix_store].strategy to shared or image. shared is the \
            default. image_size_mib configures the image strategy's capacity in \
-           MiB and defaults to 16384. --nix-store-strategy and \
-           --nix-store-image-size-mib override these defaults for one VM and \
-           save the choice in its ash-state.toml.";
+           MiB and defaults to 16384. [global.persist].image_size_mib defaults \
+           to 16384 and sizes the persist image. --nix-store-strategy, \
+           --nix-store-image-size-mib, and --persist-image-size-mib override \
+           these defaults for one VM and save the choice in its \
+           ash-state.toml.";
         `P
           "The shared strategy stages the host /nix/store at \
            shares/ro/system/nix-store. Both store strategies expose exactly \

@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Added
+
+- `global.persist.image_size_mib` configuration and `--persist-image-size-mib` CLI override for sizing the persist image, matching the existing Nix store image size option.
+
 ## [v0.1.7] - 2026-08-07
 
 ### Added
