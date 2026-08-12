@@ -702,46 +702,29 @@ let add_registration_to_store ~nix ~nix_store ~out_link content =
     (fun () ->
       let source = Filename.concat temporary_dir "registration" in
       Util.write_file source content;
-      let registration_sha256 =
-        Util.command_output
-          (String.concat " "
-             [
-               Util.shell_quote nix;
-               "hash";
-               "file";
-               "--type";
-               "sha256";
-               "--sri";
-               Util.shell_quote source;
-             ])
-      in
-      let registration =
-        Util.command_output
-          (String.concat " "
-             [
-               Util.shell_quote nix_store;
-               "--add-fixed";
-               "sha256";
-               Util.shell_quote source;
-             ])
-      in
       Util.ensure_dir (Filename.dirname out_link);
       (try Unix.unlink out_link with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
-      ignore
-        (Util.command_output
-           (String.concat " "
-              [
-                Util.shell_quote nix_store;
-                "--realise";
-                Util.shell_quote registration;
-                "--add-root";
-                Util.shell_quote out_link;
-                "--indirect";
-              ]));
-      if not (Sys.file_exists registration) then
-        Log.fatal "native Nix registration was not added to the store: %s"
-          registration;
-      (registration, registration_sha256))
+      let script =
+        Printf.sprintf
+          "set -eu\n\
+           sha=$(%s hash file --type sha256 --sri %s)\n\
+           path=$(%s --add-fixed sha256 %s)\n\
+           %s --realise \"$path\" --add-root %s --indirect >/dev/null\n\
+           printf '%%s\\n%%s\\n' \"$sha\" \"$path\"\n"
+          (Util.shell_quote nix) (Util.shell_quote source)
+          (Util.shell_quote nix_store)
+          (Util.shell_quote source)
+          (Util.shell_quote nix_store)
+          (Util.shell_quote out_link)
+      in
+      let output = Util.command_output script in
+      match String.split_on_char '\n' output with
+      | [ registration_sha256; registration ] ->
+          if not (Sys.file_exists registration) then
+            Log.fatal "native Nix registration was not added to the store: %s"
+              registration;
+          (registration, registration_sha256)
+      | _ -> Log.fatal "unexpected registration command output: %s" output)
 
 let registration_of_infos ~nix ~nix_store ~infos ~out_link =
   let content = registration_content infos in
