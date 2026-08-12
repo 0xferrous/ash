@@ -556,14 +556,57 @@ let eval_json ?(override_inputs = []) ~label attr =
   run_nix ~label ~attr
     (subcommand_args "eval" override_inputs ("--json " ^ Util.shell_quote attr))
 
-let build_link_args = function
-  | None -> "--no-link"
-  | Some path -> "--out-link " ^ Util.shell_quote path
-
-let build_path ?out_link ?(override_inputs = []) ~label attr =
-  run_nix ~label ~attr
-    (subcommand_args "build" override_inputs
-       (build_link_args out_link ^ " --print-out-paths " ^ Util.shell_quote attr))
+(* Build several installables in one `nix build` and return their default
+   outputs in installable order, creating the given out-link symlinks. The
+   output is a single JSON array with one entry per installable. *)
+let build_paths ~override_inputs ~installables ~out_links ~label =
+  let installable_args =
+    String.concat " " (List.map Util.shell_quote installables)
+  in
+  let outputs_json =
+    run_nix ~label ~attr:installable_args
+      (subcommand_args "build" override_inputs
+         ("--no-link --print-out-paths --json " ^ installable_args))
+  in
+  let rec first_json_value acc = function
+    | [] ->
+        Log.fatal "no JSON value in nix build output for %s: %s" label
+          outputs_json
+    | line :: rest -> (
+        let candidate = if acc = "" then line else acc ^ "\n" ^ line in
+        match Yojson.Safe.from_string candidate with
+        | json -> json
+        | exception Yojson.Json_error _ -> first_json_value candidate rest)
+  in
+  let entries =
+    match first_json_value "" (String.split_on_char '\n' outputs_json) with
+    | `List entries -> entries
+    | _ ->
+        Log.fatal "unexpected nix build --json output for %s: %s" label
+          outputs_json
+  in
+  if List.length entries <> List.length installables then
+    Log.fatal "nix build returned %d outputs for %d installables (%s)"
+      (List.length entries) (List.length installables) label;
+  let output_of = function
+    | `Assoc fields -> (
+        match List.assoc_opt "outputs" fields with
+        | Some (`Assoc outputs) -> (
+            match List.assoc_opt "out" outputs with
+            | Some (`String path) -> path
+            | _ ->
+                Log.fatal "missing out output in nix build result for %s" label)
+        | _ -> Log.fatal "missing outputs in nix build result for %s" label)
+    | _ -> Log.fatal "unexpected nix build result entry for %s" label
+  in
+  let outputs = List.map output_of entries in
+  List.iter2
+    (fun path out_link ->
+      Util.ensure_dir (Filename.dirname out_link);
+      (try Unix.unlink out_link with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+      Unix.symlink path out_link)
+    outputs out_links;
+  outputs
 
 let split_flake_ref value =
   match String.index_opt value '#' with
@@ -1025,57 +1068,66 @@ let flake_attr_exists ~nix attr =
     true
   with Failure _ -> false
 
-let resolve_home ~nix ~nix_store ~override_inputs ~target ~toplevel_infos
-    ~gcroots_dir =
+let resolve_home ~nix ~nix_store ~activation ~toplevel_infos ~gcroots_dir =
   let root name = Filename.concat gcroots_dir name in
-  let base, _ = split_flake_ref target.attr in
-  let attr =
-    Printf.sprintf "%s#homeConfigurations.\"%s\".activationPackage" base
-      target.host_name
+  let home_infos = query_closures_info ~nix ~roots:[ activation ] in
+  let registration, registration_sha256, _, _ =
+    registration_of_infos ~nix ~nix_store ~infos:home_infos
+      ~out_link:(root "home-registration")
   in
-  if not (flake_attr_exists ~nix attr) then (
-    Log.info "flake has no %s; skipping home-manager staging" attr;
-    None)
-  else
-    let activation =
-      build_path ~out_link:(root "home") ~override_inputs
-        ~label:"home-manager activation package build output" attr
-    in
-    let home_infos = query_closures_info ~nix ~roots:[ activation ] in
-    let registration, registration_sha256, _, _ =
-      registration_of_infos ~nix ~nix_store ~infos:home_infos
-        ~out_link:(root "home-registration")
-    in
-    let combined_infos = unique_closure_infos (toplevel_infos @ home_infos) in
-    let combined_registration, combined_registration_sha256, _, _ =
-      registration_of_infos ~nix ~nix_store ~infos:combined_infos
-        ~out_link:(root "home-combined-registration")
-    in
-    let closure_paths =
-      closure_paths_of_infos home_infos @ [ containing_store_path registration ]
-    in
-    Some
-      {
-        activation;
-        registration;
-        registration_sha256;
-        combined_registration;
-        combined_registration_sha256;
-        closure_paths;
-      }
+  let combined_infos = unique_closure_infos (toplevel_infos @ home_infos) in
+  let combined_registration, combined_registration_sha256, _, _ =
+    registration_of_infos ~nix ~nix_store ~infos:combined_infos
+      ~out_link:(root "home-combined-registration")
+  in
+  let closure_paths =
+    closure_paths_of_infos home_infos @ [ containing_store_path registration ]
+  in
+  Some
+    {
+      activation;
+      registration;
+      registration_sha256;
+      combined_registration;
+      combined_registration_sha256;
+      closure_paths;
+    }
 
 let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
   let attr = target.attr in
   let root name = Filename.concat gcroots_dir name in
-  let kernel_dir =
-    build_path ~out_link:(root "kernel") ~override_inputs
-      ~label:"kernel build output"
-      (attr ^ ".config.system.build.kernel")
+  let nix = Filename.concat evaluation.nix_package "bin/nix" in
+  let nix_store = Filename.concat evaluation.nix_package "bin/nix-store" in
+  let base, _ = split_flake_ref attr in
+  let home_attr =
+    Printf.sprintf "%s#homeConfigurations.\"%s\".activationPackage" base
+      target.host_name
   in
-  let initrd_output =
-    build_path ~out_link:(root "initrd") ~override_inputs
-      ~label:"initial ramdisk build output"
-      (attr ^ ".config.system.build.initialRamdisk")
+  let has_home = flake_attr_exists ~nix home_attr in
+  let kernel_attr = attr ^ ".config.system.build.kernel" in
+  let initrd_attr = attr ^ ".config.system.build.initialRamdisk" in
+  let toplevel_attr = attr ^ ".config.system.build.toplevel" in
+  let installables =
+    [ kernel_attr; initrd_attr; toplevel_attr ]
+    @ if has_home then [ home_attr ] else []
+  in
+  let out_links =
+    [ root "kernel"; root "initrd"; root "toplevel" ]
+    @ if has_home then [ root "home" ] else []
+  in
+  let outputs =
+    build_paths ~override_inputs ~installables ~out_links
+      ~label:"NixOS boot and home-manager build outputs"
+  in
+  let kernel_dir, initrd_output, toplevel, home_activation =
+    match outputs with
+    | [ kernel_dir; initrd_output; toplevel ] when not has_home ->
+        (kernel_dir, initrd_output, toplevel, None)
+    | [ kernel_dir; initrd_output; toplevel; activation ] ->
+        (kernel_dir, initrd_output, toplevel, Some activation)
+    | _ ->
+        Log.fatal "unexpected nix build output count for %s"
+          (String.concat ", " installables)
   in
   let initrd =
     if Sys.is_directory initrd_output then
@@ -1088,13 +1140,6 @@ let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
        Initial ramdisk output: %s\n\
        Expected initrd file: %s"
       initrd_output initrd;
-  let toplevel =
-    build_path ~out_link:(root "toplevel") ~override_inputs
-      ~label:"NixOS toplevel build output"
-      (attr ^ ".config.system.build.toplevel")
-  in
-  let nix = Filename.concat evaluation.nix_package "bin/nix" in
-  let nix_store = Filename.concat evaluation.nix_package "bin/nix-store" in
   let toplevel_infos = query_closures_info ~nix ~roots:[ toplevel ] in
   let ( registration,
         registration_sha256,
@@ -1108,8 +1153,10 @@ let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
     @ [ containing_store_path registration ]
   in
   let home =
-    resolve_home ~nix ~nix_store ~override_inputs ~target ~toplevel_infos
-      ~gcroots_dir
+    match home_activation with
+    | Some activation ->
+        resolve_home ~nix ~nix_store ~activation ~toplevel_infos ~gcroots_dir
+    | None -> None
   in
   let guest_registration =
     match home with

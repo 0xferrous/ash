@@ -1949,10 +1949,9 @@ case "$1" in
     echo "/nix/store/home.drvPath"
     ;;
   build)
-    case "$*" in
-      *gcroots/initrd*) echo "$ASH_TEST_INITRD_DIR" ;;
-      *) echo "/nix/store/out" ;;
-    esac
+    printf \
+      '[{"outputs":{"out":"/nix/store/kernel"}},{"outputs":{"out":"%s"}},{"outputs":{"out":"/nix/store/toplevel"}},{"outputs":{"out":"/nix/store/home"}}]\n/nix/store/kernel\n%s\n/nix/store/toplevel\n/nix/store/home\n' \
+      "$ASH_TEST_INITRD_DIR" "$ASH_TEST_INITRD_DIR"
     ;;
   path-info)
     printf '{'
@@ -2009,7 +2008,7 @@ esac
     List.length (List.filter (String.starts_with ~prefix:cmd) lines)
   in
   assert_int "resolve_boot uses two closure queries" 2 (count "path-info");
-  assert_int "resolve_boot uses four builds" 4 (count "build");
+  assert_int "resolve_boot bundles the builds" 1 (count "build");
   assert_int "resolve_boot uses one probe eval" 1 (count "eval");
   assert_int "resolve_boot hashes three registrations" 3 (count "hash");
   assert_int "resolve_boot adds three registrations" 3 (count "--add-fixed")
