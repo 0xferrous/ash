@@ -122,6 +122,9 @@ let test_boot : Nix.boot =
     registration_sha256 = "sha256-test";
     closure_nar_size_bytes = 1234L;
     closure_path_count = 2;
+    toplevel_closure_paths = [];
+    home = None;
+    guest_registration = "/nix/store/closure-info/registration";
     nix = "/nix/store/nix/bin/nix";
     nix_store = "/nix/store/nix/bin/nix-store";
     ssh = "/nix/store/openssh/bin/ssh";
@@ -1875,11 +1878,141 @@ let test_native_closure_info () =
      JSON\n";
   Unix.chmod nix 0o755;
   Unix.putenv "ASH_TEST_NIX_PATH_INFO_ARGS" args_log;
-  let queried = Nix.query_closure_info ~nix ~toplevel:"/nix/store/system" in
+  let queried = Nix.query_closures_info ~nix ~roots:[ "/nix/store/system" ] in
   assert_int "native closure info uses one Nix process" 1
     (In_channel.with_open_text args_log In_channel.input_lines |> List.length);
   assert_equal "native closure query result" "/nix/store/a"
-    (List.hd queried : Nix.closure_path_info).path
+    (List.hd queried : Nix.closure_path_info).path;
+  Nix.query_closures_info ~nix ~roots:[ "/nix/store/system"; "/nix/store/home" ]
+  |> ignore;
+  let args = In_channel.with_open_text args_log In_channel.input_all in
+  assert_int "multiple roots use one Nix process" 2
+    (String.split_on_char '\n' args
+    |> List.filter (fun line -> line <> "")
+    |> List.length);
+  assert_string_contains "multiple roots forwarded to Nix" args
+    "/nix/store/home"
+
+let test_closure_info_helpers () =
+  let infos : Nix.closure_path_info list =
+    [
+      {
+        path = "/nix/store/a";
+        nar_hash = "sha256-a";
+        nar_size = 1L;
+        references = [];
+      };
+      {
+        path = "/nix/store/b";
+        nar_hash = "sha256-b";
+        nar_size = 2L;
+        references = [];
+      };
+      {
+        path = "/nix/store/a";
+        nar_hash = "sha256-a";
+        nar_size = 1L;
+        references = [];
+      };
+    ]
+  in
+  assert_equal "closure paths of infos preserves input"
+    "/nix/store/a,/nix/store/b,/nix/store/a"
+    (Nix.closure_paths_of_infos infos |> String.concat ",");
+  let unique = Nix.unique_closure_infos infos in
+  assert_int "unique closure infos dedup" 2 (List.length unique);
+  assert_equal "unique closure infos keep order" "/nix/store/a,/nix/store/b"
+    (Nix.closure_paths_of_infos unique |> String.concat ",")
+
+let test_resolve_boot_bundles_closure_queries () =
+  let root = temp_dir "ash-test-resolve-boot" in
+  let nix_package = Filename.concat root "nixpkg" in
+  let bin = Filename.concat nix_package "bin" in
+  let gcroots_dir = Filename.concat root "gcroots" in
+  mkdir_p bin;
+  mkdir_p gcroots_dir;
+  let nix_args = Filename.concat root "nix-args" in
+  let nix = Filename.concat bin "nix" in
+  let nix_store = Filename.concat bin "nix-store" in
+  let initrd_dir = Filename.concat root "initrd" in
+  mkdir_p initrd_dir;
+  write_file (Filename.concat initrd_dir "initrd") "initrd-data\n";
+  let existing_store_path =
+    Nix.containing_store_path (Unix.realpath (Util.get_exe None "sh"))
+  in
+  write_file nix
+    {sh|
+#!/bin/sh
+printf '%s\n' "$@" >> "$ASH_TEST_RESOLVE_BOOT_ARGS"
+case "$1" in
+  eval)
+    echo "/nix/store/home.drvPath"
+    ;;
+  build)
+    case "$*" in
+      *gcroots/initrd*) echo "$ASH_TEST_INITRD_DIR" ;;
+      *) echo "/nix/store/out" ;;
+    esac
+    ;;
+  path-info)
+    printf '{'
+    first=1
+    for p in "$@"; do
+      [ "$first" = 1 ] || printf ','
+      printf '"%s":{"narHash":"sha256-h","narSize":1,"references":[]}' "$p"
+      first=0
+    done
+    printf '}\n'
+    ;;
+  hash)
+    echo "sha256-hash"
+    ;;
+esac
+|sh};
+  write_file nix_store
+    {sh|
+#!/bin/sh
+printf '%s\n' "$@" >> "$ASH_TEST_RESOLVE_BOOT_ARGS"
+case "$1" in
+  --add-fixed)
+    echo "$ASH_TEST_EXISTING_STORE_PATH"
+    ;;
+esac
+|sh};
+  List.iter (fun path -> Unix.chmod path 0o755) [ nix; nix_store ];
+  Unix.putenv "PATH"
+    (nix_package ^ "/bin:" ^ Option.value (Sys.getenv_opt "PATH") ~default:"");
+  Unix.putenv "ASH_TEST_RESOLVE_BOOT_ARGS" nix_args;
+  Unix.putenv "ASH_TEST_INITRD_DIR" initrd_dir;
+  Unix.putenv "ASH_TEST_EXISTING_STORE_PATH" existing_store_path;
+  let evaluation : Nix.evaluation =
+    {
+      default_user = Some "agent";
+      user_names = [ "agent" ];
+      kernel_file = "bzImage";
+      nix_package;
+      openssh = Filename.concat nix_package "bin/openssh";
+      systemd = Filename.concat nix_package "bin/systemd";
+      kernel_params = [];
+    }
+  in
+  let target : Nix.target =
+    { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
+  in
+  let boot =
+    Nix.resolve_boot ~evaluation ~override_inputs:[] ~target ~gcroots_dir
+  in
+  assert_bool "home resolved" true (Option.is_some boot.home);
+  let args = In_channel.with_open_text nix_args In_channel.input_all in
+  let lines = String.split_on_char '\n' args |> List.filter (( <> ) "") in
+  let count cmd =
+    List.length (List.filter (String.starts_with ~prefix:cmd) lines)
+  in
+  assert_int "resolve_boot uses two closure queries" 2 (count "path-info");
+  assert_int "resolve_boot uses four builds" 4 (count "build");
+  assert_int "resolve_boot uses one probe eval" 1 (count "eval");
+  assert_int "resolve_boot hashes three registrations" 3 (count "hash");
+  assert_int "resolve_boot adds three registrations" 3 (count "--add-fixed")
 
 let test_image_origin_metadata () =
   let root = temp_dir "ash-test-image-origin" in
@@ -2410,6 +2543,9 @@ let () =
   run "nix override input arguments" test_nix_override_input_args;
   run "nix local store URI" test_nix_local_store_uri;
   run "native closure info" test_native_closure_info;
+  run "closure info helpers" test_closure_info_helpers;
+  run "resolve boot bundles closure queries"
+    test_resolve_boot_bundles_closure_queries;
   run "image origin metadata" test_image_origin_metadata;
   run "prepare lower store" test_prepare_lower_store;
   run "prepare image store" test_prepare_image_store;

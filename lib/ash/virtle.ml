@@ -3197,14 +3197,14 @@ let render_resolved_manifest inputs =
   let ssh_wrapper =
     write_space_mount_ssh_wrapper ~name:inputs.name ~user ~virtle:inputs.virtle
       ~manifest_path:(manifest_path ~name:inputs.name)
-      ~registration_path:boot.registration ~load_registration:true
+      ~registration_path:boot.guest_registration ~load_registration:true
       ~ssh_exec:real_ssh_exec ssh_mount_actions
   in
   let kitty_wrapper =
     write_space_mount_ssh_wrapper ~kitty:true ~name:inputs.name ~user
       ~virtle:inputs.virtle
       ~manifest_path:(manifest_path ~name:inputs.name)
-      ~registration_path:boot.registration ~load_registration:true
+      ~registration_path:boot.guest_registration ~load_registration:true
       ~ssh_exec:kitty_ssh_exec ssh_mount_actions
   in
   let selected_ssh_wrapper = if kitty then kitty_wrapper else ssh_wrapper in
@@ -3560,8 +3560,8 @@ let render_manifest (inputs : manifest_inputs) =
           "guest-store-state"
       in
       Nix.prepare_lower_store ~nix_store:boot.nix_store
-        ~registration:boot.registration ~state:lower_store_state
-  | Ash_config.Image ->
+        ~registration:boot.guest_registration ~state:lower_store_state
+  | Ash_config.Image -> (
       let origin =
         Nix.resolve_image_origin ~nix:boot.nix
           ~override_inputs:inputs.override_inputs ~target
@@ -3571,6 +3571,7 @@ let render_manifest (inputs : manifest_inputs) =
         ~registration_sha256:boot.registration_sha256
         ~closure_nar_size_bytes:boot.closure_nar_size_bytes
         ~closure_path_count:boot.closure_path_count ~origin
+        ~closure_paths:boot.toplevel_closure_paths
         ~cache_image:(nix_store_image_cache_path ~toplevel:boot.toplevel)
         ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
         ~size_mib:store_image_size_mib
@@ -3578,7 +3579,13 @@ let render_manifest (inputs : manifest_inputs) =
           (not
              (socket_accepts_connection
                 (control_socket_path (virtle_state_dir inputs.name))))
-        ());
+        ();
+      match boot.home with
+      | Some home ->
+          Nix.stage_home_closure ~nix_executable:boot.nix ~home
+            ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
+            ()
+      | None -> ()));
   let ssh = Option.value inputs.ssh ~default:boot.ssh in
   let kitty = inputs.kitty || Ash_config.global_kitty config in
   if kitty then ignore (find_kitten ());
@@ -3612,7 +3619,7 @@ let render_manifest (inputs : manifest_inputs) =
         virtle = inputs.virtle;
       }
   in
-  (boot.registration, rendered)
+  (boot.guest_registration, rendered)
 
 let spaces_log spaces =
   match spaces with [] -> "(none)" | spaces -> String.concat "," spaces

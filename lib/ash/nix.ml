@@ -1,5 +1,14 @@
 type target = { attr : string; host_name : string }
 
+type home = {
+  activation : string;
+  registration : string;
+  registration_sha256 : string;
+  combined_registration : string;
+  combined_registration_sha256 : string;
+  closure_paths : string list;
+}
+
 type boot = {
   kernel : string;
   initrd : string;
@@ -9,6 +18,9 @@ type boot = {
   registration_sha256 : string;
   closure_nar_size_bytes : int64;
   closure_path_count : int;
+  toplevel_closure_paths : string list;
+  home : home option;
+  guest_registration : string;
   nix : string;
   nix_store : string;
   ssh : string;
@@ -165,20 +177,52 @@ let rec containing_store_path path =
   then invalid_arg (Printf.sprintf "path is not inside /nix/store: %s" path)
   else containing_store_path parent
 
-let scan_image_store ?nix_executable ?store_paths ~toplevel ~registration () =
-  let store_paths =
-    match store_paths with
+let scan_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
+    ~registration () =
+  let closure_paths =
+    match closure_paths with
     | Some paths -> paths
     | None ->
-        resolve_store_paths ?nix_executable
-          [ toplevel; containing_store_path registration ]
+        let roots =
+          match store_paths with
+          | Some paths -> paths
+          | None -> [ toplevel; containing_store_path registration ]
+        in
+        resolve_store_paths ?nix_executable roots
   in
   let metrics = Image_import_core.Metrics.create () in
   let entries =
     Image_import_core.Scan.scan_closure ~reporter:image_import_reporter ~jobs:1
-      ~closure_paths:store_paths ~target_root:"/store" ~total_bytes:None metrics
+      ~closure_paths ~target_root:"/store" ~total_bytes:None metrics
   in
   (entries, metrics)
+
+(* Stage the home-manager activation closure into an existing image-backed Nix
+   store so the guest's home-manager switch finds it pre-built. The staging is
+   gated on a sidecar recording the applied home registration, so home changes
+   only append the missing paths and never invalidate the NixOS toplevel cache. *)
+let stage_home_closure ?nix_executable ~(home : home) ~image () =
+  let sidecar = image ^ ".home-registration" in
+  let current =
+    if Sys.file_exists sidecar then
+      try String.trim (In_channel.with_open_text sidecar In_channel.input_all)
+      with Sys_error _ -> ""
+    else ""
+  in
+  if current = home.registration_sha256 then
+    Log.debug "home-manager closure already staged in %s" image
+  else
+    let entries, metrics =
+      scan_image_store ?nix_executable ~closure_paths:home.closure_paths
+        ~toplevel:"" ~registration:"" ()
+    in
+    Image_import_core.Import.append_image ~reporter:image_import_reporter
+      ~path:image ~metrics entries;
+    Image_import_core.Metrics.log ~prefix:"ash image store home"
+      ~reporter:image_import_reporter metrics;
+    Util.write_file sidecar (home.registration_sha256 ^ "\n");
+    Log.info "staged home-manager closure (%s) in %s" home.registration_sha256
+      image
 
 let write_image_store ~image ~bytes ~entries ~metrics ~metadata =
   let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
@@ -197,10 +241,11 @@ let write_image_store ~image ~bytes ~entries ~metrics ~metadata =
     (try Unix.unlink temporary_image with Unix.Unix_error _ -> ());
     raise exn
 
-let create_image_store ?nix_executable ?store_paths ~toplevel ~registration
-    ~image ~bytes ~metadata () =
+let create_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
+    ~registration ~image ~bytes ~metadata () =
   let entries, metrics =
-    scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
+    scan_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
+      ~registration ()
   in
   write_image_store ~image ~bytes ~entries ~metrics ~metadata
 
@@ -223,9 +268,9 @@ let current_cached_image ~cache_key ~toplevel ~registration ~image =
     | Image_metadata.Missing ->
         None
 
-let prepare_cached_image ?nix_executable ?store_paths ?registration_sha256
-    ?closure_nar_size_bytes ?closure_path_count ?origin ~cache_key ~toplevel
-    ~registration ~image () =
+let prepare_cached_image ?nix_executable ?store_paths ?closure_paths
+    ?registration_sha256 ?closure_nar_size_bytes ?closure_path_count ?origin
+    ~cache_key ~toplevel ~registration ~image () =
   match current_cached_image ~cache_key ~toplevel ~registration ~image with
   | Some prepared ->
       let size_mib = image_store_size_mib prepared in
@@ -242,7 +287,8 @@ let prepare_cached_image ?nix_executable ?store_paths ?registration_sha256
       (try Unix.unlink image with Unix.Unix_error _ -> ());
       Image_metadata.remove image;
       let entries, metrics =
-        scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
+        scan_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
+          ~registration ()
       in
       let bytes = Image_import_core.Import.estimate_image_size entries in
       let size_mib = mib_of_bytes bytes in
@@ -323,10 +369,11 @@ let grow_existing_image ?resize2fs ~image ~from_size_mib ~size_mib () =
     if code <> 0 then
       Log.fatal "failed to grow Nix store image %s with resize2fs" image)
 
-let append_image_store ?nix_executable ?store_paths ~toplevel ~registration
-    ~image ~metadata () =
+let append_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
+    ~registration ~image ~metadata () =
   let entries, metrics =
-    scan_image_store ?nix_executable ?store_paths ~toplevel ~registration ()
+    scan_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
+      ~registration ()
   in
   Image_import_core.Import.append_image ~reporter:image_import_reporter
     ~path:image ~metrics entries;
@@ -334,10 +381,10 @@ let append_image_store ?nix_executable ?store_paths ~toplevel ~registration
     ~reporter:image_import_reporter metrics;
   Image_metadata.write image metadata
 
-let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
-    ?copy_executable ?cache_image ?registration_sha256 ?closure_nar_size_bytes
-    ?closure_path_count ?origin ?(resize_allowed = true) ~toplevel ~registration
-    ~image ~size_mib () =
+let prepare_image_store ?nix_executable ?store_paths ?closure_paths ?e2fsck
+    ?resize2fs ?copy_executable ?cache_image ?registration_sha256
+    ?closure_nar_size_bytes ?closure_path_count ?origin ?(resize_allowed = true)
+    ~toplevel ~registration ~image ~size_mib () =
   let bytes = bytes_of_mib size_mib in
   if Sys.file_exists image then
     match Image_metadata.read image with
@@ -428,8 +475,8 @@ let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
             ~toplevel ~registration ~size_mib
         in
         try
-          append_image_store ?nix_executable ?store_paths ~toplevel
-            ~registration ~image ~metadata ();
+          append_image_store ?nix_executable ?store_paths ?closure_paths
+            ~toplevel ~registration ~image ~metadata ();
           Log.info
             "updated image-backed Nix store from %s to %s while retaining \
              existing store paths"
@@ -455,13 +502,13 @@ let prepare_image_store ?nix_executable ?store_paths ?e2fsck ?resize2fs
               ?closure_path_count ?origin ~configured_size_mib:size_mib
               ~kind:Image_metadata.Vm ~toplevel ~registration ~size_mib ()
           in
-          create_image_store ?nix_executable ?store_paths ~toplevel
-            ~registration ~image ~bytes ~metadata ();
+          create_image_store ?nix_executable ?store_paths ?closure_paths
+            ~toplevel ~registration ~image ~bytes ~metadata ();
           Log.info "created %d MiB image-backed Nix store at %s" size_mib image
       | Some cache_image ->
           let cache_key = image_store_cache_key ~toplevel in
           let cache_size_mib =
-            prepare_cached_image ?nix_executable ?store_paths
+            prepare_cached_image ?nix_executable ?store_paths ?closure_paths
               ?registration_sha256 ?closure_nar_size_bytes ?closure_path_count
               ?origin ~cache_key ~toplevel ~registration ~image:cache_image ()
           in
@@ -625,12 +672,13 @@ let registration_content infos =
     infos;
   Buffer.contents buffer
 
-let query_closure_info ~nix ~toplevel =
+let query_closures_info ~nix ~roots =
   let command json_format =
     String.concat " "
       ([ Util.shell_quote nix; "path-info" ]
       @ json_format
-      @ [ "--json"; "--recursive"; Util.shell_quote toplevel ])
+      @ [ "--json"; "--recursive" ]
+      @ List.map Util.shell_quote roots)
   in
   let command =
     Printf.sprintf "%s 2>/dev/null || %s"
@@ -641,9 +689,9 @@ let query_closure_info ~nix ~toplevel =
   with Failure message | Yojson.Json_error message ->
     Log.fatal
       "failed to query native Nix closure information\n\n\
-       Toplevel: %s\n\
+       Closure roots: %s\n\
        Error: %s"
-      toplevel message
+      (String.concat ", " roots) message
 
 let add_registration_to_store ~nix ~nix_store ~out_link content =
   let temporary_dir = Filename.temp_file "ash-registration" "" in
@@ -695,8 +743,7 @@ let add_registration_to_store ~nix ~nix_store ~out_link content =
           registration;
       (registration, registration_sha256))
 
-let resolve_registration ~nix ~nix_store ~toplevel ~out_link =
-  let infos = query_closure_info ~nix ~toplevel in
+let registration_of_infos ~nix ~nix_store ~infos ~out_link =
   let content = registration_content infos in
   let registration, registration_sha256 =
     add_registration_to_store ~nix ~nix_store ~out_link content
@@ -705,6 +752,23 @@ let resolve_registration ~nix ~nix_store ~toplevel ~out_link =
     List.fold_left (fun total info -> Int64.add total info.nar_size) 0L infos
   in
   (registration, registration_sha256, closure_nar_size_bytes, List.length infos)
+
+let resolve_registration ~nix ~nix_store ~roots ~out_link =
+  let infos = query_closures_info ~nix ~roots in
+  registration_of_infos ~nix ~nix_store ~infos ~out_link
+
+let closure_paths_of_infos infos =
+  List.map (fun (info : closure_path_info) -> info.path) infos
+
+let unique_closure_infos infos =
+  let seen = Hashtbl.create (List.length infos) in
+  List.filter
+    (fun (info : closure_path_info) ->
+      if Hashtbl.mem seen info.path then false
+      else (
+        Hashtbl.add seen info.path ();
+        true))
+    infos
 
 let normalize_flake_path path = Util.expand_home path
 
@@ -963,6 +1027,60 @@ let resolve_ssh_user ~evaluation =
 
 let validate_user ~user ~evaluation = validate_evaluation_user ~user evaluation
 
+let flake_attr_exists ~nix attr =
+  try
+    ignore
+      (Util.command_output
+         (String.concat " "
+            [
+              Util.shell_quote nix;
+              "eval";
+              "--raw";
+              "--no-write-lock-file";
+              Util.shell_quote (attr ^ ".drvPath");
+            ]));
+    true
+  with Failure _ -> false
+
+let resolve_home ~nix ~nix_store ~override_inputs ~target ~toplevel_infos
+    ~gcroots_dir =
+  let root name = Filename.concat gcroots_dir name in
+  let base, _ = split_flake_ref target.attr in
+  let attr =
+    Printf.sprintf "%s#homeConfigurations.\"%s\".activationPackage" base
+      target.host_name
+  in
+  if not (flake_attr_exists ~nix attr) then (
+    Log.info "flake has no %s; skipping home-manager staging" attr;
+    None)
+  else
+    let activation =
+      build_path ~out_link:(root "home") ~override_inputs
+        ~label:"home-manager activation package build output" attr
+    in
+    let home_infos = query_closures_info ~nix ~roots:[ activation ] in
+    let registration, registration_sha256, _, _ =
+      registration_of_infos ~nix ~nix_store ~infos:home_infos
+        ~out_link:(root "home-registration")
+    in
+    let combined_infos = unique_closure_infos (toplevel_infos @ home_infos) in
+    let combined_registration, combined_registration_sha256, _, _ =
+      registration_of_infos ~nix ~nix_store ~infos:combined_infos
+        ~out_link:(root "home-combined-registration")
+    in
+    let closure_paths =
+      closure_paths_of_infos home_infos @ [ containing_store_path registration ]
+    in
+    Some
+      {
+        activation;
+        registration;
+        registration_sha256;
+        combined_registration;
+        combined_registration_sha256;
+        closure_paths;
+      }
+
 let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
   let attr = target.attr in
   let root name = Filename.concat gcroots_dir name in
@@ -994,12 +1112,26 @@ let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
   in
   let nix = Filename.concat evaluation.nix_package "bin/nix" in
   let nix_store = Filename.concat evaluation.nix_package "bin/nix-store" in
+  let toplevel_infos = query_closures_info ~nix ~roots:[ toplevel ] in
   let ( registration,
         registration_sha256,
         closure_nar_size_bytes,
         closure_path_count ) =
-    resolve_registration ~nix ~nix_store ~toplevel
+    registration_of_infos ~nix ~nix_store ~infos:toplevel_infos
       ~out_link:(root "registration")
+  in
+  let toplevel_closure_paths =
+    closure_paths_of_infos toplevel_infos
+    @ [ containing_store_path registration ]
+  in
+  let home =
+    resolve_home ~nix ~nix_store ~override_inputs ~target ~toplevel_infos
+      ~gcroots_dir
+  in
+  let guest_registration =
+    match home with
+    | Some home -> home.combined_registration
+    | None -> registration
   in
   let init_param = "init=" ^ Filename.concat toplevel "init" in
   let has_init_param =
@@ -1020,6 +1152,9 @@ let resolve_boot ~evaluation ~override_inputs ~target ~gcroots_dir =
     registration_sha256;
     closure_nar_size_bytes;
     closure_path_count;
+    toplevel_closure_paths;
+    home;
+    guest_registration;
     nix;
     nix_store;
     ssh = Filename.concat evaluation.openssh "bin/ssh";
