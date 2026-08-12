@@ -568,6 +568,13 @@ let build_paths ~override_inputs ~installables ~out_links ~label =
       (subcommand_args "build" override_inputs
          ("--no-link --print-out-paths --json " ^ installable_args))
   in
+  (* nix 2.34 emits the per-installable JSON array on its own line first,
+     followed by the plain `--print-out-paths` lines; older/newer versions
+     may pretty-print the array across lines. Extract the first JSON value
+     by accumulating lines until one parses, and take the remaining plain
+     path lines as a fallback signal only. This layout is verified against
+     nix 2.34 with the real agent configuration; re-verify if the bundled
+     build ever fails to parse. *)
   let rec first_json_value acc = function
     | [] ->
         Log.fatal "no JSON value in nix build output for %s: %s" label
