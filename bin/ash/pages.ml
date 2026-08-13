@@ -261,33 +261,35 @@ let spawn =
            nix-store.img, labeled nix-store. The manifest enables KVM, so the \
            host is expected to provide /dev/kvm.";
         `P
-          "The host-side VM state uses this directory layout. Conditional \
-           entries appear only when their strategy or mount feature is used:";
+          "Host state uses this directory layout. Conditional entries appear \
+           only when their strategy or mount feature is used:";
         `Pre
-          "<state-dir>/\n\
-           |-- ash-state.toml\n\
-           |-- virtle.toml\n\
-           |-- shares/\n\
-           |   |-- ro/                         -> shares-ro\n\
-           |   |   |-- system/\n\
-           |   |   |   |-- nix-store/         # shared strategy\n\
-           |   |   |   `-- guest-store-state/ # shared strategy\n\
-           |   |   `-- mounts/\n\
-           |   |       |-- spaces/<tag>/\n\
-           |   |       `-- hotmounts/<id>/\n\
-           |   `-- rw/                         -> shares-rw\n\
-           |       |-- system/\n\
-           |       |   |-- guest-store-state/  # shared strategy\n\
-           |       |   |-- guest-store-upper/  # shared strategy\n\
-           |       |   `-- guest-store-work/   # shared strategy\n\
-           |       `-- mounts/\n\
-           |           |-- workspace/\n\
-           |           |-- cwd/                # with --mount-cwd\n\
-           |           |-- spaces/<tag>/\n\
-           |           `-- hotmounts/<id>/\n\
-           |-- persist.img\n\
-           |-- nix-store.img                   # image strategy\n\
-           `-- virtle_state/                   # sockets and runtime files";
+          "<state-base>/                        e.g. ~/.local/state/ash\n\
+           |-- <name>/                          per-VM state\n\
+           |   |-- ash-state.toml\n\
+           |   |-- virtle.toml\n\
+           |   |-- persist.img\n\
+           |   |-- nix-store.img                # image strategy\n\
+           |   `-- virtle_state/                # sockets and runtime files\n\
+           `-- mounts/\n\
+           `-- <name>/shares/               host mount staging\n\
+           |-- ro/                      -> shares-ro\n\
+           |   |-- system/\n\
+           |   |   |-- nix-store/      # shared strategy\n\
+           |   |   `-- guest-store-state/ # shared strategy\n\
+           |   `-- mounts/\n\
+           |       |-- spaces/<tag>/\n\
+           |       `-- hotmounts/<id>/\n\
+           `-- rw/                      -> shares-rw\n\
+           |-- system/\n\
+           |   |-- guest-store-state/  # shared strategy\n\
+           |   |-- guest-store-upper/  # shared strategy\n\
+           |   `-- guest-store-work/   # shared strategy\n\
+           `-- mounts/\n\
+           |-- workspace/\n\
+           |-- cwd/             # with --mount-cwd\n\
+           |-- spaces/<tag>/\n\
+           `-- hotmounts/<id>/";
         `P
           "The guest mounts shares-ro and shares-rw at /run/ash/shares/ro and \
            /run/ash/shares/rw, then Ash bind-mounts individual staged children \
@@ -475,9 +477,8 @@ let ls =
            failed.";
         `P
           "DISK is host storage currently used. VIRTUAL is apparent size, \
-           including sparse files such as persist.img. Both exclude the \
-           consolidated shares tree so nested host staging mounts are not \
-           traversed.";
+           including sparse files such as persist.img. Both exclude the host \
+           mount staging tree so nested staging mounts are not traversed.";
         `P
           "With --cache, output shows each cache key, host disk usage, sparse \
            virtual size, modification time, logical VM reference count, \
@@ -848,10 +849,11 @@ let rm =
            for deletion. Cached bases are safe to remove while VMs are running \
            because each VM uses its own writable clone.";
         `P
-          "Deleting a VM removes its state directory, including generated \
-           manifests, SSH keys, hotmount staging data, workspace data, and \
-           persistent images. Deleting a cache entry removes its base image \
-           and closure marker; a later spawn rebuilds the base if needed.";
+          "Deleting a VM removes its state directory (generated manifests, SSH \
+           keys, persistent images) and its host mount staging tree (workspace \
+           data, hotmount staging). Deleting a cache entry removes its base \
+           image and closure marker; a later spawn rebuilds the base if \
+           needed.";
         `S Manpage.s_examples;
         `Pre "ash rm";
       ];

@@ -23,6 +23,10 @@ and this project uses its existing Git tags for version history.
 
 - Ephemeral VM state cleanup now unmounts every mount under the state directory before removing it, and refuses to delete a tree that still contains a busy mount. Previously `rm -rf` could recurse through a live bindfs staging mount (for example a space shared from a host source directory) and delete the mounted source's contents when a launch failed before the VM could unmount it.
 
+### Changed
+
+- Host mount staging (spaces, cwd, hotmounts, shared Nix store, guest store, and workspace data) moved out of the per-VM state directory into a dedicated `mounts/<name>/` tree under the ash state base, so deleting VM state can never traverse a live bindfs mount. Deleting a VM or cleaning up an ephemeral launch now removes both the state directory and its mount staging tree.
+
 ## [v0.1.7] - 2026-08-07
 
 ### Added

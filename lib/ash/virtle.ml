@@ -169,6 +169,14 @@ let state_base_dir () =
 
 let state_dir name = Filename.concat (state_base_dir ()) (Util.name_slug name)
 
+(* Host mount staging lives in a dedicated tree outside the per-VM state dir,
+   so bulk deletion of VM state (ephemeral cleanup, `ash rm`) can never
+   traverse a live bindfs mount of a user directory. *)
+let mounts_dir name =
+  Filename.concat
+    (Filename.concat (state_base_dir ()) "mounts")
+    (Util.name_slug name)
+
 let nix_store_image_cache_dir () =
   Filename.concat
     (Filename.concat (Util.cache_home_dir ()) (Util.application_name ()))
@@ -323,7 +331,7 @@ let image_mount ~source ~size ~label =
           ] );
     ]
 
-let shares_dir ~name = Filename.concat (state_dir name) "shares"
+let shares_dir ~name = Filename.concat (mounts_dir name) "shares"
 let shares_ro_dir ~name = Filename.concat (shares_dir ~name) "ro"
 let shares_rw_dir ~name = Filename.concat (shares_dir ~name) "rw"
 let shares_guest_dir = "/run/ash/shares"
@@ -533,7 +541,8 @@ let ensure_ssh_identity ~name =
   let identity = ssh_identity_path ~name in
   let public_key = identity ^ ".pub" in
   if Sys.file_exists identity && Sys.file_exists public_key then identity
-  else
+  else (
+    Util.ensure_dir (Filename.dirname identity);
     let ssh_keygen =
       match Util.find_in_path "ssh-keygen" with
       | Some path -> path
@@ -554,7 +563,7 @@ let ensure_ssh_identity ~name =
     in
     let code = Util.run_foreground ssh_keygen args in
     if code <> 0 then Log.fatal "ssh-keygen failed with exit code %d" code;
-    identity
+    identity)
 
 let write_space_mount_ssh_wrapper ?(kitty = false) ~name ~user ~virtle
     ~manifest_path ~registration_path ~load_registration ~ssh_exec mount_actions
@@ -1260,6 +1269,7 @@ let rm_vms () =
         |> List.iter (function
           | Vm_state vm ->
               Log.info "deleting VM state %s (%s)" vm.name vm.path;
+              Util.remove_tree ~force:true (mounts_dir vm.name);
               Util.remove_tree ~force:true vm.path
           | Cached_image image -> remove_cached_image image)
 
@@ -3777,6 +3787,7 @@ let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
   Option.iter
     (fun dir ->
       Log.info "removing ephemeral VM state %s" dir;
+      Util.remove_tree ~force:true (mounts_dir inputs.name);
       Util.remove_tree ~force:true dir)
     cleanup_dir;
   exit code

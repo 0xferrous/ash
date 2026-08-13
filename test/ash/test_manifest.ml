@@ -256,11 +256,11 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   let shares_ro = find_table_by_string mounts "tag" "shares-ro" in
   let shares_rw = find_table_by_string mounts "tag" "shares-rw" in
   assert_equal "shares-ro source"
-    (Filename.concat state "ash/unit-test/shares/ro")
+    (Filename.concat state "ash/mounts/unit-test/shares/ro")
     (string_field shares_ro "source");
   assert_bool "shares-ro is read-only" true (bool_field shares_ro "read_only");
   assert_equal "shares-rw source"
-    (Filename.concat state "ash/unit-test/shares/rw")
+    (Filename.concat state "ash/mounts/unit-test/shares/rw")
     (string_field shares_rw "source");
   assert_bool "shares-rw is writable" false (bool_field shares_rw "read_only");
   assert_bool "space source is not a virtiofs entry" false
@@ -357,13 +357,13 @@ let test_no_spaces_selected_by_default () =
   assert_int "fixed mount count without spaces" 3 (List.length mounts);
   let shares_ro = find_table_by_string mounts "tag" "shares-ro" in
   assert_equal "shares ro source"
-    (Filename.concat state "ash/no-spaces/shares/ro")
+    (Filename.concat state "ash/mounts/no-spaces/shares/ro")
     (string_field shares_ro "source");
   assert_bool "shares ro mount read-only" true
     (bool_field shares_ro "read_only");
   let shares_rw = find_table_by_string mounts "tag" "shares-rw" in
   assert_equal "shares rw source"
-    (Filename.concat state "ash/no-spaces/shares/rw")
+    (Filename.concat state "ash/mounts/no-spaces/shares/rw")
     (string_field shares_rw "source");
   assert_bool "shares rw mount writable" false
     (bool_field shares_rw "read_only");
@@ -378,7 +378,8 @@ let test_no_spaces_selected_by_default () =
   assert_bool "shares rw uses virtle daemon defaults" true
     (uses_virtle_defaults shares_rw);
   let guest_store_upper =
-    Filename.concat state "ash/no-spaces/shares/rw/system/guest-store-upper"
+    Filename.concat state
+      "ash/mounts/no-spaces/shares/rw/system/guest-store-upper"
   in
   if not (Sys.file_exists guest_store_upper) then
     fail "guest store upper dir should exist";
@@ -388,7 +389,7 @@ let test_no_spaces_selected_by_default () =
     not
       (Sys.file_exists
          (Filename.concat state
-            "ash/no-spaces/shares/rw/system/guest-store-work"))
+            "ash/mounts/no-spaces/shares/rw/system/guest-store-work"))
   then fail "guest store work dir should exist";
   assert_equal "default ssh user" "agent" (find_string doc [ "ssh"; "user" ])
 
@@ -461,7 +462,7 @@ image_size_mib = 12288
   assert_bool "image store target" true
     (Virtle.configured_mount_target store = Some "/nix");
   assert_bool "image store prepares consolidated host shares" true
-    (Sys.file_exists (Filename.concat state "ash/image-store/shares"));
+    (Sys.file_exists (Filename.concat state "ash/mounts/image-store/shares"));
   let wrapper =
     In_channel.with_open_text
       (Filename.concat state "ash/image-store/ssh-with-space-mounts")
