@@ -3468,14 +3468,19 @@ let resolve_spawn_override_inputs ~name override_inputs =
     saved.override_inputs)
   else []
 
-let resolve_spawn_spaces ~name spaces =
-  if spaces <> [] then spaces
-  else if has_saved_ash_config ~name then (
-    let saved = load_ash_config ~name in
-    Log.debug "using saved spaces for existing VM %s: %s" name
-      (String.concat "," saved.spaces);
-    saved.spaces)
-  else []
+let resolve_spawn_spaces ~name ~default spaces =
+  let selected =
+    if spaces <> [] then spaces
+    else if has_saved_ash_config ~name then (
+      let saved = load_ash_config ~name in
+      Log.debug "using saved spaces for existing VM %s: %s" name
+        (String.concat "," saved.spaces);
+      saved.spaces)
+    else []
+  in
+  (* global.default_spaces always applies, so explicit or saved selections
+     extend it rather than replace it. *)
+  default @ List.filter (fun space -> not (List.mem space default)) selected
 
 let resolve_spawn_nix_store_strategy ~name strategy =
   match strategy with
@@ -3646,7 +3651,12 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     resolve_spawn_override_inputs ~name override_inputs
     |> List.map (fun (input, flake) -> (input, Nix.storage_flake_ref flake))
   in
-  let spaces = resolve_spawn_spaces ~name spaces in
+  let config = Ash_config.load config_path in
+  let spaces =
+    resolve_spawn_spaces ~name
+      ~default:(Ash_config.global_default_spaces config)
+      spaces
+  in
   let nix_store_strategy =
     resolve_spawn_nix_store_strategy ~name nix_store_strategy
   in

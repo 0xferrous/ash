@@ -50,6 +50,10 @@ notifications = false
 clipboard_read_image = "allow"
 gh_exec = "ask_for_writes"
 
+# Spaces always applied to every VM; explicit --space selections and saved
+# selections extend this list (deduplicated, defaults first).
+# default_spaces = ["base"]
+
 [spaces.common]
 ro_mounts = [
   "~/.config/git:~/.config/git",

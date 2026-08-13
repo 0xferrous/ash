@@ -95,6 +95,9 @@ let portal config =
 
 let space_exists config space = Otoml.path_exists config [ "spaces"; space ]
 
+let global_default_spaces config =
+  strings [ "global"; "default_spaces" ] config |> Option.value ~default:[]
+
 let space_extends config space =
   strings [ "spaces"; space; "extends" ] config |> Option.value ~default:[]
 

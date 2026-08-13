@@ -9,6 +9,10 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- `global.default_spaces` configuration listing spaces always applied to every VM; explicit `--space` selections and saved selections extend the list rather than replacing it.
+
+### Added
+
 - Pre-build the home-manager activation closure (`homeConfigurations.<name>.activationPackage`) into VM image-backed Nix stores, so the guest's `home-manager switch` finds it already present. Home changes append only the missing store paths and never invalidate the NixOS toplevel image cache.
 
 ### Added

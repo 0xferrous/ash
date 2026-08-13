@@ -1755,9 +1755,10 @@ let test_spawn_reuses_saved_flake_when_omitted () =
     |> List.map (fun (input, flake) -> input ^ "=" ^ flake)
     |> String.concat ",");
   assert_equal "saved spaces" "base"
-    (String.concat "," (Virtle.resolve_spawn_spaces ~name []));
+    (String.concat "," (Virtle.resolve_spawn_spaces ~default:[] ~name []));
   assert_equal "explicit spaces override saved" "rust,go"
-    (String.concat "," (Virtle.resolve_spawn_spaces ~name [ "rust"; "go" ]));
+    (String.concat ","
+       (Virtle.resolve_spawn_spaces ~default:[] ~name [ "rust"; "go" ]));
   let runtime_mount =
     Virtle.runtime_mount ~host_dir:"/host/project"
       ~guest_path:"/home/agent/project" ~mode:Virtle.Read_write
@@ -1789,8 +1790,23 @@ let test_spawn_reuses_saved_flake_when_omitted () =
      virtle = '/bin/virtle'\n";
   assert_bool "legacy print_serial loads as print" true
     ((Virtle.load_ash_config ~name:legacy_name).kernel_serial = Virtle.Print);
-  assert_equal "new VM has no default spaces" ""
-    (String.concat "," (Virtle.resolve_spawn_spaces ~name:"new-vm" []))
+  assert_equal "new VM uses global default spaces" ""
+    (String.concat ","
+       (Virtle.resolve_spawn_spaces ~default:[] ~name:"new-vm" []));
+  assert_equal "new VM uses configured default spaces" "base,rust"
+    (String.concat ","
+       (Virtle.resolve_spawn_spaces ~default:[ "base"; "rust" ] ~name:"new-vm"
+          []));
+  assert_equal "defaults extend explicit spaces" "base,rust"
+    (String.concat ","
+       (Virtle.resolve_spawn_spaces ~default:[ "base" ] ~name:"new-vm"
+          [ "rust" ]));
+  assert_equal "defaults deduplicate against explicit spaces" "base,rust"
+    (String.concat ","
+       (Virtle.resolve_spawn_spaces ~default:[ "base" ] ~name:"new-vm"
+          [ "base"; "rust" ]));
+  assert_equal "defaults extend saved spaces" "x,base"
+    (String.concat "," (Virtle.resolve_spawn_spaces ~default:[ "x" ] ~name []))
 
 let test_nix_storage_flake_ref_absolutizes_relative_paths () =
   mkdir_p (Filename.concat (Filename.dirname (Sys.getcwd ())) "my-nix");
