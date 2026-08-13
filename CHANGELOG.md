@@ -9,6 +9,8 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- `ash spawn --memory` overrides the VM's RAM (as an MiB count or with an M/G suffix, e.g. `8G`), defaulting to `[global].memory` and saved in `ash-state.toml` for the VM.
+
 - `global.default_spaces` configuration listing spaces always applied to every VM; explicit `--space` selections and saved selections extend the list rather than replacing it.
 
 ### Added

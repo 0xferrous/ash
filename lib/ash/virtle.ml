@@ -38,6 +38,7 @@ type manifest_inputs = {
   user : string option;
   kernel_serial : kernel_serial;
   mount_cwd : bool;
+  memory : int option;
   nix_store_strategy : Ash_config.nix_store_strategy option;
   nix_store_image_size_mib : int option;
   persist_image_size_mib : int option;
@@ -62,6 +63,7 @@ type resolved_manifest_inputs = {
   user : string option;
   kernel_serial : kernel_serial;
   mount_cwd : bool;
+  memory : int option;
   nix_store_strategy : Ash_config.nix_store_strategy;
   nix_store_image_size_mib : int;
   persist_image_size_mib : int;
@@ -3031,7 +3033,9 @@ let render_resolved_manifest inputs =
   let spaces = inputs.spaces in
   let state_dir = state_dir inputs.name in
   let virtle_state_dir = virtle_state_dir inputs.name in
-  let memory = Ash_config.global_memory config in
+  let memory =
+    Option.value inputs.memory ~default:(Ash_config.global_memory config)
+  in
   let vcpu = Util.command_output "nproc" |> int_of_string in
   let network_bridge = Ash_config.global_network_bridge config in
   let qemu_bridge_helper = Ash_config.global_qemu_bridge_helper config in
@@ -3337,6 +3341,11 @@ let ash_config ?(runtime = empty_runtime_mount_state) (inputs : manifest_inputs)
     | None -> fields
   in
   let fields =
+    match inputs.memory with
+    | Some memory -> fields @ [ ("memory", Otoml.integer memory) ]
+    | None -> fields
+  in
+  let fields =
     match inputs.ro_store_socket with
     | Some socket -> fields @ [ ("ro_store_socket", Otoml.string socket) ]
     | None -> fields
@@ -3431,6 +3440,7 @@ let load_ash_config ~name =
       positive_integer_opt_of_doc doc [ "spawn"; "nix_store_image_size_mib" ];
     persist_image_size_mib =
       positive_integer_opt_of_doc doc [ "spawn"; "persist_image_size_mib" ];
+    memory = Otoml.find_opt doc Otoml.get_integer [ "spawn"; "memory" ];
     ro_store_socket =
       Otoml.find_opt doc Otoml.get_string [ "spawn"; "ro_store_socket" ];
     ssh = Otoml.find_opt doc Otoml.get_string [ "spawn"; "ssh" ];
@@ -3508,6 +3518,19 @@ let resolve_spawn_persist_image_size ~name size =
   | Some size when size <= 0 ->
       Log.fatal "persist_image_size_mib must be greater than zero"
   | _ -> size
+
+let resolve_spawn_memory ~name memory =
+  let memory =
+    match memory with
+    | Some _ -> memory
+    | None when has_saved_ash_config ~name ->
+        let saved = load_ash_config ~name in
+        saved.memory
+    | None -> None
+  in
+  match memory with
+  | Some memory when memory <= 0 -> Log.fatal "memory must be greater than zero"
+  | _ -> memory
 
 let render_manifest (inputs : manifest_inputs) =
   let config = Ash_config.load_for_spaces inputs.config_path inputs.spaces in
@@ -3601,6 +3624,7 @@ let render_manifest (inputs : manifest_inputs) =
         user = Some user;
         kernel_serial = inputs.kernel_serial;
         mount_cwd = inputs.mount_cwd;
+        memory = inputs.memory;
         nix_store_strategy = store_strategy;
         nix_store_image_size_mib = store_image_size_mib;
         persist_image_size_mib;
@@ -3633,8 +3657,8 @@ let write_manifest_for_inputs inputs =
 
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib
-    ~config_path ?flake ~override_inputs ~spaces ~kernel_serial ~mount_cwd
-    ~kitty ~waypipe () =
+    ?memory ~config_path ?flake ~override_inputs ~spaces ~kernel_serial
+    ~mount_cwd ~kitty ~waypipe () =
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
   let flake = Nix.storage_flake_ref (resolve_spawn_flake ~name flake) in
@@ -3657,6 +3681,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
   let persist_image_size_mib =
     resolve_spawn_persist_image_size ~name persist_image_size_mib
   in
+  let memory = resolve_spawn_memory ~name memory in
   let virtle = find_virtle virtle in
   let saved =
     if has_saved_ash_config ~name then Some (load_ash_config ~name) else None
@@ -3690,6 +3715,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       user;
       kernel_serial;
       mount_cwd;
+      memory;
       nix_store_strategy;
       nix_store_image_size_mib;
       persist_image_size_mib;
@@ -3815,8 +3841,8 @@ let reused_spawn ?virtle ~name () =
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib
-    ~config_path ?flake ~override_inputs ~spaces ~kernel_serial ~mount_cwd ~eval
-    ~ephemeral ~attach ~keep ~kitty ~waypipe ~verbose () =
+    ?memory ~config_path ?flake ~override_inputs ~spaces ~kernel_serial
+    ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe ~verbose () =
   let existing_name =
     match Option.map Util.name_slug name with
     | Some name when has_saved_ash_config ~name -> Some name
@@ -3828,13 +3854,13 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     | Some name, true ->
         prepare_spawn ?virtle ~name ?user ?ssh ?systemd_ssh_proxy
           ?ro_store_socket ?nix_store_strategy ?nix_store_image_size_mib
-          ?persist_image_size_mib ~config_path ?flake ~override_inputs ~spaces
-          ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
+          ?persist_image_size_mib ?memory ~config_path ?flake ~override_inputs
+          ~spaces ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
     | None, _ ->
         prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy
           ?ro_store_socket ?nix_store_strategy ?nix_store_image_size_mib
-          ?persist_image_size_mib ~config_path ?flake ~override_inputs ~spaces
-          ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
+          ?persist_image_size_mib ?memory ~config_path ?flake ~override_inputs
+          ~spaces ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
   in
   require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach ~keep;
   if attach && keep then

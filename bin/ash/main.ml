@@ -15,17 +15,18 @@ let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
-    nix_store_image_size_mib persist_image_size_mib config flake override_inputs
-    name user spaces kernel_serial mount_cwd eval ephemeral attach keep kitty
-    waypipe =
+    nix_store_image_size_mib persist_image_size_mib memory config flake
+    override_inputs name user spaces kernel_serial mount_cwd eval ephemeral
+    attach keep kitty waypipe =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
-    ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib ?name
-    ?user ~config_path:config ?flake ~override_inputs ~spaces ~kernel_serial
-    ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe
+    ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib
+    ?memory:(Option.map Virtle.parse_memory_mib memory)
+    ?name ?user ~config_path:config ?flake ~override_inputs ~spaces
+    ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe
     ~verbose:opts.verbose ()
 
 let list_vms global cache =
@@ -166,6 +167,16 @@ let persist_image_size_arg =
           "Override this VM's persist image capacity in MiB. Defaults to \
            [global.persist].image_size_mib and is saved in ash-state.toml."
         ~docv:"MIB")
+
+let memory_arg =
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "memory" ]
+        ~doc:
+          "Override this VM's RAM, as MiB or with an M/G suffix (e.g. 8G). \
+           Defaults to [global].memory and is saved in ash-state.toml."
+        ~docv:"MEM")
 
 let config_arg =
   Arg.(
@@ -323,10 +334,10 @@ let spawn_cmd =
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ ro_store_socket_arg $ nix_store_strategy_arg $ nix_store_image_size_arg
-      $ persist_image_size_arg $ config_arg $ flake_arg $ override_input_arg
-      $ name_arg $ user_arg $ spaces_arg $ kernel_serial_arg $ mount_cwd_arg
-      $ eval_flag $ ephemeral_arg $ attach_flag $ keep_flag $ kitty_flag
-      $ waypipe_flag)
+      $ persist_image_size_arg $ memory_arg $ config_arg $ flake_arg
+      $ override_input_arg $ name_arg $ user_arg $ spaces_arg
+      $ kernel_serial_arg $ mount_cwd_arg $ eval_flag $ ephemeral_arg
+      $ attach_flag $ keep_flag $ kitty_flag $ waypipe_flag)
 
 let attach_name_arg =
   Arg.(

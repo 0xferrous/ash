@@ -163,9 +163,11 @@ let spawn =
            inheritance cycles are errors.";
         `P
           "The [global] table may set memory to the VM memory in MiB; the \
-           default is 4096. Set kitty = true to use kitten ssh by default for \
-           spawn and attach sessions. network_bridge and qemu_bridge_helper \
-           configure the host bridge used for VM networking.";
+           default is 4096. `ash spawn --memory` overrides it per VM, \
+           accepting an MiB count or an M/G suffix (e.g. 8G). Set kitty = true \
+           to use kitten ssh by default for spawn and attach sessions. \
+           network_bridge and qemu_bridge_helper configure the host bridge \
+           used for VM networking.";
         `P
           "Each mount or file is HOST_PATH or HOST_PATH:GUEST_PATH. Host ~ \
            resolves against the host user's home; guest ~ resolves against the \

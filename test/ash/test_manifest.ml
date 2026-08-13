@@ -135,7 +135,7 @@ let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
 let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
-    ?(mount_cwd = false) ?nix_store_strategy ?nix_store_image_size_mib
+    ?(mount_cwd = false) ?memory ?nix_store_strategy ?nix_store_image_size_mib
     ?persist_image_size_mib ?ro_store_socket ?(kitty = false) ?waypipe
     ?(config_path = "/tmp/config.toml") ~config ~flake ~name () =
   let nix_store_strategy =
@@ -162,6 +162,7 @@ let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
       user;
       kernel_serial;
       mount_cwd;
+      memory;
       nix_store_strategy;
       nix_store_image_size_mib;
       persist_image_size_mib;
@@ -290,6 +291,29 @@ memory = 8192
   in
   let doc = parse_toml manifest in
   assert_int "configured memory" 8192 (find_int doc [ "machine"; "memory" ])
+
+let test_spawn_memory_override () =
+  let root = temp_dir "ash-test-memory-override" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config = parse_toml {|[global]
+memory = 4096
+|} in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"memory-override"
+      ~memory:16384 ()
+  in
+  assert_int "memory override wins over global" 16384
+    (find_int (parse_toml manifest) [ "machine"; "memory" ]);
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"memory-default" ()
+  in
+  assert_int "global memory applies without override" 4096
+    (find_int (parse_toml manifest) [ "machine"; "memory" ])
 
 let test_global_kitty_config () =
   let root = temp_dir "ash-test-global-kitty" in
@@ -1708,6 +1732,7 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       user = None;
       kernel_serial = Virtle.Console;
       mount_cwd = false;
+      memory = None;
       nix_store_strategy = Some Ash_config.Image;
       nix_store_image_size_mib = Some 32768;
       persist_image_size_mib = Some 32768;
@@ -2489,6 +2514,7 @@ let run name test =
 let () =
   run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
   run "global memory config" test_global_memory_config;
+  run "spawn memory override" test_spawn_memory_override;
   run "global Kitty config" test_global_kitty_config;
   run "global network config" test_global_network_config;
   run "no spaces selected by default" test_no_spaces_selected_by_default;
