@@ -1497,26 +1497,7 @@ let ensure_bindfs_mount ~bindfs ~mode ~source ~target =
     Log.fatal "failed to mount host directory %S at staging path %S" source
       target
 
-let try_unmount_staging mount_dir =
-  let command =
-    Printf.sprintf
-      {sh|set -u
-target=%s
-if ! mountpoint -q -- "$target"; then exit 0; fi
-if command -v fusermount3 >/dev/null 2>&1; then
-  fusermount3 -u "$target" && exit 0
-  fusermount3 -uz "$target" && exit 0
-fi
-if command -v fusermount >/dev/null 2>&1; then
-  fusermount -u "$target" && exit 0
-  fusermount -uz "$target" && exit 0
-fi
-if [ "$(id -u)" = 0 ]; then umount "$target" && exit 0; fi
-exit 1
-|sh}
-      (Util.shell_quote mount_dir)
-  in
-  Util.run_foreground "/bin/sh" [ "-c"; command ] = 0
+let try_unmount_staging mount_dir = Util.try_unmount_mountpoint mount_dir
 
 let remove_staging_path path =
   if try_unmount_staging path then Util.remove_tree ~force:true path

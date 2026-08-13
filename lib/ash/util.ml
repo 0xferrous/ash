@@ -284,9 +284,146 @@ let dns_label name =
     in
     base ^ suffix
 
-let rec remove_tree ?(force = false) path =
+(* Unmount a single mountpoint. Prefer fusermount (bindfs/virtiofs mounts are
+   FUSE filesystems and cannot be unmounted by a non-root umount), then fall
+   back to umount when running as root. Returns true when nothing is mounted
+   at [mount_dir] anymore. *)
+let try_unmount_mountpoint mount_dir =
+  let command =
+    Printf.sprintf
+      {sh|set -u
+target=%s
+if ! mountpoint -q -- "$target"; then exit 0; fi
+if command -v fusermount3 >/dev/null 2>&1; then
+  fusermount3 -u "$target" && exit 0
+  fusermount3 -uz "$target" && exit 0
+fi
+if command -v fusermount >/dev/null 2>&1; then
+  fusermount -u "$target" && exit 0
+  fusermount -uz "$target" && exit 0
+fi
+if [ "$(id -u)" = 0 ]; then umount "$target" && exit 0; fi
+exit 1
+|sh}
+      (shell_quote mount_dir)
+  in
+  run_foreground "/bin/sh" [ "-c"; command ] = 0
+
+let strip_trailing_slashes value =
+  let rec loop value =
+    let length = String.length value in
+    if length > 1 && value.[length - 1] = '/' then
+      loop (String.sub value 0 (length - 1))
+    else value
+  in
+  loop value
+
+(* The kernel escapes spaces and other characters in /proc/self/mountinfo
+   mount points as octal sequences such as \040. *)
+let decode_mountinfo_escapes value =
+  let buffer = Buffer.create (String.length value) in
+  let length = String.length value in
+  let index = ref 0 in
+  let octal digit =
+    if digit >= '0' && digit <= '7' then Char.code digit - Char.code '0' else -1
+  in
+  while !index < length do
+    let character = value.[!index] in
+    if character = '\\' && !index + 3 < length then
+      let a = octal value.[!index + 1]
+      and b = octal value.[!index + 2]
+      and c = octal value.[!index + 3] in
+      if a >= 0 && b >= 0 && c >= 0 then (
+        Buffer.add_char buffer (Char.chr ((a * 64) + (b * 8) + c));
+        index := !index + 4)
+      else (
+        Buffer.add_char buffer character;
+        incr index)
+    else (
+      Buffer.add_char buffer character;
+      incr index)
+  done;
+  Buffer.contents buffer
+
+(* Return every mountpoint at or under [path], deepest first, by parsing
+   /proc/self/mountinfo. Deleting a tree that still contains a mount would
+   recurse through the mount and destroy the mounted source's contents, so
+   callers must unmount these before removing the tree. *)
+let mountpoints_under path =
+  let path = strip_trailing_slashes path in
+  let prefix = path ^ "/" in
+  let under mountpoint =
+    mountpoint = path
+    || String.length mountpoint > String.length path
+       && String.sub mountpoint 0 (String.length prefix) = prefix
+  in
+  let depth value =
+    String.fold_left
+      (fun count c -> if c = '/' then count + 1 else count)
+      0 value
+  in
+  try
+    let ic = open_in "/proc/self/mountinfo" in
+    Fun.protect
+      ~finally:(fun () -> close_in ic)
+      (fun () ->
+        let rec collect acc =
+          match input_line ic with
+          | line -> (
+              (* Fields 1-5 never contain literal spaces (they are escaped),
+                 so the fifth space-separated field is the mount point. *)
+              match List.nth_opt (String.split_on_char ' ' line) 4 with
+              | Some raw ->
+                  let mountpoint =
+                    strip_trailing_slashes (decode_mountinfo_escapes raw)
+                  in
+                  if under mountpoint then collect (mountpoint :: acc)
+                  else collect acc
+              | None -> collect acc)
+          | exception End_of_file ->
+              List.sort
+                (fun left right -> compare (depth right) (depth left))
+                acc
+        in
+        collect [])
+  with Sys_error _ -> []
+
+(* Unmount every mountpoint under [path], deepest first. Returns the
+   mountpoints that could not be unmounted (empty when all succeeded). *)
+let unmount_tree_mounts path =
+  mountpoints_under path
+  |> List.filter (fun mountpoint ->
+      Log.debug "unmounting %s before removing tree %s" mountpoint path;
+      not (try_unmount_mountpoint mountpoint))
+
+let remove_tree ?(force = false) path =
   if Sys.file_exists path then
     if force then (
+      (* A force-removed tree can contain mounts: for example the host share
+         staging dirs (bindfs mounts of user spaces) inside an ephemeral VM
+         state dir. rm -rf recurses through a live mount and deletes the
+         mounted source's contents before failing at the busy mountpoint, so
+         unmount everything under the tree first and refuse to proceed if any
+         mount is still busy - leaving a stale directory behind is far safer
+         than destroying data through a mount. *)
+      (match unmount_tree_mounts path with
+      | [] -> ()
+      | failed ->
+          failwith
+            (Printf.sprintf
+               "refusing to remove tree %s: could not unmount %s; unmount it \
+                manually and retry"
+               path
+               (String.concat ", " failed)));
+      (match mountpoints_under path with
+      | [] -> ()
+      | leftover ->
+          failwith
+            (Printf.sprintf
+               "refusing to remove tree %s: mountpoint(s) %s still present \
+                after unmount attempt"
+               path
+               (String.concat ", " leftover)));
       (* Overlay/virtiofs cleanup can leave directories without owner execute
          bits (for example overlayfs work dirs). Make the tree traversable
          before rm -rf; ignore chmod failures so rm still gets a chance. *)
@@ -298,10 +435,18 @@ let rec remove_tree ?(force = false) path =
       if status <> 0 && Sys.file_exists path then
         failwith ("failed to remove tree: " ^ path))
     else
-      let stat = Unix.lstat path in
-      match stat.st_kind with
-      | Unix.S_DIR ->
-          Sys.readdir path
-          |> Array.iter (fun entry -> remove_tree (Filename.concat path entry));
-          Unix.rmdir path
-      | _ -> Unix.unlink path
+      let mountpoints = mountpoints_under path in
+      let rec inner path =
+        if Sys.file_exists path then
+          let stat = Unix.lstat path in
+          match stat.st_kind with
+          | Unix.S_DIR ->
+              if List.mem path mountpoints then
+                failwith ("refusing to remove mountpoint: " ^ path)
+              else (
+                Sys.readdir path
+                |> Array.iter (fun entry -> inner (Filename.concat path entry));
+                Unix.rmdir path)
+          | _ -> Unix.unlink path
+      in
+      inner path

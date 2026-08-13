@@ -19,6 +19,10 @@ and this project uses its existing Git tags for version history.
 
 - `global.persist.image_size_mib` configuration and `--persist-image-size-mib` CLI override for sizing the persist image, matching the existing Nix store image size option.
 
+### Fixed
+
+- Ephemeral VM state cleanup now unmounts every mount under the state directory before removing it, and refuses to delete a tree that still contains a busy mount. Previously `rm -rf` could recurse through a live bindfs staging mount (for example a space shared from a host source directory) and delete the mounted source's contents when a launch failed before the VM could unmount it.
+
 ## [v0.1.7] - 2026-08-07
 
 ### Added
