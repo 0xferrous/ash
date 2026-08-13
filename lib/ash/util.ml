@@ -388,15 +388,24 @@ let mountpoints_under path =
         collect [])
   with Sys_error _ -> []
 
-(* Unmount every mountpoint under [path], deepest first. Returns the
-   mountpoints that could not be unmounted (empty when all succeeded). *)
+(* Unmount every mountpoint under [path]. Prefer util-linux `umount -R`,
+   which recursively unmounts the whole tree in one call, handling nested
+   ordering, kernel mounts and escaped paths itself. It exits non-zero when
+   the target has nothing mounted beneath it, so the mountinfo rescan below
+   is authoritative; anything it leaves behind is unmounted individually.
+   Returns the mountpoints that could not be unmounted (empty when all
+   succeeded). *)
 let unmount_tree_mounts path =
+  (match find_in_path "umount" with
+  | Some umount -> ignore (run_foreground umount [ "-R"; "--"; path ])
+  | None -> ());
   mountpoints_under path
   |> List.filter (fun mountpoint ->
       Log.debug "unmounting %s before removing tree %s" mountpoint path;
       not (try_unmount_mountpoint mountpoint))
 
 let remove_tree ?(force = false) path =
+  if path = "/" || path = "" then failwith ("refusing to remove tree: " ^ path);
   if Sys.file_exists path then
     if force then (
       (* A force-removed tree can contain mounts: for example the host share
