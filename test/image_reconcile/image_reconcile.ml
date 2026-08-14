@@ -64,13 +64,13 @@ let () =
     ~registration:first_registration;
   assert_closure_info_equivalent ~label:"second" ~json:second_closure_json
     ~registration:second_registration;
-  Nix.prepare_image_store ~store_paths:first_store_paths
+  Nix.prepare_image_store ~closure_paths:first_store_paths
     ~toplevel:first_toplevel ~registration:first_registration ~image ~size_mib
     ();
   let fs = Ash_ext2fs.Ext2fs.open_existing ~path:image in
   assert_image_path fs "first toplevel" first_toplevel;
   Ash_ext2fs.Ext2fs.close fs;
-  Nix.prepare_image_store ~store_paths:second_store_paths
+  Nix.prepare_image_store ~closure_paths:second_store_paths
     ~toplevel:second_toplevel ~registration:second_registration ~image ~size_mib
     ();
   let fs = Ash_ext2fs.Ext2fs.open_existing ~path:image in
