@@ -209,7 +209,7 @@ let stage_home_closure ?nix_executable ~(home : home) ~image () =
       with Sys_error _ -> ""
     else ""
   in
-  if current = home.registration_sha256 then
+  if current = home.combined_registration_sha256 then
     Log.debug "home-manager closure already staged in %s" image
   else
     let entries, metrics =
@@ -220,9 +220,9 @@ let stage_home_closure ?nix_executable ~(home : home) ~image () =
       ~path:image ~metrics entries;
     Image_import_core.Metrics.log ~prefix:"ash image store home"
       ~reporter:image_import_reporter metrics;
-    Util.write_file sidecar (home.registration_sha256 ^ "\n");
-    Log.info "staged home-manager closure (%s) in %s" home.registration_sha256
-      image
+    Util.write_file sidecar (home.combined_registration_sha256 ^ "\n");
+    Log.info "staged home-manager closure (%s) in %s"
+      home.combined_registration_sha256 image
 
 let write_image_store ~image ~bytes ~entries ~metrics ~metadata =
   let temporary_image = Printf.sprintf "%s.tmp-%d" image (Unix.getpid ()) in
@@ -1088,7 +1088,11 @@ let resolve_home ~nix ~nix_store ~activation ~toplevel_infos ~gcroots_dir =
       ~out_link:(root "home-combined-registration")
   in
   let closure_paths =
-    closure_paths_of_infos home_infos @ [ containing_store_path registration ]
+    closure_paths_of_infos home_infos
+    @ [
+        containing_store_path registration;
+        containing_store_path combined_registration;
+      ]
   in
   Some
     {

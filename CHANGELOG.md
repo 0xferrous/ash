@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Fixed
+
+- Include the combined NixOS and home-manager registration file in image-backed stores, preventing guest registration imports from failing because the generated store path is missing.
+
 ## [v0.1.8] - 2026-08-14
 
 ### Added
