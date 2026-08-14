@@ -254,6 +254,10 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     "ash-ssh-autoprovision";
   assert_string_contains "SSH wrapper respects ASH_LOG_LEVEL" wrapper_content
     "ASH_LOG_LEVEL";
+  assert_string_contains "SSH wrapper retries provisioning" wrapper_content
+    "retrying SSH key provisioning";
+  assert_string_contains "SSH wrapper ash_log suppression exits cleanly"
+    wrapper_content "[ \"$level\" = ERROR ] || return 0";
   assert_string_contains "SSH wrapper pins its identity" wrapper_content
     "IdentitiesOnly=yes";
   let mounts = table_array doc "mounts" in

@@ -591,7 +591,14 @@ let write_space_mount_ssh_wrapper ?(kitty = false) ~name ~user ~virtle
   in
   let provision_command =
     Printf.sprintf
-      {sh|result=$(%s --manifest %s rpc guest-exec %s)
+      {sh|attempt=0
+result=
+while [ $attempt -lt 3 ]; do
+  result=$(%s --manifest %s rpc guest-exec %s) && break
+  attempt=$((attempt+1))
+  sleep 2
+  ash_log WARN %s
+ done
 case "$result" in
   *'"exitCode":0'*)
     ash_log INFO %s
@@ -605,6 +612,7 @@ esac|sh}
       (Util.shell_quote virtle)
       (Util.shell_quote manifest_path)
       (Util.shell_quote (Qga.params provision_action))
+      (Util.shell_quote "retrying SSH key provisioning")
       (Util.shell_quote "provisioned SSH key")
       (Util.shell_quote "failed to provision SSH key")
   in
@@ -677,9 +685,9 @@ ash_log() {
   level=$1
   shift
   case "${ASH_LOG_LEVEL:-info}" in
-    error) [ "$level" = ERROR ] || return ;;
+    error) [ "$level" = ERROR ] || return 0 ;;
     debug) ;;
-    *) [ "$level" = ERROR ] || [ "$level" = WARN ] || [ "$level" = INFO ] || return ;;
+    *) [ "$level" = ERROR ] || [ "$level" = WARN ] || [ "$level" = INFO ] || return 0 ;;
   esac
   ts=$(/run/current-system/sw/bin/date '+%%Y-%%m-%%dT%%H:%%M:%%S')
   dim= color= reset=
@@ -2745,6 +2753,7 @@ let hotunmount_spaces ?virtle ~name ~spaces () =
       Printf.printf "unmounted runtime spaces: %s\n" (String.concat "," spaces))
 
 let install_ssh_key ~virtle ~path ~name ~user =
+  let attempts = 3 in
   let identity = ensure_ssh_identity ~name in
   Log.debug "installing SSH key for VM %s user %s using identity %s" name user
     identity;
@@ -2764,13 +2773,40 @@ let install_ssh_key ~virtle ~path ~name ~user =
     Qga.install_ssh_key_action ~name:"ash-ssh-autoprovision" ~user ~target
       ~authorized_key
   in
-  let output =
-    virtle_rpc ~virtle ~path ~method_name:"guest-exec"
-      ~params:(Qga.params action) ()
+  (* The guest agent can transiently fail to start the key-install command
+     (for example a wedged QGA session), which would otherwise permanently
+     block SSH because the key never gets installed. Retry a few times, then
+     fail with a recovery hint instead of the raw RPC error. *)
+  let rec provision remaining last_error =
+    if remaining = 0 then
+      Log.fatal
+        "SSH autoprovision failed after %d attempts: %s. The guest agent may \
+         be wedged; restart qemu-guest-agent inside the guest, or restart the \
+         VM with `ash stop %s` and `ash spawn --name %s`, then retry."
+        attempts last_error name name
+    else
+      let ok, failure =
+        try
+          let output =
+            virtle_rpc ~virtle ~path ~method_name:"guest-exec"
+              ~params:(Qga.params action) ()
+          in
+          match (Qga.result action output).exit_code with
+          | Some 0 -> (true, "")
+          | Some code ->
+              (false, Printf.sprintf "guest-exec exited %d: %s" code output)
+          | None -> (false, "guest-exec returned no exit code: " ^ output)
+        with Failure message -> (false, message)
+      in
+      if ok then identity
+      else (
+        Log.warn "SSH autoprovision attempt %d/%d failed: %s"
+          (attempts - remaining + 1)
+          attempts failure;
+        Unix.sleepf 2.;
+        provision (remaining - 1) failure)
   in
-  match (Qga.result action output).exit_code with
-  | Some 0 -> identity
-  | _ -> Log.fatal "SSH autoprovision failed: %s" output
+  provision attempts ""
 
 type copy_source = Host | Guest
 
@@ -2828,8 +2864,8 @@ let copy ?virtle ~name ~recursive ~verbose ~from_path ~to_path ~source () =
       to_path;
   exit code
 
-let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose ()
-    =
+let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~plain_wrapper
+    ~command ~verbose () =
   let virtle = find_virtle virtle in
   if kitty then ignore (find_kitten ());
   Log.debug "attaching to VM %s using manifest %s" name path;
@@ -2841,8 +2877,15 @@ let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose ()
   in
   let doc = load_manifest_doc path in
   let user = manifest_string doc [ "ssh"; "user" ] in
+  let plain_wrapper_path () =
+    let wrapper = space_mount_ssh_wrapper_path ~name in
+    if not (Sys.file_exists wrapper) then
+      Log.fatal "missing SSH wrapper %s; run `ash regenerate %s`" wrapper name;
+    [ wrapper ]
+  in
   let ssh_exec =
-    if kitty || Option.is_some waypipe then (
+    if plain_wrapper then plain_wrapper_path ()
+    else if kitty || Option.is_some waypipe then (
       let ssh_wrapper = space_mount_ssh_wrapper_path_for ~kitty ~name in
       if not (Sys.file_exists ssh_wrapper) then
         Log.fatal "missing SSH wrapper %s; run `ash regenerate %s`" ssh_wrapper
@@ -2863,10 +2906,11 @@ let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose ()
       Util.run_foreground program
         (args @ identity_args @ verbose_args @ [ destination ] @ command)
 
-let attach_running ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose () =
+let attach_running ?virtle ~name ~path ~kitty ~waypipe ~plain_wrapper ~command
+    ~verbose () =
   exit
-    (attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose
-       ())
+    (attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~plain_wrapper
+       ~command ~verbose ())
 
 let portal_profile_path = "/etc/profile.d/ash-agent-portal.sh"
 
@@ -3841,7 +3885,7 @@ let launch_background_and_attach ?ssh_ready_timeout ~resume
   launch_background ?ssh_ready_timeout ~resume inputs path ~verbose;
   exit
     (attach_running_code ~virtle:inputs.virtle ~name:inputs.name ~path
-       ~kitty:false ~waypipe:None ~command:[] ~verbose ())
+       ~kitty:false ~waypipe:None ~plain_wrapper:false ~command:[] ~verbose ())
 
 let launch_foreground_attached ?cleanup_dir ?ssh_ready_timeout ~resume
     (inputs : manifest_inputs) path ~verbose =
@@ -4005,7 +4049,7 @@ let run ?virtle ?name ~command ~verbose () =
   | Some vm ->
       attach_running ?virtle ~name:vm.name
         ~path:(Filename.concat vm.path "virtle.toml")
-        ~kitty:false ~waypipe:None ~command ~verbose ()
+        ~kitty:false ~waypipe:None ~plain_wrapper:true ~command ~verbose ()
   | None ->
       Log.fatal
         "no running VM to run the command in; start one with `ash spawn` or \
@@ -4022,7 +4066,7 @@ let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
       let waypipe = if waypipe then Some (find_waypipe ()) else saved.waypipe in
       attach_running ?virtle ~name:vm.name
         ~path:(Filename.concat vm.path "virtle.toml")
-        ~kitty ~waypipe ~command:[] ~verbose ()
+        ~kitty ~waypipe ~plain_wrapper:false ~command:[] ~verbose ()
   | None ->
       if not spawn then Log.fatal "no running VMs; use `ash ls` to list states";
       let name = select_stopped_vm_for_spawn ?name stopped in

@@ -9,7 +9,7 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
-- `ash run NAME -- COMMAND...` executes a one-off command in a running VM over SSH, like a non-interactive `ssh host command`; output and exit status propagate to the caller. It is quiet by default (errors only; `--debug` shows full logs) so it can be used in scripts, and uses the same VM SSH identity and mount wrapper as `ash attach`.
+- `ash run NAME -- COMMAND...` executes a one-off command in a running VM over SSH, like a non-interactive `ssh host command`; output and exit status propagate to the caller. It is quiet by default (errors only; `--debug` shows full logs) so it can be used in scripts, and uses the same VM SSH identity as `ash attach` through the plain mount wrapper (never the VM's kitty/waypipe wrapper).
 
 - `ash spawn --memory` overrides the VM's RAM (as an MiB count or with an M/G suffix, e.g. `8G`), defaulting to `[global].memory` and saved in `ash-state.toml` for the VM.
 
@@ -24,6 +24,12 @@ and this project uses its existing Git tags for version history.
 - `global.persist.image_size_mib` configuration and `--persist-image-size-mib` CLI override for sizing the persist image, matching the existing Nix store image size option.
 
 ### Fixed
+
+- `ash run` no longer silences the command itself: the generated SSH wrapper's `ash_log` returned non-zero when `ASH_LOG_LEVEL` suppressed a line, which aborted the wrapper under its own `set -eu` before ssh ever ran. Suppressed log lines now exit cleanly, so `ash run` (which sets `ASH_LOG_LEVEL=error` unless `--debug`) actually runs the command.
+
+- `ash run` always uses the plain `ssh-with-space-mounts` wrapper instead of the VM's spawn-time wrapper embedded in the manifest's `ssh.exec`; VMs spawned with `--kitty`/`--waypipe` previously routed one-off commands through waypipe display forwarding and failed without a Wayland session. `ash attach` keeps using the manifest wrapper.
+
+- SSH key autoprovision (used by attach, `ash run`, and the SSH wrapper) now retries the guest-exec a few times before failing, instead of aborting on the first transient guest-agent hiccup; persistent failures report that the guest agent may be wedged and how to recover. The generated SSH wrapper retries its own provisioning the same way.
 
 - Ephemeral VM state cleanup now unmounts every mount under the state directory before removing it, and refuses to delete a tree that still contains a busy mount. Previously `rm -rf` could recurse through a live bindfs staging mount (for example a space shared from a host source directory) and delete the mounted source's contents when a launch failed before the VM could unmount it.
 
