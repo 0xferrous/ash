@@ -7,6 +7,8 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.8] - 2026-08-14
+
 ### Added
 
 - `ash run NAME -- COMMAND...` executes a one-off command in a running VM over SSH, like a non-interactive `ssh host command`; output and exit status propagate to the caller. It is quiet by default (errors only; `--debug` shows full logs) so it can be used in scripts, and uses the same VM SSH identity as `ash attach` through the plain mount wrapper (never the VM's kitty/waypipe wrapper).
@@ -15,11 +17,7 @@ and this project uses its existing Git tags for version history.
 
 - `global.default_spaces` configuration listing spaces always applied to every VM; explicit `--space` selections and saved selections extend the list rather than replacing it.
 
-### Added
-
 - Pre-build the home-manager activation closure (`homeConfigurations.<name>.activationPackage`) into VM image-backed Nix stores, so the guest's `home-manager switch` finds it already present. Home changes append only the missing store paths and never invalidate the NixOS toplevel image cache.
-
-### Added
 
 - `global.persist.image_size_mib` configuration and `--persist-image-size-mib` CLI override for sizing the persist image, matching the existing Nix store image size option.
 
@@ -173,7 +171,8 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.8...HEAD
+[v0.1.8]: https://github.com/0xferrous/ash/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/0xferrous/ash/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/0xferrous/ash/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/0xferrous/ash/compare/v0.1.4...v0.1.5
