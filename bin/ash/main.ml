@@ -15,9 +15,9 @@ let global_opts debug = { debug }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
-    nix_store_image_size_mib persist_image_size_mib memory config flake
-    override_inputs name user spaces kernel_serial mount_cwd eval ephemeral
-    attach keep kitty waypipe =
+    nix_store_image_size_mib persist_image_size_mib memory ssh_ready_timeout
+    config flake override_inputs name user spaces kernel_serial mount_cwd eval
+    ephemeral attach keep kitty waypipe =
   Log.set_debug opts.global.debug;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
@@ -25,9 +25,9 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
   Virtle.spawn ?virtle:opts.virtle ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib
     ?memory:(Option.map Virtle.parse_memory_mib memory)
-    ?name ?user ~config_path:config ?flake ~override_inputs ~spaces
-    ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe
-    ~verbose:opts.verbose ()
+    ?ssh_ready_timeout ?name ?user ~config_path:config ?flake ~override_inputs
+    ~spaces ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty
+    ~waypipe ~verbose:opts.verbose ()
 
 let list_vms global cache =
   Log.set_debug global.debug;
@@ -46,6 +46,16 @@ let attach opts name spawn keep kitty waypipe =
   if keep && not spawn then Log.fatal "--keep requires --spawn";
   Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~kitty ~waypipe
     ~verbose:opts.verbose ()
+
+let run opts name command =
+  Log.set_debug opts.global.debug;
+  (* Keep `ash run` quiet for scripting: only errors reach the terminal
+     unless --debug is passed. ASH_LOG_LEVEL silences the generated SSH
+     wrapper's ash-ssh INFO/WARN lines. *)
+  if not opts.global.debug then (
+    Log.set_min_level Log.Error;
+    Unix.putenv "ASH_LOG_LEVEL" "error");
+  Virtle.run ?virtle:opts.virtle ?name ~command ~verbose:opts.verbose ()
 
 let resume opts name attach keep =
   Log.set_debug opts.global.debug;
@@ -177,6 +187,18 @@ let memory_arg =
           "Override this VM's RAM, as MiB or with an M/G suffix (e.g. 8G). \
            Defaults to [global].memory and is saved in ash-state.toml."
         ~docv:"MEM")
+
+let ssh_ready_timeout_arg =
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "ssh-ready-timeout" ]
+        ~doc:
+          "How long virtle waits for guest SSH readiness during launch (Go \
+           duration, e.g. 90s or 2m; default 2m). Only meaningful for \
+           foreground spawns that attach; passed to virtle as \
+           VIRTLE_SSH_READY_TIMEOUT."
+        ~docv:"DURATION")
 
 let config_arg =
   Arg.(
@@ -334,8 +356,8 @@ let spawn_cmd =
     Term.(
       const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ ro_store_socket_arg $ nix_store_strategy_arg $ nix_store_image_size_arg
-      $ persist_image_size_arg $ memory_arg $ config_arg $ flake_arg
-      $ override_input_arg $ name_arg $ user_arg $ spaces_arg
+      $ persist_image_size_arg $ memory_arg $ ssh_ready_timeout_arg $ config_arg
+      $ flake_arg $ override_input_arg $ name_arg $ user_arg $ spaces_arg
       $ kernel_serial_arg $ mount_cwd_arg $ eval_flag $ ephemeral_arg
       $ attach_flag $ keep_flag $ kitty_flag $ waypipe_flag)
 
@@ -356,6 +378,29 @@ let attach_cmd =
     Term.(
       const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag
       $ kitty_flag $ waypipe_flag)
+
+let run_name_arg =
+  Arg.(
+    value
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name to run the command in." ~docv:"NAME")
+
+let run_command_arg =
+  Arg.(
+    value & pos_right 0 string []
+    & info []
+        ~doc:
+          "Command and arguments to execute in the guest. Use -- before the \
+           command so arguments starting with - are not parsed as ash options, \
+           e.g. `ash run NAME -- pwd`."
+        ~docv:"COMMAND")
+
+let run_man = Pages.run.man
+
+let run_cmd =
+  Cmd.v
+    (Cmd.info "run" ~doc:"run a one-off command in a running VM" ~man:run_man)
+    Term.(const run $ virtle_opts_arg $ run_name_arg $ run_command_arg)
 
 let resume_name_arg =
   Arg.(
@@ -613,6 +658,7 @@ let main_cmd =
     [
       spawn_cmd;
       attach_cmd;
+      run_cmd;
       resume_cmd;
       mount_cmd;
       cp_cmd;

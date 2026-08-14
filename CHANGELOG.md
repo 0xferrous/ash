@@ -9,6 +9,8 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- `ash run NAME -- COMMAND...` executes a one-off command in a running VM over SSH, like a non-interactive `ssh host command`; output and exit status propagate to the caller. It is quiet by default (errors only; `--debug` shows full logs) so it can be used in scripts, and uses the same VM SSH identity and mount wrapper as `ash attach`.
+
 - `ash spawn --memory` overrides the VM's RAM (as an MiB count or with an M/G suffix, e.g. `8G`), defaulting to `[global].memory` and saved in `ash-state.toml` for the VM.
 
 - `global.default_spaces` configuration listing spaces always applied to every VM; explicit `--space` selections and saved selections extend the list rather than replacing it.
@@ -26,6 +28,8 @@ and this project uses its existing Git tags for version history.
 - Ephemeral VM state cleanup now unmounts every mount under the state directory before removing it, and refuses to delete a tree that still contains a busy mount. Previously `rm -rf` could recurse through a live bindfs staging mount (for example a space shared from a host source directory) and delete the mounted source's contents when a launch failed before the VM could unmount it.
 
 ### Changed
+
+- virtle.toml now only sets `ssh.ready_socket` (which triggers virtle's SSH-readiness wait) for foreground `ash spawn --attach`; background spawns no longer gate launch on guest SSH. `ash spawn --ssh-ready-timeout DURATION` overrides virtle's SSH-ready timeout via `VIRTLE_SSH_READY_TIMEOUT` (Go duration, e.g. `90s` or `2m`).
 
 - Host mount staging (spaces, cwd, hotmounts, shared Nix store, guest store, and workspace data) moved out of the per-VM state directory into a dedicated `mounts/<name>/` tree under the ash state base, so deleting VM state can never traverse a live bindfs mount. Deleting a VM or cleaning up an ephemeral launch now removes both the state directory and its mount staging tree.
 

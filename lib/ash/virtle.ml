@@ -38,6 +38,7 @@ type manifest_inputs = {
   user : string option;
   kernel_serial : kernel_serial;
   mount_cwd : bool;
+  ssh_ready : bool;
   memory : int option;
   nix_store_strategy : Ash_config.nix_store_strategy option;
   nix_store_image_size_mib : int option;
@@ -63,6 +64,7 @@ type resolved_manifest_inputs = {
   user : string option;
   kernel_serial : kernel_serial;
   mount_cwd : bool;
+  ssh_ready : bool;
   memory : int option;
   nix_store_strategy : Ash_config.nix_store_strategy;
   nix_store_image_size_mib : int;
@@ -674,6 +676,11 @@ set -eu
 ash_log() {
   level=$1
   shift
+  case "${ASH_LOG_LEVEL:-info}" in
+    error) [ "$level" = ERROR ] || return ;;
+    debug) ;;
+    *) [ "$level" = ERROR ] || [ "$level" = WARN ] || [ "$level" = INFO ] || return ;;
+  esac
   ts=$(/run/current-system/sw/bin/date '+%%Y-%%m-%%dT%%H:%%M:%%S')
   dim= color= reset=
   if [ -z "${NO_COLOR:-}" ] && [ "${ASH_COLOR:-}" != never ]; then
@@ -2821,7 +2828,8 @@ let copy ?virtle ~name ~recursive ~verbose ~from_path ~to_path ~source () =
       to_path;
   exit code
 
-let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~verbose () =
+let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose ()
+    =
   let virtle = find_virtle virtle in
   if kitty then ignore (find_kitten ());
   Log.debug "attaching to VM %s using manifest %s" name path;
@@ -2853,10 +2861,12 @@ let attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~verbose () =
   | [] -> Log.fatal "manifest ssh.exec is empty"
   | program :: args ->
       Util.run_foreground program
-        (args @ identity_args @ verbose_args @ [ destination ])
+        (args @ identity_args @ verbose_args @ [ destination ] @ command)
 
-let attach_running ?virtle ~name ~path ~kitty ~waypipe ~verbose () =
-  exit (attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~verbose ())
+let attach_running ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose () =
+  exit
+    (attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~command ~verbose
+       ())
 
 let portal_profile_path = "/etc/profile.d/ash-agent-portal.sh"
 
@@ -3253,11 +3263,12 @@ let render_resolved_manifest inputs =
             else [ ("params", string_array kernel_params) ]) );
         ( "ssh",
           Otoml.table
-            [
-              ("user", Otoml.string user);
-              ("exec", string_array selected_ssh_exec);
-              ("ready_socket", Otoml.string "ready.sock");
-            ] );
+            (("user", Otoml.string user)
+            :: ("exec", string_array selected_ssh_exec)
+            ::
+            (if inputs.ssh_ready then
+               [ ("ready_socket", Otoml.string "ready.sock") ]
+             else [])) );
         ( "workspace",
           Otoml.table
             [
@@ -3305,6 +3316,7 @@ let ash_config ?(runtime = empty_runtime_mount_state) (inputs : manifest_inputs)
       ( "kernel_serial",
         Otoml.string (string_of_kernel_serial inputs.kernel_serial) );
       ("mount_cwd", Otoml.boolean inputs.mount_cwd);
+      ("ssh_ready", Otoml.boolean inputs.ssh_ready);
       ("kitty", Otoml.boolean inputs.kitty);
       ("virtiofsd", Otoml.string inputs.virtiofsd);
       ("virtle", Otoml.string inputs.virtle);
@@ -3426,6 +3438,12 @@ let load_ash_config ~name =
           | Some true -> Print
           | Some false | None -> Off));
     mount_cwd = bool_of_doc doc [ "spawn"; "mount_cwd" ];
+    (* Older ash-state.toml files predate ssh_ready; they always emitted
+       ready_socket, so default to the previous behavior. *)
+    ssh_ready =
+      Option.value
+        (Otoml.find_opt doc Otoml.get_boolean [ "spawn"; "ssh_ready" ])
+        ~default:true;
     kitty =
       Option.value
         (Otoml.find_opt doc Otoml.get_boolean [ "spawn"; "kitty" ])
@@ -3624,6 +3642,7 @@ let render_manifest (inputs : manifest_inputs) =
         user = Some user;
         kernel_serial = inputs.kernel_serial;
         mount_cwd = inputs.mount_cwd;
+        ssh_ready = inputs.ssh_ready;
         memory = inputs.memory;
         nix_store_strategy = store_strategy;
         nix_store_image_size_mib = store_image_size_mib;
@@ -3658,7 +3677,7 @@ let write_manifest_for_inputs inputs =
 let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib
     ?memory ~config_path ?flake ~override_inputs ~spaces ~kernel_serial
-    ~mount_cwd ~kitty ~waypipe () =
+    ~mount_cwd ~ssh_ready ~kitty ~waypipe () =
   let name = Option.value name ~default:(default_name ()) in
   Log.debug "using VM name: %s" name;
   let flake = Nix.storage_flake_ref (resolve_spawn_flake ~name flake) in
@@ -3715,6 +3734,7 @@ let prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
       user;
       kernel_serial;
       mount_cwd;
+      ssh_ready;
       memory;
       nix_store_strategy;
       nix_store_image_size_mib;
@@ -3751,6 +3771,21 @@ let launch_args ~resume ~path ~verbose ~ssh =
   @ [ "launch"; "--resume"; resume_mode ]
   @ if ssh then [ "--ssh" ] else []
 
+(* Set VIRTLE_SSH_READY_TIMEOUT for the child virtle process only, restoring
+   the previous value afterwards. *)
+let with_ssh_ready_timeout ?ssh_ready_timeout f =
+  match ssh_ready_timeout with
+  | None -> f ()
+  | Some timeout ->
+      let previous = Sys.getenv_opt "VIRTLE_SSH_READY_TIMEOUT" in
+      Unix.putenv "VIRTLE_SSH_READY_TIMEOUT" timeout;
+      Fun.protect
+        ~finally:(fun () ->
+          match previous with
+          | Some value -> Unix.putenv "VIRTLE_SSH_READY_TIMEOUT" value
+          | None -> Unix.putenv "VIRTLE_SSH_READY_TIMEOUT" "")
+        f
+
 let print_background_started ~name =
   Printf.printf "started VM: %s\n" name;
   Printf.printf "unit: %s\n" (Systemd_run.service_name ~name);
@@ -3758,15 +3793,21 @@ let print_background_started ~name =
   Printf.printf "logs: %s\n" (Systemd_run.logs_hint ~name);
   Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
 
-let start_background ~announce ~resume ~name ~virtle ~path ~verbose =
+let start_background ~ssh_ready_timeout ~announce ~resume ~name ~virtle ~path
+    ~verbose () =
   let args = launch_args ~resume ~path ~verbose ~ssh:false in
   let description =
     match resume with
     | Some _ -> "ash VM " ^ name ^ " (resume)"
     | None -> "ash VM " ^ name
   in
+  let env =
+    match ssh_ready_timeout with
+    | None -> []
+    | Some timeout -> [ ("VIRTLE_SSH_READY_TIMEOUT", timeout) ]
+  in
   let code =
-    Systemd_run.start_user_unit ~name ~description ~program:virtle ~args
+    Systemd_run.start_user_unit ~env ~name ~description ~program:virtle ~args
   in
   if code <> 0 then exit code;
   if announce then print_background_started ~name
@@ -3788,28 +3829,31 @@ let wait_and_mount (inputs : manifest_inputs) path =
     (space_mounts_for_inputs inputs);
   restore_hotmounts ~virtle:inputs.virtle ~manifest_path:path ~name:inputs.name
 
-let launch_background ?(announce = true) ~resume (inputs : manifest_inputs) path
-    ~verbose =
+let launch_background ?(announce = true) ?ssh_ready_timeout ~resume
+    (inputs : manifest_inputs) path ~verbose =
   prepare_host_share_mounts inputs;
-  start_background ~announce ~resume ~name:inputs.name ~virtle:inputs.virtle
-    ~path ~verbose;
+  start_background ~ssh_ready_timeout ~announce ~resume ~name:inputs.name
+    ~virtle:inputs.virtle ~path ~verbose ();
   wait_and_mount inputs path
 
-let launch_background_and_attach ~resume (inputs : manifest_inputs) path
-    ~verbose =
-  launch_background ~resume inputs path ~verbose;
+let launch_background_and_attach ?ssh_ready_timeout ~resume
+    (inputs : manifest_inputs) path ~verbose =
+  launch_background ?ssh_ready_timeout ~resume inputs path ~verbose;
   exit
     (attach_running_code ~virtle:inputs.virtle ~name:inputs.name ~path
-       ~kitty:false ~waypipe:None ~verbose ())
+       ~kitty:false ~waypipe:None ~command:[] ~verbose ())
 
-let launch_foreground_attached ?cleanup_dir ~resume (inputs : manifest_inputs)
-    path ~verbose =
+let launch_foreground_attached ?cleanup_dir ?ssh_ready_timeout ~resume
+    (inputs : manifest_inputs) path ~verbose =
   prepare_host_share_mounts inputs;
   let args = launch_args ~resume ~path ~verbose ~ssh:true in
   (* The manifest's SSH wrapper performs registration and all desired mounts
      before it execs SSH. Running wait_and_mount concurrently here opens a
      second QGA connection and can reset the wrapper's in-flight guest-exec. *)
-  let code = Util.run_foreground inputs.virtle args in
+  let code =
+    with_ssh_ready_timeout ?ssh_ready_timeout (fun () ->
+        Util.run_foreground inputs.virtle args)
+  in
   Option.iter
     (fun dir ->
       Log.info "removing ephemeral VM state %s" dir;
@@ -3841,13 +3885,17 @@ let reused_spawn ?virtle ~name () =
 
 let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib
-    ?memory ~config_path ?flake ~override_inputs ~spaces ~kernel_serial
-    ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe ~verbose () =
+    ?memory ?ssh_ready_timeout ~config_path ?flake ~override_inputs ~spaces
+    ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe
+    ~verbose () =
   let existing_name =
     match Option.map Util.name_slug name with
     | Some name when has_saved_ash_config ~name -> Some name
     | Some _ | None -> None
   in
+  (* Only foreground spawns that attach wait for SSH readiness during launch;
+     background spawns omit ready_socket so virtle does not gate on sshd. *)
+  let ssh_ready = attach && not keep in
   let inputs, path =
     match (existing_name, eval) with
     | Some name, false -> reused_spawn ?virtle ~name ()
@@ -3855,21 +3903,22 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
         prepare_spawn ?virtle ~name ?user ?ssh ?systemd_ssh_proxy
           ?ro_store_socket ?nix_store_strategy ?nix_store_image_size_mib
           ?persist_image_size_mib ?memory ~config_path ?flake ~override_inputs
-          ~spaces ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
+          ~spaces ~kernel_serial ~mount_cwd ~ssh_ready ~kitty ~waypipe ()
     | None, _ ->
         prepare_spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy
           ?ro_store_socket ?nix_store_strategy ?nix_store_image_size_mib
           ?persist_image_size_mib ?memory ~config_path ?flake ~override_inputs
-          ~spaces ~kernel_serial ~mount_cwd ~kitty ~waypipe ()
+          ~spaces ~kernel_serial ~mount_cwd ~ssh_ready ~kitty ~waypipe ()
   in
   require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach ~keep;
   if attach && keep then
-    launch_background_and_attach ~resume:None inputs path ~verbose
+    launch_background_and_attach ?ssh_ready_timeout ~resume:None inputs path
+      ~verbose
   else if attach then
-    launch_foreground_attached
+    launch_foreground_attached ?ssh_ready_timeout
       ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
       ~resume:None inputs path ~verbose
-  else launch_background ~resume:None inputs path ~verbose
+  else launch_background ?ssh_ready_timeout ~resume:None inputs path ~verbose
 
 let resume ?virtle ~name ~attach ~keep ~verbose () =
   let name = Util.name_slug name in
@@ -3948,6 +3997,20 @@ let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~verbose =
   if keep then launch_background_and_attach ~resume:None inputs path ~verbose
   else launch_foreground_attached ~resume:None inputs path ~verbose
 
+let run ?virtle ?name ~command ~verbose () =
+  if command = [] then
+    Log.fatal "ash run requires a command; for example: ash run NAME -- pwd";
+  let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
+  match select_running_vm ?name running with
+  | Some vm ->
+      attach_running ?virtle ~name:vm.name
+        ~path:(Filename.concat vm.path "virtle.toml")
+        ~kitty:false ~waypipe:None ~command ~verbose ()
+  | None ->
+      Log.fatal
+        "no running VM to run the command in; start one with `ash spawn` or \
+         attach with `ash attach`"
+
 let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
   let vms = list_vms () in
   let running = List.filter (fun vm -> vm.status = Running) vms in
@@ -3959,7 +4022,7 @@ let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
       let waypipe = if waypipe then Some (find_waypipe ()) else saved.waypipe in
       attach_running ?virtle ~name:vm.name
         ~path:(Filename.concat vm.path "virtle.toml")
-        ~kitty ~waypipe ~verbose ()
+        ~kitty ~waypipe ~command:[] ~verbose ()
   | None ->
       if not spawn then Log.fatal "no running VMs; use `ash ls` to list states";
       let name = select_stopped_vm_for_spawn ?name stopped in

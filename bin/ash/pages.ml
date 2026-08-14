@@ -80,6 +80,14 @@ let spawn =
         `P
           "--ephemeral is only valid with --attach. It removes the VM state \
            directory after the foreground attached session exits.";
+        `S "SSH READINESS";
+        `P
+          "Only foreground spawns with --attach (without --keep) emit \
+           ssh.ready_socket in virtle.toml, so virtle waits for the guest's \
+           sshd to come up before proceeding (default 2 minutes). Background \
+           spawns omit ready_socket and do not gate launch on SSH. \
+           --ssh-ready-timeout DURATION (e.g. 90s or 2m) sets virtle's \
+           VIRTLE_SSH_READY_TIMEOUT for that launch.";
         `S "BACKGROUND UNITS";
         `P
           "Background spawns use systemd-run --user to start virtle as a \
@@ -414,6 +422,38 @@ let attach =
         `Pre "ash attach --waypipe --kitty work";
         `Pre "ash attach --spawn work";
         `Pre "ash attach --spawn --keep work";
+      ];
+  }
+
+let run =
+  {
+    file = "ash-run";
+    command = Some "run";
+    summary = "run a one-off command in a running VM";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Runs a single command in a running ash VM over SSH, like a \
+           non-interactive ssh host command. Output and exit status propagate \
+           back to the caller.";
+        `S "VM SELECTION";
+        `P
+          "Pass NAME to target that VM. If NAME is omitted, run requires \
+           exactly one running VM.";
+        `P
+          "The command and its arguments must come after the VM name, normally \
+           introduced by -- so that arguments starting with - are not parsed \
+           as ash options: ash run work -- pwd.";
+        `S "SSH IDENTITY";
+        `P
+          "run uses the same VM SSH identity and wrapper as ash attach, so the \
+           guest's registered Nix store and space mounts are already in place \
+           before the command executes.";
+        `S Manpage.s_examples;
+        `Pre "ash run work -- pwd";
+        `Pre "ash run work -- nix develop . -c cargo check";
+        `Pre "ash run work -- systemctl is-active agent-home-switch";
       ];
   }
 
@@ -866,6 +906,7 @@ let all =
     main;
     spawn;
     attach;
+    run;
     resume;
     mount;
     cp;

@@ -135,9 +135,10 @@ let test_target : Nix.target =
   { attr = "../my-nix#nixosConfigurations.agent"; host_name = "agent" }
 
 let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
-    ?(mount_cwd = false) ?memory ?nix_store_strategy ?nix_store_image_size_mib
-    ?persist_image_size_mib ?ro_store_socket ?(kitty = false) ?waypipe
-    ?(config_path = "/tmp/config.toml") ~config ~flake ~name () =
+    ?(mount_cwd = false) ?(ssh_ready = true) ?memory ?nix_store_strategy
+    ?nix_store_image_size_mib ?persist_image_size_mib ?ro_store_socket
+    ?(kitty = false) ?waypipe ?(config_path = "/tmp/config.toml") ~config ~flake
+    ~name () =
   let nix_store_strategy =
     Option.value nix_store_strategy
       ~default:(Ash_config.global_nix_store_strategy config)
@@ -162,6 +163,7 @@ let render ?(spaces = []) ?user ?(kernel_serial = Virtle.Off)
       user;
       kernel_serial;
       mount_cwd;
+      ssh_ready;
       memory;
       nix_store_strategy;
       nix_store_image_size_mib;
@@ -250,6 +252,8 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     test_boot.registration;
   assert_string_contains "SSH wrapper provisions its public key" wrapper_content
     "ash-ssh-autoprovision";
+  assert_string_contains "SSH wrapper respects ASH_LOG_LEVEL" wrapper_content
+    "ASH_LOG_LEVEL";
   assert_string_contains "SSH wrapper pins its identity" wrapper_content
     "IdentitiesOnly=yes";
   let mounts = table_array doc "mounts" in
@@ -314,6 +318,29 @@ memory = 4096
   in
   assert_int "global memory applies without override" 4096
     (find_int (parse_toml manifest) [ "machine"; "memory" ])
+
+let test_ssh_ready_gating () =
+  let root = temp_dir "ash-test-ssh-ready" in
+  let home = Filename.concat root "home" in
+  let state = Filename.concat root "state" in
+  mkdir_p home;
+  mkdir_p state;
+  Unix.putenv "HOME" home;
+  Unix.putenv "XDG_STATE_HOME" state;
+  let config = parse_toml "" in
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"ssh-ready-attach" ()
+  in
+  assert_bool "foreground attach emits ready_socket" true
+    (Virtle.contains_substring manifest "ready.sock");
+  assert_bool "foreground attach keeps ssh user" true
+    (Virtle.contains_substring manifest "ssh");
+  let _, manifest =
+    render ~config ~flake:"../my-nix#agent" ~name:"ssh-ready-background"
+      ~ssh_ready:false ()
+  in
+  assert_bool "background spawn omits ready_socket" false
+    (Virtle.contains_substring manifest "ready.sock")
 
 let test_global_kitty_config () =
   let root = temp_dir "ash-test-global-kitty" in
@@ -1732,6 +1759,7 @@ let test_spawn_reuses_saved_flake_when_omitted () =
       user = None;
       kernel_serial = Virtle.Console;
       mount_cwd = false;
+      ssh_ready = false;
       memory = None;
       nix_store_strategy = Some Ash_config.Image;
       nix_store_image_size_mib = Some 32768;
@@ -2515,6 +2543,7 @@ let () =
   run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
   run "global memory config" test_global_memory_config;
   run "spawn memory override" test_spawn_memory_override;
+  run "ssh ready gating" test_ssh_ready_gating;
   run "global Kitty config" test_global_kitty_config;
   run "global network config" test_global_network_config;
   run "no spaces selected by default" test_no_spaces_selected_by_default;

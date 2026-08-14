@@ -1,5 +1,12 @@
 type level = Debug | Info | Warn | Error
 
+let level_rank = function Debug -> 0 | Info -> 1 | Warn -> 2 | Error -> 3
+
+(* Minimum level that reaches the terminal. Defaults to Debug so all levels
+   are shown (Debug additionally gated by [debug_enabled]); scriptable commands
+   such as `ash run` raise it to Error. *)
+let min_level = ref Debug
+let set_min_level level = min_level := level
 let debug_enabled = ref (Sys.getenv_opt "ASH_LOG" = Some "debug")
 let set_debug enabled = debug_enabled := enabled || !debug_enabled
 
@@ -30,15 +37,16 @@ let dim = "\027[2m"
 let bold = "\027[1m"
 
 let log level message =
-  match level with
-  | Debug when not !debug_enabled -> ()
-  | _ ->
-      let timestamp = timestamp () in
-      if color_enabled () then
-        Printf.eprintf "%s%s%s %sash%s %s%s%s %s\n%!" dim timestamp reset dim
-          reset (level_color level) (level_name level) reset message
-      else
-        Printf.eprintf "%s ash %s %s\n%!" timestamp (level_name level) message
+  if level_rank level >= level_rank !min_level then
+    match level with
+    | Debug when not !debug_enabled -> ()
+    | _ ->
+        let timestamp = timestamp () in
+        if color_enabled () then
+          Printf.eprintf "%s%s%s %sash%s %s%s%s %s\n%!" dim timestamp reset dim
+            reset (level_color level) (level_name level) reset message
+        else
+          Printf.eprintf "%s ash %s %s\n%!" timestamp (level_name level) message
 
 let debug fmt = Printf.ksprintf (log Debug) fmt
 let info fmt = Printf.ksprintf (log Info) fmt

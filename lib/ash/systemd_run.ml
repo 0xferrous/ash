@@ -19,11 +19,15 @@ let find_journalctl () =
   | Some path -> path
   | None -> Log.fatal ~code:127 "could not find executable %S" "journalctl"
 
-let start_user_unit ~name ~description ~program ~args =
+let start_user_unit ~env ~name ~description ~program ~args =
   let systemd_run = find_systemd_run () in
   let unit = unit_name ~name in
+  let env_args =
+    List.concat_map (fun (key, value) -> [ "--setenv"; key ^ "=" ^ value ]) env
+  in
   let systemd_args =
     [ "--user"; "--unit"; unit; "--description"; description; "--same-dir" ]
+    @ env_args
     @ (if default_options.collect then [ "--collect" ] else [])
     @ (program :: args)
   in
