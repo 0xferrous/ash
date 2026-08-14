@@ -3793,8 +3793,18 @@ let require_console_lifecycle ~kernel_serial ~attach ~keep =
   | Ok () -> ()
   | Error message -> Log.fatal "%s" message
 
-let launch_args ~resume ~path ~verbose ~ssh =
-  let verbose_args = List.map (fun _ -> "-v") verbose in
+let launch_args ~resume ~path ~verbose ~log_level ~ssh =
+  (* --log-level=info implies one virtle -v, debug implies -vv, so virtle's
+     own logging follows the requested level without extra flags. *)
+  let implied =
+    match log_level with
+    | Some Log.Info -> 1
+    | Some Log.Debug -> 2
+    | Some Log.Warn | Some Log.Error | None -> 0
+  in
+  let verbose_args =
+    List.init (List.length verbose + implied) (fun _ -> "-v")
+  in
   let resume_mode = Option.value resume ~default:"no" in
   [ "--manifest"; path ] @ verbose_args
   @ [ "launch"; "--resume"; resume_mode ]
@@ -3823,8 +3833,8 @@ let print_background_started ~name =
   Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
 
 let start_background ~ssh_ready_timeout ~announce ~resume ~name ~virtle ~path
-    ~verbose () =
-  let args = launch_args ~resume ~path ~verbose ~ssh:false in
+    ~verbose ~log_level () =
+  let args = launch_args ~resume ~path ~verbose ~log_level ~ssh:false in
   let description =
     match resume with
     | Some _ -> "ash VM " ^ name ^ " (resume)"
@@ -3859,23 +3869,23 @@ let wait_and_mount (inputs : manifest_inputs) path =
   restore_hotmounts ~virtle:inputs.virtle ~manifest_path:path ~name:inputs.name
 
 let launch_background ?(announce = true) ?ssh_ready_timeout ~resume
-    (inputs : manifest_inputs) path ~verbose =
+    (inputs : manifest_inputs) path ~verbose ~log_level =
   prepare_host_share_mounts inputs;
   start_background ~ssh_ready_timeout ~announce ~resume ~name:inputs.name
-    ~virtle:inputs.virtle ~path ~verbose ();
+    ~virtle:inputs.virtle ~path ~verbose ~log_level ();
   wait_and_mount inputs path
 
 let launch_background_and_attach ?ssh_ready_timeout ~resume
-    (inputs : manifest_inputs) path ~verbose =
-  launch_background ?ssh_ready_timeout ~resume inputs path ~verbose;
+    (inputs : manifest_inputs) path ~verbose ~log_level =
+  launch_background ?ssh_ready_timeout ~resume inputs path ~verbose ~log_level;
   exit
     (attach_running_code ~virtle:inputs.virtle ~name:inputs.name ~path
        ~kitty:false ~waypipe:None ~plain_wrapper:false ~command:[] ~verbose ())
 
 let launch_foreground_attached ?cleanup_dir ?ssh_ready_timeout ~resume
-    (inputs : manifest_inputs) path ~verbose =
+    (inputs : manifest_inputs) path ~verbose ~log_level =
   prepare_host_share_mounts inputs;
-  let args = launch_args ~resume ~path ~verbose ~ssh:true in
+  let args = launch_args ~resume ~path ~verbose ~log_level ~ssh:true in
   (* The manifest's SSH wrapper performs registration and all desired mounts
      before it execs SSH. Running wait_and_mount concurrently here opens a
      second QGA connection and can reset the wrapper's in-flight guest-exec. *)
@@ -3916,7 +3926,7 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
     ?nix_store_strategy ?nix_store_image_size_mib ?persist_image_size_mib
     ?memory ?ssh_ready_timeout ~config_path ?flake ~override_inputs ~spaces
     ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty ~waypipe
-    ~verbose () =
+    ?log_level ~verbose () =
   let existing_name =
     match Option.map Util.name_slug name with
     | Some name when has_saved_ash_config ~name -> Some name
@@ -3942,14 +3952,16 @@ let spawn ?virtle ?name ?user ?ssh ?systemd_ssh_proxy ?ro_store_socket
   require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach ~keep;
   if attach && keep then
     launch_background_and_attach ?ssh_ready_timeout ~resume:None inputs path
-      ~verbose
+      ~verbose ~log_level
   else if attach then
     launch_foreground_attached ?ssh_ready_timeout
       ?cleanup_dir:(if ephemeral then Some (state_dir inputs.name) else None)
-      ~resume:None inputs path ~verbose
-  else launch_background ?ssh_ready_timeout ~resume:None inputs path ~verbose
+      ~resume:None inputs path ~verbose ~log_level
+  else
+    launch_background ?ssh_ready_timeout ~resume:None inputs path ~verbose
+      ~log_level
 
-let resume ?virtle ~name ~attach ~keep ~verbose () =
+let resume ?virtle ~name ~attach ~keep ?log_level ~verbose () =
   let name = Util.name_slug name in
   let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
   if List.exists (fun vm -> vm.name = name) running then
@@ -3962,9 +3974,11 @@ let resume ?virtle ~name ~attach ~keep ~verbose () =
     Log.fatal "no VM manifest for %S (expected %s)" inputs.name path;
   if attach && keep then
     launch_background_and_attach ~resume:(Some "force") inputs path ~verbose
+      ~log_level
   else if attach then
     launch_foreground_attached ~resume:(Some "force") inputs path ~verbose
-  else launch_background ~resume:(Some "force") inputs path ~verbose
+      ~log_level
+  else launch_background ~resume:(Some "force") inputs path ~verbose ~log_level
 
 let rewrite_saved_manifest (inputs : manifest_inputs) =
   Log.debug "regenerating VM manifest for %s" inputs.name;
@@ -4011,7 +4025,8 @@ let select_stopped_vm_for_spawn ?name stopped =
 let config_default_kitty (inputs : manifest_inputs) =
   Ash_config.load_for_spaces inputs.config_path [] |> Ash_config.global_kitty
 
-let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~verbose =
+let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~log_level
+    ~verbose =
   let saved = saved_inputs ?virtle ~name () in
   let inputs =
     {
@@ -4023,8 +4038,9 @@ let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~verbose =
   require_console_lifecycle ~kernel_serial:inputs.kernel_serial ~attach:true
     ~keep;
   let inputs, path = rewrite_saved_manifest inputs in
-  if keep then launch_background_and_attach ~resume:None inputs path ~verbose
-  else launch_foreground_attached ~resume:None inputs path ~verbose
+  if keep then
+    launch_background_and_attach ~resume:None inputs path ~verbose ~log_level
+  else launch_foreground_attached ~resume:None inputs path ~verbose ~log_level
 
 let run ?virtle ?name ~command ~verbose () =
   if command = [] then
@@ -4040,7 +4056,7 @@ let run ?virtle ?name ~command ~verbose () =
         "no running VM to run the command in; start one with `ash spawn` or \
          attach with `ash attach`"
 
-let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
+let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ?log_level ~verbose () =
   let vms = list_vms () in
   let running = List.filter (fun vm -> vm.status = Running) vms in
   let stopped = List.filter (fun vm -> vm.status = Stopped) vms in
@@ -4055,7 +4071,8 @@ let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ~verbose () =
   | None ->
       if not spawn then Log.fatal "no running VMs; use `ash ls` to list states";
       let name = select_stopped_vm_for_spawn ?name stopped in
-      spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~verbose
+      spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~log_level
+        ~verbose
 
 let suspend ?virtle ?name () =
   let virtle = find_virtle virtle in

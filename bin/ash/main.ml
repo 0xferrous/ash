@@ -27,7 +27,7 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     ?memory:(Option.map Virtle.parse_memory_mib memory)
     ?ssh_ready_timeout ?name ?user ~config_path:config ?flake ~override_inputs
     ~spaces ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty
-    ~waypipe ~verbose:opts.verbose ()
+    ~waypipe ?log_level:opts.global.log_level ~verbose:opts.verbose ()
 
 let list_vms global cache =
   Log.apply_log_level global.log_level;
@@ -45,7 +45,7 @@ let attach opts name spawn keep kitty waypipe =
   Log.apply_log_level opts.global.log_level;
   if keep && not spawn then Log.fatal "--keep requires --spawn";
   Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~kitty ~waypipe
-    ~verbose:opts.verbose ()
+    ?log_level:opts.global.log_level ~verbose:opts.verbose ()
 
 let run opts name command =
   (* Keep `ash run` quiet for scripting unless an explicit --log-level is
@@ -57,7 +57,8 @@ let run opts name command =
 let resume opts name attach keep =
   Log.apply_log_level opts.global.log_level;
   if keep && not attach then Log.fatal "--keep requires --attach";
-  Virtle.resume ?virtle:opts.virtle ~name ~attach ~keep ~verbose:opts.verbose ()
+  Virtle.resume ?virtle:opts.virtle ~name ~attach ~keep
+    ?log_level:opts.global.log_level ~verbose:opts.verbose ()
 
 let stop opts name suspend force =
   Log.apply_log_level opts.global.log_level;
@@ -349,8 +350,9 @@ let log_level_arg =
     & info [ "log-level" ]
         ~doc:
           "Minimum log level shown: debug, info, warn, or error (default info; \
-           `ash run` defaults to error). Child ash processes (the SSH wrapper) \
-           inherit it via ASH_LOG_LEVEL."
+           `ash run` defaults to error). info implies one virtle -v, debug \
+           implies -vv. Child ash processes (the SSH wrapper) inherit it via \
+           ASH_LOG_LEVEL."
         ~docv:"LEVEL")
 
 let global_opts_arg = Term.(const global_opts $ log_level_arg)

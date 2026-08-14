@@ -35,7 +35,7 @@ and this project uses its existing Git tags for version history.
 
 ### Changed
 
-- Replaced the `--debug` flag with `--log-level=debug|info|warn|error`, applied to every command; it sets the minimum level shown (default `info`; `ash run` defaults to `error` unless `--log-level` is given) and is exported as `ASH_LOG_LEVEL` so child ash processes (the SSH wrapper's `ash _log` calls) inherit it. `ASH_LOG=debug` remains as a legacy alias for `ASH_LOG_LEVEL=debug`.
+- Replaced the `--debug` flag with `--log-level=debug|info|warn|error`, applied to every command; it sets the minimum level shown (default `info`; `ash run` defaults to `error` unless `--log-level` is given) and is exported as `ASH_LOG_LEVEL` so child ash processes (the SSH wrapper's `ash _log` calls) inherit it. `--log-level=info` also implies one virtle `-v` and `debug` implies `-vv`, so virtle's own logging follows the requested level. `ASH_LOG=debug` remains as a legacy alias for `ASH_LOG_LEVEL=debug`.
 
 - The generated SSH wrapper no longer carries its own shell logging function; it logs through the ash binary's hidden `ash _log` command, so levels, colors, timestamps, and `ASH_LOG_LEVEL` filtering all come from the single Log implementation.
 
