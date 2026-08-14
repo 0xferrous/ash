@@ -3826,11 +3826,12 @@ let with_ssh_ready_timeout ?ssh_ready_timeout f =
         f
 
 let print_background_started ~name =
+  let app = Util.application_name () in
   Printf.printf "started VM: %s\n" name;
   Printf.printf "unit: %s\n" (Systemd_run.service_name ~name);
-  Printf.printf "attach: ash attach %s\n" (Util.shell_quote name);
+  Printf.printf "attach: %s attach %s\n" app (Util.shell_quote name);
   Printf.printf "logs: %s\n" (Systemd_run.logs_hint ~name);
-  Printf.printf "stop: ash stop %s\n" (Util.shell_quote name)
+  Printf.printf "stop: %s stop %s\n" app (Util.shell_quote name)
 
 let start_background ~ssh_ready_timeout ~announce ~resume ~name ~virtle ~path
     ~verbose ~log_level () =

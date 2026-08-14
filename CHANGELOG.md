@@ -35,6 +35,8 @@ and this project uses its existing Git tags for version history.
 
 ### Changed
 
+- Log lines and the `started VM`/`attach`/`stop` hints now use the application name (`ASH_NAME`, default `ash`) instead of a hardcoded `ash` label, so they match the binary and state dir in use. The man page documents the stream split: results go to stdout and are always printed; diagnostics go to stderr and are gated by `--log-level`/`ASH_LOG_LEVEL`.
+
 - Replaced the `--debug` flag with `--log-level=debug|info|warn|error`, applied to every command; it sets the minimum level shown (default `info`; `ash run` defaults to `error` unless `--log-level` is given) and is exported as `ASH_LOG_LEVEL` so child ash processes (the SSH wrapper's `ash _log` calls) inherit it. `--log-level=info` also implies one virtle `-v` and `debug` implies `-vv`, so virtle's own logging follows the requested level. `ASH_LOG=debug` remains as a legacy alias for `ASH_LOG_LEVEL=debug`.
 
 - The generated SSH wrapper no longer carries its own shell logging function; it logs through the ash binary's hidden `ash _log` command, so levels, colors, timestamps, and `ASH_LOG_LEVEL` filtering all come from the single Log implementation.

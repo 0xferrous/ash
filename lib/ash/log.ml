@@ -62,13 +62,22 @@ let reset = "\027[0m"
 let dim = "\027[2m"
 let bold = "\027[1m"
 
+(* The log label follows the application name (ASH_NAME, default "ash") so
+   logs match the binary and state dir the user actually runs. *)
+let app_name =
+  match Sys.getenv_opt "ASH_NAME" with
+  | Some name when name <> "" && name <> "." && name <> ".." -> name
+  | _ -> "ash"
+
 let log level message =
   if level_rank level >= level_rank !min_level then
     let timestamp = timestamp () in
     if color_enabled () then
-      Printf.eprintf "%s%s%s %sash%s %s%s%s %s\n%!" dim timestamp reset dim
-        reset (level_color level) (level_name level) reset message
-    else Printf.eprintf "%s ash %s %s\n%!" timestamp (level_name level) message
+      Printf.eprintf "%s%s%s %s%s%s %s%s%s %s\n%!" dim timestamp reset dim
+        app_name reset (level_color level) (level_name level) reset message
+    else
+      Printf.eprintf "%s %s %s %s\n%!" timestamp app_name (level_name level)
+        message
 
 (* Map a level name to a log call; used by the internal `ash _log` command the
    generated SSH wrappers call instead of carrying their own logging. *)

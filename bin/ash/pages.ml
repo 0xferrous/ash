@@ -28,7 +28,14 @@ let main =
         `S "GLOBAL OPTIONS";
         `P
           "The options --log-level=LEVEL, --virtle=PATH, and -v/--verbose are \
-           shared by commands that use them.";
+           shared by commands that use them. --log-level is the minimum \
+           diagnostic level written to stderr (debug, info, warn, or error; \
+           default info; ASH_LOG_LEVEL env); it never affects command results.";
+        `P
+          "Output is split by stream: results the command was asked to produce \
+           (ssh/command output, ash ls/inspect tables, started VM lines, \
+           mount-space confirmations) go to stdout and are always printed; \
+           ash's own diagnostics go to stderr and are gated by --log-level.";
         `S "REQUIREMENTS";
         `P
           "ash assumes host tools are available as needed: nix, virtle, \
