@@ -27,7 +27,7 @@ Options:
 --jobs N            Reserved for parallel scanning; currently serial
 ```
 
-Enable detailed progress logs with `ASH_LOG=debug`.
+Enable detailed progress logs with `ASH_LOG_LEVEL=debug`.
 
 ## Image contract
 

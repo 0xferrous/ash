@@ -35,6 +35,10 @@ and this project uses its existing Git tags for version history.
 
 ### Changed
 
+- Replaced the `--debug` flag with `--log-level=debug|info|warn|error`, applied to every command; it sets the minimum level shown (default `info`; `ash run` defaults to `error` unless `--log-level` is given) and is exported as `ASH_LOG_LEVEL` so child ash processes (the SSH wrapper's `ash _log` calls) inherit it. `ASH_LOG=debug` remains as a legacy alias for `ASH_LOG_LEVEL=debug`.
+
+- The generated SSH wrapper no longer carries its own shell logging function; it logs through the ash binary's hidden `ash _log` command, so levels, colors, timestamps, and `ASH_LOG_LEVEL` filtering all come from the single Log implementation.
+
 - virtle.toml now only sets `ssh.ready_socket` (which triggers virtle's SSH-readiness wait) for foreground `ash spawn --attach`; background spawns no longer gate launch on guest SSH. `ash spawn --ssh-ready-timeout DURATION` overrides virtle's SSH-ready timeout via `VIRTLE_SSH_READY_TIMEOUT` (Go duration, e.g. `90s` or `2m`).
 
 - Host mount staging (spaces, cwd, hotmounts, shared Nix store, guest store, and workspace data) moved out of the per-VM state directory into a dedicated `mounts/<name>/` tree under the ash state base, so deleting VM state can never traverse a live bindfs mount. Deleting a VM or cleaning up an ephemeral launch now removes both the state directory and its mount staging tree.

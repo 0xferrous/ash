@@ -27,8 +27,8 @@ let main =
            hotmount staging data, and VM runtime data.";
         `S "GLOBAL OPTIONS";
         `P
-          "The options --debug, --virtle=PATH, and -v/--verbose are shared by \
-           commands that use them.";
+          "The options --log-level=LEVEL, --virtle=PATH, and -v/--verbose are \
+           shared by commands that use them.";
         `S "REQUIREMENTS";
         `P
           "ash assumes host tools are available as needed: nix, virtle, \

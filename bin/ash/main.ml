@@ -3,7 +3,7 @@ open Ash
 
 let version = "0.1.7"
 
-type global_opts = { debug : bool }
+type global_opts = { log_level : Log.level option }
 
 type virtle_opts = {
   global : global_opts;
@@ -11,14 +11,14 @@ type virtle_opts = {
   verbose : bool list;
 }
 
-let global_opts debug = { debug }
+let global_opts log_level = { log_level }
 let virtle_opts global virtle verbose = { global; virtle; verbose }
 
 let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     nix_store_image_size_mib persist_image_size_mib memory ssh_ready_timeout
     config flake override_inputs name user spaces kernel_serial mount_cwd eval
     ephemeral attach keep kitty waypipe =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   if keep && not attach then Log.fatal "--keep requires --attach";
   if ephemeral && ((not attach) || keep) then
     Log.fatal "--ephemeral requires --attach and cannot be used with --keep";
@@ -30,77 +30,74 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     ~waypipe ~verbose:opts.verbose ()
 
 let list_vms global cache =
-  Log.set_debug global.debug;
+  Log.apply_log_level global.log_level;
   if cache then Virtle.print_cached_image_list () else Virtle.print_vm_list ()
 
 let inspect_vm global json name =
-  Log.set_debug global.debug;
+  Log.apply_log_level global.log_level;
   Virtle.inspect_vm ~json ~name
 
 let rm_vms global =
-  Log.set_debug global.debug;
+  Log.apply_log_level global.log_level;
   Virtle.rm_vms ()
 
 let attach opts name spawn keep kitty waypipe =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   if keep && not spawn then Log.fatal "--keep requires --spawn";
   Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~kitty ~waypipe
     ~verbose:opts.verbose ()
 
 let run opts name command =
-  Log.set_debug opts.global.debug;
-  (* Keep `ash run` quiet for scripting: only errors reach the terminal
-     unless --debug is passed. ASH_LOG_LEVEL silences the generated SSH
-     wrapper's ash-ssh INFO/WARN lines. *)
-  if not opts.global.debug then (
-    Log.set_min_level Log.Error;
-    Unix.putenv "ASH_LOG_LEVEL" "error");
+  (* Keep `ash run` quiet for scripting unless an explicit --log-level is
+     given. *)
+  Log.apply_log_level
+    (Some (Option.value opts.global.log_level ~default:Log.Error));
   Virtle.run ?virtle:opts.virtle ?name ~command ~verbose:opts.verbose ()
 
 let resume opts name attach keep =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   if keep && not attach then Log.fatal "--keep requires --attach";
   Virtle.resume ?virtle:opts.virtle ~name ~attach ~keep ~verbose:opts.verbose ()
 
 let stop opts name suspend force =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   if suspend && force then Log.fatal "--force cannot be used with --suspend";
   if suspend then Virtle.suspend ?virtle:opts.virtle ?name ()
   else Virtle.stop ?name ~force ()
 
 let logs global name follow lines =
-  Log.set_debug global.debug;
+  Log.apply_log_level global.log_level;
   if lines < 0 then Log.fatal "--lines must be non-negative";
   Systemd_run.show_user_unit_logs ~name ~follow ~lines
 
 let regenerate opts name =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   Virtle.regenerate ?virtle:opts.virtle ~name ()
 
 let rebuild_db opts name =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   Virtle.rebuild_db ?virtle:opts.virtle ~name ()
 
 let mount opts mode name spec =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   Virtle.hotmount ?virtle:opts.virtle
     ~mode:(Virtle.hotmount_mode_of_string mode)
     ~name ~spec ()
 
 let copy global recursive verbose source name from_path to_path =
-  Log.set_debug global.debug;
+  Log.apply_log_level global.log_level;
   Virtle.copy ~name ~recursive ~verbose ~source ~from_path ~to_path ()
 
 let umount opts name guest_path =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   Virtle.hotunmount ?virtle:opts.virtle ~name ~guest_path ()
 
 let mount_space opts name spaces =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   Virtle.hotmount_spaces ?virtle:opts.virtle ~name ~spaces ()
 
 let umount_space opts name spaces =
-  Log.set_debug opts.global.debug;
+  Log.apply_log_level opts.global.log_level;
   Virtle.hotunmount_spaces ?virtle:opts.virtle ~name ~spaces ()
 
 let virtle_arg =
@@ -337,13 +334,26 @@ let suspend_flag =
     & info [ "suspend" ]
         ~doc:"For stop, save VM state with virtle suspend instead of stopping.")
 
-let debug_arg =
+let log_level_arg =
+  let levels =
+    [
+      ("debug", Log.Debug);
+      ("info", Log.Info);
+      ("warn", Log.Warn);
+      ("error", Log.Error);
+    ]
+  in
   Arg.(
-    value & flag
-    & info [ "debug" ]
-        ~doc:"Enable ash debug logging. Can also be enabled with ASH_LOG=debug.")
+    value
+    & opt (some (enum levels)) None
+    & info [ "log-level" ]
+        ~doc:
+          "Minimum log level shown: debug, info, warn, or error (default info; \
+           `ash run` defaults to error). Child ash processes (the SSH wrapper) \
+           inherit it via ASH_LOG_LEVEL."
+        ~docv:"LEVEL")
 
-let global_opts_arg = Term.(const global_opts $ debug_arg)
+let global_opts_arg = Term.(const global_opts $ log_level_arg)
 
 let virtle_opts_arg =
   Term.(const virtle_opts $ global_opts_arg $ virtle_arg $ verbose_arg)
@@ -674,4 +684,12 @@ let main_cmd =
       rm_cmd;
     ]
 
-let () = exit (Cmd.eval main_cmd)
+(* Hidden internal command used by the generated SSH wrappers to log through
+   the same Log implementation as the main process; never shown in help.
+   Usage: ash _log LEVEL MESSAGE *)
+let () =
+  match Sys.argv with
+  | [| _; "_log"; level; message |] ->
+      Log.log_level level message;
+      exit 0
+  | _ -> exit (Cmd.eval main_cmd)

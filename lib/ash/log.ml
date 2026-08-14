@@ -2,13 +2,39 @@ type level = Debug | Info | Warn | Error
 
 let level_rank = function Debug -> 0 | Info -> 1 | Warn -> 2 | Error -> 3
 
-(* Minimum level that reaches the terminal. Defaults to Debug so all levels
-   are shown (Debug additionally gated by [debug_enabled]); scriptable commands
-   such as `ash run` raise it to Error. *)
-let min_level = ref Debug
+let string_of_level = function
+  | Debug -> "debug"
+  | Info -> "info"
+  | Warn -> "warn"
+  | Error -> "error"
+
+let level_of_string = function
+  | "debug" -> Some Debug
+  | "info" -> Some Info
+  | "warn" -> Some Warn
+  | "error" -> Some Error
+  | _ -> None
+
+(* Minimum level that reaches the terminal. Initialized from ASH_LOG_LEVEL so
+   child ash processes (the SSH wrapper's internal `ash _log` calls) honor the
+   same filter as the parent; `ash run` defaults it to Error. ASH_LOG=debug is
+   kept as a legacy alias for ASH_LOG_LEVEL=debug. *)
+let min_level =
+  ref
+    (match Option.bind (Sys.getenv_opt "ASH_LOG_LEVEL") level_of_string with
+    | Some level -> level
+    | None -> if Sys.getenv_opt "ASH_LOG" = Some "debug" then Debug else Info)
+
 let set_min_level level = min_level := level
-let debug_enabled = ref (Sys.getenv_opt "ASH_LOG" = Some "debug")
-let set_debug enabled = debug_enabled := enabled || !debug_enabled
+
+(* Apply an explicit --log-level: set the process filter and export it via
+   ASH_LOG_LEVEL so child ash processes (the SSH wrapper's `ash _log` calls)
+   inherit the same level. *)
+let apply_log_level = function
+  | Some level ->
+      min_level := level;
+      Unix.putenv "ASH_LOG_LEVEL" (string_of_level level)
+  | None -> ()
 
 let color_enabled () =
   Sys.getenv_opt "NO_COLOR" = None
@@ -38,15 +64,18 @@ let bold = "\027[1m"
 
 let log level message =
   if level_rank level >= level_rank !min_level then
-    match level with
-    | Debug when not !debug_enabled -> ()
-    | _ ->
-        let timestamp = timestamp () in
-        if color_enabled () then
-          Printf.eprintf "%s%s%s %sash%s %s%s%s %s\n%!" dim timestamp reset dim
-            reset (level_color level) (level_name level) reset message
-        else
-          Printf.eprintf "%s ash %s %s\n%!" timestamp (level_name level) message
+    let timestamp = timestamp () in
+    if color_enabled () then
+      Printf.eprintf "%s%s%s %sash%s %s%s%s %s\n%!" dim timestamp reset dim
+        reset (level_color level) (level_name level) reset message
+    else Printf.eprintf "%s ash %s %s\n%!" timestamp (level_name level) message
+
+(* Map a level name to a log call; used by the internal `ash _log` command the
+   generated SSH wrappers call instead of carrying their own logging. *)
+let log_level level message =
+  match level_of_string (String.lowercase_ascii level) with
+  | Some level -> log level message
+  | None -> ()
 
 let debug fmt = Printf.ksprintf (log Debug) fmt
 let info fmt = Printf.ksprintf (log Info) fmt
