@@ -35,6 +35,8 @@ and this project uses its existing Git tags for version history.
 
 ### Changed
 
+- Removed `-v/--verbose` from `ash spawn` and `ash resume`: virtle's own verbosity now comes only from `--log-level` (info implies one virtle `-v`, debug implies `-vv`). `-v` remains on `ash attach`/`ash run` (passed to ssh) and `ash cp` (prints the copy result).
+
 - Log lines and the `started VM`/`attach`/`stop` hints now use the application name (`ASH_NAME`, default `ash`) instead of a hardcoded `ash` label, so they match the binary and state dir in use. The man page documents the stream split: results go to stdout and are always printed; diagnostics go to stderr and are gated by `--log-level`/`ASH_LOG_LEVEL`.
 
 - Replaced the `--debug` flag with `--log-level=debug|info|warn|error`, applied to every command; it sets the minimum level shown (default `info`; `ash run` defaults to `error` unless `--log-level` is given) and is exported as `ASH_LOG_LEVEL` so child ash processes (the SSH wrapper's `ash _log` calls) inherit it. `--log-level=info` also implies one virtle `-v` and `debug` implies `-vv`, so virtle's own logging follows the requested level. `ASH_LOG=debug` remains as a legacy alias for `ASH_LOG_LEVEL=debug`.

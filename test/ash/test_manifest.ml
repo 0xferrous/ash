@@ -2388,28 +2388,28 @@ let test_launch_args () =
     | Error message -> message
     | Ok () -> "");
   assert_equal "background launch omits SSH"
-    "--manifest,/state/virtle.toml,-v,launch,--resume,no"
-    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml" ~verbose:[ () ]
-       ~log_level:None ~ssh:false
+    "--manifest,/state/virtle.toml,launch,--resume,no"
+    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml" ~log_level:None
+       ~ssh:false
     |> String.concat ",");
   assert_equal "foreground launch attaches through Virtle"
-    "--manifest,/state/virtle.toml,-v,-v,launch,--resume,force,--ssh"
+    "--manifest,/state/virtle.toml,launch,--resume,force,--ssh"
     (Virtle.launch_args ~resume:(Some "force") ~path:"/state/virtle.toml"
-       ~verbose:[ (); () ] ~log_level:None ~ssh:true
+       ~log_level:None ~ssh:true
     |> String.concat ",");
   assert_equal "log-level info implies one virtle -v"
-    "--manifest,/state/virtle.toml,-v,-v,launch,--resume,no"
-    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml" ~verbose:[ () ]
+    "--manifest,/state/virtle.toml,-v,launch,--resume,no"
+    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml"
        ~log_level:(Some Log.Info) ~ssh:false
     |> String.concat ",");
   assert_equal "log-level debug implies two virtle -v"
-    "--manifest,/state/virtle.toml,-v,-v,-v,launch,--resume,no"
-    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml" ~verbose:[ () ]
+    "--manifest,/state/virtle.toml,-v,-v,launch,--resume,no"
+    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml"
        ~log_level:(Some Log.Debug) ~ssh:false
     |> String.concat ",");
   assert_equal "warn/error levels do not imply virtle -v"
-    "--manifest,/state/virtle.toml,-v,launch,--resume,no"
-    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml" ~verbose:[ () ]
+    "--manifest,/state/virtle.toml,launch,--resume,no"
+    (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml"
        ~log_level:(Some Log.Error) ~ssh:false
     |> String.concat ",")
 

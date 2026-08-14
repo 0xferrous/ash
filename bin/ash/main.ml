@@ -27,7 +27,7 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
     ?memory:(Option.map Virtle.parse_memory_mib memory)
     ?ssh_ready_timeout ?name ?user ~config_path:config ?flake ~override_inputs
     ~spaces ~kernel_serial ~mount_cwd ~eval ~ephemeral ~attach ~keep ~kitty
-    ~waypipe ?log_level:opts.global.log_level ~verbose:opts.verbose ()
+    ~waypipe ?log_level:opts.global.log_level ()
 
 let list_vms global cache =
   Log.apply_log_level global.log_level;
@@ -58,7 +58,7 @@ let resume opts name attach keep =
   Log.apply_log_level opts.global.log_level;
   if keep && not attach then Log.fatal "--keep requires --attach";
   Virtle.resume ?virtle:opts.virtle ~name ~attach ~keep
-    ?log_level:opts.global.log_level ~verbose:opts.verbose ()
+    ?log_level:opts.global.log_level ()
 
 let stop opts name suspend force =
   Log.apply_log_level opts.global.log_level;
@@ -254,8 +254,9 @@ let verbose_arg =
     value & flag_all
     & info [ "verbose"; "v" ]
         ~doc:
-          "Increase verbosity. For spawn, passed to virtle; for attach, passed \
-           to ssh. Repeatable.")
+          "Increase verbosity: attach and run pass -v to ssh, cp prints the \
+           copy result. Virtle launch verbosity is controlled by --log-level \
+           instead. Repeatable.")
 
 let kernel_serial_arg =
   let modes =
@@ -356,9 +357,13 @@ let log_level_arg =
         ~docv:"LEVEL")
 
 let global_opts_arg = Term.(const global_opts $ log_level_arg)
+let virtle_opts_no_verbose global virtle = { global; virtle; verbose = [] }
 
 let virtle_opts_arg =
   Term.(const virtle_opts $ global_opts_arg $ virtle_arg $ verbose_arg)
+
+let virtle_opts_no_verbose_arg =
+  Term.(const virtle_opts_no_verbose $ global_opts_arg $ virtle_arg)
 
 let spawn_man = Pages.spawn.man
 
@@ -366,7 +371,7 @@ let spawn_cmd =
   Cmd.v
     (Cmd.info "spawn" ~doc:"spawn an agent VM" ~man:spawn_man)
     Term.(
-      const spawn $ virtle_opts_arg $ ssh_arg $ systemd_ssh_proxy_arg
+      const spawn $ virtle_opts_no_verbose_arg $ ssh_arg $ systemd_ssh_proxy_arg
       $ ro_store_socket_arg $ nix_store_strategy_arg $ nix_store_image_size_arg
       $ persist_image_size_arg $ memory_arg $ ssh_ready_timeout_arg $ config_arg
       $ flake_arg $ override_input_arg $ name_arg $ user_arg $ spaces_arg
@@ -426,7 +431,8 @@ let resume_cmd =
   Cmd.v
     (Cmd.info "resume" ~doc:"resume a suspended VM" ~man:resume_man)
     Term.(
-      const resume $ virtle_opts_arg $ resume_name_arg $ attach_flag $ keep_flag)
+      const resume $ virtle_opts_no_verbose_arg $ resume_name_arg $ attach_flag
+      $ keep_flag)
 
 let ls_cache_flag =
   Arg.(
