@@ -67,7 +67,7 @@
 
         ashBuild = ocamlPackages.buildDunePackage {
           pname = "ash";
-          version = "0.1.8";
+          version = "0.1.9";
           inherit src;
           duneVersion = "3";
 
@@ -127,7 +127,7 @@
 
         ash-command-pages = pkgs.stdenvNoCC.mkDerivation {
           pname = "ash-command-pages";
-          version = "0.1.8";
+          version = "0.1.9";
           dontUnpack = true;
           installPhase = ''
             runHook preInstall

@@ -7,6 +7,8 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.9] - 2026-08-14
+
 ### Fixed
 
 - Include the combined NixOS and home-manager registration file in image-backed stores, preventing guest registration imports from failing because the generated store path is missing.
@@ -175,7 +177,8 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.9...HEAD
+[v0.1.9]: https://github.com/0xferrous/ash/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/0xferrous/ash/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/0xferrous/ash/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/0xferrous/ash/compare/v0.1.5...v0.1.6
