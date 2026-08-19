@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Fixed
+
+- Background VM launches no longer poll Virtle's `sshReadyAt` signal after omitting `ssh.ready_socket`; they wait only for QEMU Guest Agent readiness before applying registration and mounts, so guests without the SSH-ready signal no longer time out during `ash spawn`.
+
 ## [v0.1.9] - 2026-08-14
 
 ### Fixed

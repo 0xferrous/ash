@@ -1348,6 +1348,34 @@ let contains_substring text needle =
     in
     loop 0
 
+let guest_agent_ready_action =
+  {
+    Qga.name = "ash-guest-agent-ready";
+    path = "/run/current-system/sw/bin/true";
+    args = [];
+  }
+
+let wait_for_guest_agent ~virtle ~path ~name =
+  let deadline = Unix.gettimeofday () +. 120. in
+  let rec loop () =
+    if Unix.gettimeofday () > deadline then
+      Log.fatal "timed out waiting for VM %S guest agent readiness" name;
+    try
+      let output =
+        virtle_rpc ~debug:false ~virtle ~path ~method_name:"guest-exec"
+          ~params:(Qga.params guest_agent_ready_action) ()
+      in
+      match (Qga.result guest_agent_ready_action output).exit_code with
+      | Some 0 -> ()
+      | _ ->
+          Unix.sleepf 0.25;
+          loop ()
+    with Failure _ ->
+      Unix.sleepf 0.25;
+      loop ()
+  in
+  loop ()
+
 let wait_for_ssh_ready ~virtle ~path ~name =
   let deadline = Unix.gettimeofday () +. 120. in
   let rec loop () =
@@ -3862,7 +3890,9 @@ let registration_for_inputs (inputs : manifest_inputs) =
 
 let wait_and_mount (inputs : manifest_inputs) path =
   let registration = registration_for_inputs inputs in
-  wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name;
+  if inputs.ssh_ready then
+    wait_for_ssh_ready ~virtle:inputs.virtle ~path ~name:inputs.name
+  else wait_for_guest_agent ~virtle:inputs.virtle ~path ~name:inputs.name;
   execute_nix_registration ~virtle:inputs.virtle ~path registration;
   execute_space_mounts ~virtle:inputs.virtle ~path
     (space_mounts_for_inputs inputs);
