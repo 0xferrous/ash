@@ -1363,7 +1363,8 @@ let wait_for_guest_agent ~virtle ~path ~name =
     try
       let output =
         virtle_rpc ~debug:false ~virtle ~path ~method_name:"guest-exec"
-          ~params:(Qga.params guest_agent_ready_action) ()
+          ~params:(Qga.params guest_agent_ready_action)
+          ()
       in
       match (Qga.result guest_agent_ready_action output).exit_code with
       | Some 0 -> ()
