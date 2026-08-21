@@ -1400,16 +1400,34 @@ let select_attach_vm name =
               Log.info "attach cancelled";
               exit 0))
 
-let virtle_rpc ?(debug = true) ~virtle ~path ~method_name ?params () =
-  let args = [ virtle; "--manifest"; path; "rpc"; method_name ] in
-  let args =
-    match params with Some params -> args @ [ params ] | None -> args
-  in
-  Util.command_output ~debug
-    (String.concat " " (List.map Util.shell_quote args))
+let virtle_rpc ?(debug = true) ?timeout ~virtle ~path ~method_name ?params () =
+  match timeout with
+  | Some timeout -> (
+      let socket =
+        control_socket_path (virtle_state_dir_for_path (Filename.dirname path))
+      in
+      let params =
+        match params with
+        | Some params -> Yojson.Safe.from_string params
+        | None -> `Assoc []
+      in
+      match control_socket_rpc ~timeout socket ~method_name ~params with
+      | Some output -> output
+      | None ->
+          failwith
+            (Printf.sprintf "virtle RPC %s timed out after %.1fs" method_name
+               timeout))
+  | None ->
+      let args = [ virtle; "--manifest"; path; "rpc"; method_name ] in
+      let args =
+        match params with Some params -> args @ [ params ] | None -> args
+      in
+      Util.command_output ~debug
+        (String.concat " " (List.map Util.shell_quote args))
 
 let rpc_status ?(debug = true) ~virtle ~path () =
-  virtle_rpc ~debug ~virtle ~path ~method_name:"status" ()
+  virtle_rpc ~debug ~timeout:default_control_socket_timeout ~virtle ~path
+    ~method_name:"status" ()
 
 let contains_substring text needle =
   let text_len = String.length text in
@@ -1438,7 +1456,8 @@ let wait_for_guest_agent ~virtle ~path ~name =
       Log.fatal "timed out waiting for VM %S guest agent readiness" name;
     try
       let output =
-        virtle_rpc ~debug:false ~virtle ~path ~method_name:"guest-exec"
+        virtle_rpc ~debug:false ~timeout:default_control_socket_timeout ~virtle
+          ~path ~method_name:"guest-exec"
           ~params:(Qga.params guest_agent_ready_action)
           ()
       in
@@ -2878,8 +2897,8 @@ let install_ssh_key ~virtle ~path ~name ~user =
       let ok, failure =
         try
           let output =
-            virtle_rpc ~virtle ~path ~method_name:"guest-exec"
-              ~params:(Qga.params action) ()
+            virtle_rpc ~timeout:default_control_socket_timeout ~virtle ~path
+              ~method_name:"guest-exec" ~params:(Qga.params action) ()
           in
           match (Qga.result action output).exit_code with
           | Some 0 -> (true, "")

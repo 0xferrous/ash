@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Fixed
+
+- Attach, copy, and launch readiness checks now bound status and SSH-key guest-agent RPCs, failing or retrying instead of hanging indefinitely when QGA is wedged.
+
 ## [v0.1.11] - 2026-08-21
 
 ### Added

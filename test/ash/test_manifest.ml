@@ -1611,7 +1611,10 @@ owners = ["space:rust"]
 
 let test_control_socket_rpc_timeout () =
   let root = temp_dir "ash-test-control-socket-timeout" in
-  let socket_path = Filename.concat root "virtle.sock" in
+  let virtle_state = Filename.concat root "virtle_state" in
+  Unix.mkdir virtle_state 0o700;
+  let socket_path = Filename.concat virtle_state "virtle.sock" in
+  let manifest_path = Filename.concat root "virtle.toml" in
   let listener = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.bind listener (Unix.ADDR_UNIX socket_path);
   Unix.listen listener 1;
@@ -1631,8 +1634,11 @@ let test_control_socket_rpc_timeout () =
             ignore (Unix.waitpid [] pid);
             try Unix.unlink socket_path with Unix.Unix_error _ -> ())
           (fun () ->
-            Virtle.control_socket_rpc ~timeout:0.25 socket_path
-              ~method_name:"status" ~params:(`Assoc []))
+            try
+              Some
+                (Virtle.virtle_rpc ~timeout:0.25 ~virtle:"unused"
+                   ~path:manifest_path ~method_name:"status" ())
+            with Failure _ -> None)
       in
       (* The peer closes normally after five seconds, which would produce an
          empty successful response without the configured timeout. [None]
