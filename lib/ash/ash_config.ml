@@ -43,6 +43,23 @@ let global_kitty config =
   Otoml.find_opt config Otoml.get_boolean [ "global"; "kitty" ]
   |> Option.value ~default:false
 
+let positive_timeout config path ~field ~default =
+  let value =
+    Otoml.find_opt config Otoml.get_integer path |> Option.value ~default
+  in
+  if value <= 0 then Log.fatal "%s must be greater than zero" field;
+  Float.of_int value
+
+let global_ls_control_timeout config =
+  positive_timeout config
+    [ "global"; "ls"; "control_timeout_seconds" ]
+    ~field:"global.ls.control_timeout_seconds" ~default:3
+
+let global_ls_disk_timeout config =
+  positive_timeout config
+    [ "global"; "ls"; "disk_timeout_seconds" ]
+    ~field:"global.ls.disk_timeout_seconds" ~default:10
+
 let global_network_bridge config =
   Otoml.find_opt config Otoml.get_string [ "global"; "network_bridge" ]
   |> Option.value ~default:"ash0"

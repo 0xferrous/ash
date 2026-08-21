@@ -735,8 +735,37 @@ type cached_image_info = {
 type rm_target = Vm_state of vm_info | Cached_image of cached_image_info
 
 let control_socket_path dir = Filename.concat dir "virtle.sock"
+let default_control_socket_timeout = 3.0
+let default_disk_usage_timeout = 10.0
 
-let socket_accepts_connection path =
+let wait_for_fd ~read fd deadline =
+  let rec loop () =
+    let remaining = deadline -. Unix.gettimeofday () in
+    if remaining <= 0. then false
+    else
+      try
+        let readable, writable, _ =
+          if read then Unix.select [ fd ] [] [] remaining
+          else Unix.select [] [ fd ] [] remaining
+        in
+        if read then readable <> [] else writable <> []
+      with Unix.Unix_error (Unix.EINTR, _, _) -> loop ()
+  in
+  loop ()
+
+let connect_with_timeout fd path deadline =
+  Unix.set_nonblock fd;
+  try Unix.connect fd (Unix.ADDR_UNIX path)
+  with
+  | Unix.Unix_error ((Unix.EINPROGRESS | Unix.EAGAIN | Unix.EWOULDBLOCK), _, _)
+  ->
+    if not (wait_for_fd ~read:false fd deadline) then
+      raise (Unix.Unix_error (Unix.ETIMEDOUT, "connect", path));
+    Option.iter
+      (fun error -> raise (Unix.Unix_error (error, "connect", path)))
+      (Unix.getsockopt_error fd)
+
+let socket_accepts_connection ?(timeout = default_control_socket_timeout) path =
   if not (Sys.file_exists path) then false
   else
     let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
@@ -744,17 +773,19 @@ let socket_accepts_connection path =
       ~finally:(fun () -> Unix.close fd)
       (fun () ->
         try
-          Unix.connect fd (Unix.ADDR_UNIX path);
+          connect_with_timeout fd path (Unix.gettimeofday () +. timeout);
           true
         with Unix.Unix_error _ -> false)
 
-let control_socket_rpc path ~method_name ~params =
+let control_socket_rpc ?(timeout = default_control_socket_timeout) path
+    ~method_name ~params =
   let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Fun.protect
     ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ())
     (fun () ->
       try
-        Unix.connect fd (Unix.ADDR_UNIX path);
+        let deadline = Unix.gettimeofday () +. timeout in
+        connect_with_timeout fd path deadline;
         let request =
           Yojson.Safe.to_string
             (`Assoc
@@ -765,9 +796,23 @@ let control_socket_rpc path ~method_name ~params =
                ])
           ^ "\n"
         in
-        let _ = Unix.write_substring fd request 0 (String.length request) in
+        let rec write_request offset =
+          if offset < String.length request then (
+            if not (wait_for_fd ~read:false fd deadline) then
+              raise (Unix.Unix_error (Unix.ETIMEDOUT, "write", path));
+            let written =
+              Unix.write_substring fd request offset
+                (String.length request - offset)
+            in
+            if written = 0 then
+              raise (Unix.Unix_error (Unix.EPIPE, "write", path));
+            write_request (offset + written))
+        in
+        write_request 0;
         let buffer = Bytes.create 4096 in
         let rec read_response acc =
+          if not (wait_for_fd ~read:true fd deadline) then
+            raise (Unix.Unix_error (Unix.ETIMEDOUT, "read", path));
           let n = Unix.read fd buffer 0 (Bytes.length buffer) in
           if n <= 0 then acc
           else
@@ -779,9 +824,9 @@ let control_socket_rpc path ~method_name ~params =
       with Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _ ->
         None)
 
-let control_socket_status_cid path =
+let control_socket_status_cid ?timeout path =
   Option.bind
-    (control_socket_rpc path ~method_name:"status" ~params:(`Assoc []))
+    (control_socket_rpc ?timeout path ~method_name:"status" ~params:(`Assoc []))
     (Qga.int_field ~field:"cid")
 
 let parse_vm_stats output =
@@ -793,16 +838,16 @@ let parse_vm_stats output =
       | _ -> None)
   | _ -> None
 
-let control_socket_vm_stats path ~mac =
+let control_socket_vm_stats ?timeout path ~mac =
   let action = Qga.vm_stats_action ~mac in
   let params = Yojson.Safe.from_string (Qga.params action) in
-  match control_socket_rpc path ~method_name:"guest-exec" ~params with
+  match control_socket_rpc ?timeout path ~method_name:"guest-exec" ~params with
   | Some response when Qga.int_field ~field:"exitCode" response = Some 0 ->
       Option.bind (Qga.output_data response) parse_vm_stats
   | _ -> None
 
-let control_socket_ssh_stats path ~mac =
-  match control_socket_vm_stats path ~mac with
+let control_socket_ssh_stats ?timeout path ~mac =
+  match control_socket_vm_stats ?timeout path ~mac with
   | Some (_, connections, ptys) -> Some (connections, ptys)
   | None -> None
 
@@ -859,23 +904,35 @@ let first_word value =
 let ignored_state_entry = function "hotmounts" | "shares" -> true | _ -> false
 let state_path_size path = path_size ~exclude_entry:ignored_state_entry path
 
-let disk_usage path =
+let bounded_du_size ?(timeout = default_disk_usage_timeout) ?(apparent = false)
+    path =
   let hotmounts = Filename.concat path "hotmounts" in
   let shares = Filename.concat path "shares" in
+  let apparent_arg = if apparent then " --apparent-size" else "" in
   try
     let output =
       Util.command_output
-        ("du -sk --exclude=" ^ Util.shell_quote hotmounts ^ " --exclude="
-       ^ Util.shell_quote shares ^ " -- " ^ Util.shell_quote path
-       ^ " 2>/dev/null")
+        (Printf.sprintf
+           "timeout --signal=KILL %gs du -sk%s --exclude=%s --exclude=%s -- %s \
+            2>/dev/null"
+           timeout apparent_arg
+           (Util.shell_quote hotmounts)
+           (Util.shell_quote shares) (Util.shell_quote path))
     in
     let output =
       String.map (function '\t' | '\n' | '\r' -> ' ' | c -> c) output
     in
     match first_word output with
     | Some kib -> Int64.mul (Int64.of_string kib) 1024L
-    | None -> state_path_size path
-  with Failure _ | Invalid_argument _ -> state_path_size path
+    | None -> 0L
+  with Failure _ | Invalid_argument _ ->
+    Log.debug "timed out or failed while measuring %s" path;
+    0L
+
+let disk_usage ?timeout path = bounded_du_size ?timeout path
+
+let bounded_apparent_size ?timeout path =
+  bounded_du_size ?timeout ~apparent:true path
 
 let human_size bytes =
   let units = [| "B"; "KiB"; "MiB"; "GiB"; "TiB" |] in
@@ -893,7 +950,8 @@ let format_time seconds =
   Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
 
-let list_vms () =
+let list_vms ?(control_socket_timeout = default_control_socket_timeout)
+    ?(disk_usage_timeout = default_disk_usage_timeout) () =
   let base = state_base_dir () in
   if not (Sys.file_exists base) then []
   else
@@ -908,8 +966,13 @@ let list_vms () =
               control_socket_path (virtle_state_dir_for_path path)
             in
             let status, cid =
-              if socket_accepts_connection control_socket then
-                (Running, control_socket_status_cid control_socket)
+              if
+                socket_accepts_connection ~timeout:control_socket_timeout
+                  control_socket
+              then
+                ( Running,
+                  control_socket_status_cid ~timeout:control_socket_timeout
+                    control_socket )
               else (Stopped, None)
             in
             Some
@@ -917,8 +980,9 @@ let list_vms () =
                 name;
                 status;
                 cid;
-                disk_bytes = disk_usage path;
-                apparent_bytes = state_path_size path;
+                disk_bytes = disk_usage ~timeout:disk_usage_timeout path;
+                apparent_bytes =
+                  bounded_apparent_size ~timeout:disk_usage_timeout path;
                 modified = stat.st_mtime;
                 path;
               }
@@ -929,12 +993,12 @@ let status_string = function Running -> "running" | Stopped -> "stopped"
 let cid_string = function Some cid -> string_of_int cid | None -> "-"
 let count_string = function Some count -> string_of_int count | None -> "-"
 
-let vm_stats vm =
+let vm_stats ?(timeout = default_control_socket_timeout) vm =
   match vm.status with
   | Stopped -> (None, None, None)
   | Running -> (
       match
-        control_socket_vm_stats
+        control_socket_vm_stats ~timeout
           (control_socket_path (virtle_state_dir_for_path vm.path))
           ~mac:(network_mac vm.name)
       with
@@ -947,13 +1011,18 @@ let ssh_stats vm =
 
 let ip_string = function Some ip -> ip | None -> "-"
 
-let print_vm_list () =
-  let vms = list_vms () in
+let validate_list_timeout ~option value =
+  if value <= 0. then Log.fatal "%s must be greater than zero" option
+
+let print_vm_list ~control_socket_timeout ~disk_usage_timeout () =
+  validate_list_timeout ~option:"--control-timeout" control_socket_timeout;
+  validate_list_timeout ~option:"--disk-timeout" disk_usage_timeout;
+  let vms = list_vms ~control_socket_timeout ~disk_usage_timeout () in
   Printf.printf "%-32s %-8s %-15s %5s %4s %4s %10s %10s  %-19s %s\n" "NAME"
     "STATUS" "IP" "CID" "SSH" "PTY" "DISK" "VIRTUAL" "MODIFIED" "PATH";
   List.iter
     (fun vm ->
-      let ip, connections, ptys = vm_stats vm in
+      let ip, connections, ptys = vm_stats ~timeout:control_socket_timeout vm in
       Printf.printf "%-32s %-8s %-15s %5s %4s %4s %10s %10s  %-19s %s\n" vm.name
         (status_string vm.status) (ip_string ip) (cid_string vm.cid)
         (count_string connections) (count_string ptys)
@@ -983,8 +1052,13 @@ let cache_reference_table vms =
     vms;
   references
 
-let list_cached_images ?vms () =
-  let vms = Option.value vms ~default:(list_vms ()) in
+let list_cached_images
+    ?(control_socket_timeout = default_control_socket_timeout)
+    ?(disk_usage_timeout = default_disk_usage_timeout) ?vms () =
+  let vms =
+    Option.value vms
+      ~default:(list_vms ~control_socket_timeout ~disk_usage_timeout ())
+  in
   let references = cache_reference_table vms in
   let base = nix_store_image_cache_dir () in
   if not (Sys.file_exists base) then []
@@ -1022,7 +1096,7 @@ let list_cached_images ?vms () =
                     Hashtbl.find_opt references
                       (Filename.chop_suffix name ".img")
                     |> Option.value ~default:[] |> List.rev;
-                  disk_bytes = disk_usage path;
+                  disk_bytes = disk_usage ~timeout:disk_usage_timeout path;
                   apparent_bytes = stat.st_size;
                   modified = stat.st_mtime;
                   path;
@@ -1087,9 +1161,11 @@ let cached_image_list_item image =
     (cached_image_origin image)
     image.path
 
-let print_cached_image_list () =
+let print_cached_image_list ~control_socket_timeout ~disk_usage_timeout () =
+  validate_list_timeout ~option:"--control-timeout" control_socket_timeout;
+  validate_list_timeout ~option:"--disk-timeout" disk_usage_timeout;
   Printf.printf "%s\n" cached_image_list_header;
-  list_cached_images ()
+  list_cached_images ~control_socket_timeout ~disk_usage_timeout ()
   |> List.iter (fun image ->
       Printf.printf "%s\n" (cached_image_list_item image))
 

@@ -13,6 +13,12 @@
 # network_bridge = "ash0"
 # qemu_bridge_helper = "/run/wrappers/bin/qemu-bridge-helper"
 
+# Bound potentially blocking `ash ls` operations. Values are positive integer
+# seconds; defaults shown below.
+# [global.ls]
+# control_timeout_seconds = 3
+# disk_timeout_seconds = 10
+
 # Nix store strategy. "shared" is the default and exposes the host store
 # read-only through virtiofs. "image" creates a private ext4 image mounted at
 # /nix by a compatible guest configuration.

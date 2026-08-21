@@ -298,6 +298,24 @@ memory = 8192
   let doc = parse_toml manifest in
   assert_int "configured memory" 8192 (find_int doc [ "machine"; "memory" ])
 
+let test_global_ls_timeout_config () =
+  let config =
+    parse_toml
+      {|[global.ls]
+control_timeout_seconds = 7
+disk_timeout_seconds = 30
+|}
+  in
+  assert_bool "configured ls control timeout" true
+    (Ash_config.global_ls_control_timeout config = 7.);
+  assert_bool "configured ls disk timeout" true
+    (Ash_config.global_ls_disk_timeout config = 30.);
+  let defaults = parse_toml "" in
+  assert_bool "default ls control timeout" true
+    (Ash_config.global_ls_control_timeout defaults = 3.);
+  assert_bool "default ls disk timeout" true
+    (Ash_config.global_ls_disk_timeout defaults = 10.)
+
 let test_spawn_memory_override () =
   let root = temp_dir "ash-test-memory-override" in
   let home = Filename.concat root "home" in
@@ -1591,6 +1609,38 @@ owners = ["space:rust"]
     (json |> member "hotmounts" |> member "mounts" |> index 0
    |> member "guestPath" |> to_string)
 
+let test_control_socket_rpc_timeout () =
+  let root = temp_dir "ash-test-control-socket-timeout" in
+  let socket_path = Filename.concat root "virtle.sock" in
+  let listener = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Unix.bind listener (Unix.ADDR_UNIX socket_path);
+  Unix.listen listener 1;
+  match Unix.fork () with
+  | 0 ->
+      let client, _ = Unix.accept listener in
+      Unix.close listener;
+      Unix.sleepf 5.;
+      Unix.close client;
+      exit 0
+  | pid ->
+      Unix.close listener;
+      let started = Unix.gettimeofday () in
+      let result =
+        Fun.protect
+          ~finally:(fun () ->
+            (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+            ignore (Unix.waitpid [] pid);
+            try Unix.unlink socket_path with Unix.Unix_error _ -> ())
+          (fun () ->
+            Virtle.control_socket_rpc ~timeout:0.25 socket_path
+              ~method_name:"status" ~params:(`Assoc []))
+      in
+      let elapsed = Unix.gettimeofday () -. started in
+      assert_bool "unresponsive control socket returns no result" true
+        (result = None);
+      assert_bool "control socket RPC honors configured timeout" true
+        (elapsed < 1.)
+
 let test_atomic_write_replaces_complete_file () =
   let root = temp_dir "ash-test-atomic-write" in
   let path = Filename.concat root "record.meta" in
@@ -2559,6 +2609,7 @@ let run name test =
 let () =
   run "spaces render to virtle manifest" test_spaces_to_virtle_manifest;
   run "global memory config" test_global_memory_config;
+  run "global ls timeout config" test_global_ls_timeout_config;
   run "spawn memory override" test_spawn_memory_override;
   run "ssh ready gating" test_ssh_ready_gating;
   run "global Kitty config" test_global_kitty_config;
@@ -2619,6 +2670,7 @@ let () =
     test_inspect_includes_config_and_hotmounts;
   run "SSH wrapper restores runtime mounts"
     test_ssh_wrapper_restores_runtime_mounts;
+  run "control socket RPC timeout" test_control_socket_rpc_timeout;
   run "atomic write replaces complete file"
     test_atomic_write_replaces_complete_file;
   run "nix evaluation metadata parser" test_nix_evaluation_metadata_parser;

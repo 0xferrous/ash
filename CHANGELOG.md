@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ash ls` now bounds Virtle control-socket connect/read/write operations and per-VM disk-usage scans, preventing an unresponsive VM, guest agent, or filesystem from hanging the entire listing. The relaxed defaults are 3 seconds per socket operation and 10 seconds per disk scan, configurable through `[global.ls]` in `config.toml`.
+
 ## [v0.1.10] - 2026-08-19
 
 ### Fixed

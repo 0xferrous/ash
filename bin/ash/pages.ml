@@ -528,6 +528,13 @@ let ls =
           "DISK is host storage currently used. VIRTUAL is apparent size, \
            including sparse files such as persist.img. Both exclude the host \
            mount staging tree so nested staging mounts are not traversed.";
+        `S "TIMEOUTS";
+        `P
+          "Virtle control-socket connect, write, and read operations default \
+           to a 3-second timeout each. Per-VM disk-usage scans default to 10 \
+           seconds. Configure positive integer second values with \
+           global.ls.control_timeout_seconds and \
+           global.ls.disk_timeout_seconds in config.toml.";
         `P
           "With --cache, output shows each cache key, host disk usage, sparse \
            virtual size, modification time, logical VM reference count, \

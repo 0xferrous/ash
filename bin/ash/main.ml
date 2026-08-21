@@ -31,7 +31,17 @@ let spawn opts ssh systemd_ssh_proxy ro_store_socket nix_store_strategy
 
 let list_vms global cache =
   Log.apply_log_level global.log_level;
-  if cache then Virtle.print_cached_image_list () else Virtle.print_vm_list ()
+  let config =
+    Ash_config.load_for_spaces (Util.default_ash_config_path ()) []
+  in
+  let control_timeout = Ash_config.global_ls_control_timeout config in
+  let disk_timeout = Ash_config.global_ls_disk_timeout config in
+  if cache then
+    Virtle.print_cached_image_list ~control_socket_timeout:control_timeout
+      ~disk_usage_timeout:disk_timeout ()
+  else
+    Virtle.print_vm_list ~control_socket_timeout:control_timeout
+      ~disk_usage_timeout:disk_timeout ()
 
 let inspect_vm global json name =
   Log.apply_log_level global.log_level;
