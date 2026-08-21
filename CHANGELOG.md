@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Added
+
+- The flake now exports composable NixOS guest modules: `ashGuest` provides the complete Ash/Virtle guest contract, while `ashGuestBoot`, `ashGuestStore`, `ashGuestQga`, and `ashGuestSsh` expose the tmpfs/persist boot setup, shared or image-backed Nix store initialization, QEMU Guest Agent integration, and non-blocking SSH-ready signalling separately.
+
 ### Fixed
 
 - `ash ls` now bounds Virtle control-socket connect/read/write operations and per-VM disk-usage scans, preventing an unresponsive VM, guest agent, or filesystem from hanging the entire listing. The relaxed defaults are 3 seconds per socket operation and 10 seconds per disk scan, configurable through `[global.ls]` in `config.toml`.

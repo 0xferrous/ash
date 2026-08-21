@@ -25,6 +25,41 @@ Run directly:
 nix run github:0xferrous/ash -- --help
 ```
 
+## NixOS guest modules
+
+The flake exports an aggregate module containing the boot, Nix-store, QEMU
+Guest Agent, and Virtle SSH-readiness requirements for Ash guests:
+
+```nix
+{
+  inputs.ash.url = "github:0xferrous/ash";
+
+  outputs = { nixpkgs, ash, ... }: {
+    nixosConfigurations.agent = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ash.nixosModules.ashGuest
+        {
+          virtualisation.ash-guest = {
+            enable = true;
+            user = "x-multi";
+          };
+
+          users.users.x-multi = {
+            isNormalUser = true;
+            group = "users";
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The individual modules are also exported as `ashGuestBoot`, `ashGuestStore`,
+`ashGuestQga`, and `ashGuestSsh` for configurations that need to compose the
+requirements separately.
+
 ## Quickstart
 
 Start a reusable background VM. New VMs evaluate their NixOS configuration automatically:

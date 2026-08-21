@@ -227,6 +227,8 @@
       }
     )
     // {
+      nixosModules = import ./nix/modules;
+
       nixosConfigurations = {
         image-reconcile-first = imageReconcileFirst;
         image-reconcile-second = imageReconcileSecond;
