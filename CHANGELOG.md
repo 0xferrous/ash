@@ -7,6 +7,8 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.11] - 2026-08-21
+
 ### Added
 
 - The flake now exports composable NixOS guest modules: `ashGuest` provides the complete Ash/Virtle guest contract, while `ashGuestBoot`, `ashGuestStore`, `ashGuestQga`, and `ashGuestSsh` expose the tmpfs/persist boot setup, shared or image-backed Nix store initialization, QEMU Guest Agent integration, and non-blocking SSH-ready signalling separately.
@@ -191,7 +193,8 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.11...HEAD
+[v0.1.11]: https://github.com/0xferrous/ash/compare/v0.1.10...v0.1.11
 [v0.1.10]: https://github.com/0xferrous/ash/compare/v0.1.9...v0.1.10
 [v0.1.9]: https://github.com/0xferrous/ash/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/0xferrous/ash/compare/v0.1.7...v0.1.8
