@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Fixed
+
+- Background launches now provision the SSH key while QGA setup is healthy, and later attach/copy wrappers skip redundant guest setup; this avoids QGA `invalid pid 0` failures after long-running or self-updated guests have already completed registration and mounts.
+
 ## [v0.1.13] - 2026-08-22
 
 ### Added
