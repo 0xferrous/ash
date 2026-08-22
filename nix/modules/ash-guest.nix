@@ -18,6 +18,18 @@ in
       default = "agent";
       description = "User selected for Ash SSH sessions and key provisioning.";
     };
+
+    emptyPassword = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Allow the Ash guest user to log in with an empty password.";
+    };
+
+    passwordlessSudo = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Grant the Ash guest user passwordless sudo through the wheel group.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -30,6 +42,24 @@ in
 
     # Ash evaluates this option to discover the default SSH user.
     services.getty.autologinUser = lib.mkDefault cfg.user;
+
+    users.users.${cfg.user} = lib.mkMerge [
+      (lib.mkIf cfg.emptyPassword {
+        # An empty shadow hash permits the SSH "none" authentication method;
+        # hashing an empty plaintext password does not have the same effect.
+        hashedPassword = lib.mkDefault "";
+      })
+      (lib.mkIf cfg.passwordlessSudo {
+        extraGroups = lib.mkAfter [ "wheel" ];
+      })
+    ];
+
+    services.openssh.settings = lib.mkIf cfg.emptyPassword {
+      PasswordAuthentication = lib.mkDefault true;
+      PermitEmptyPasswords = lib.mkDefault true;
+    };
+    security.pam.services.sshd.allowNullPassword = lib.mkIf cfg.emptyPassword (lib.mkDefault true);
+    security.sudo.wheelNeedsPassword = lib.mkIf cfg.passwordlessSudo (lib.mkDefault false);
 
     assertions = [
       {

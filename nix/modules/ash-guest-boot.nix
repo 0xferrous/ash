@@ -17,10 +17,17 @@ in
       default = "/persist";
       description = "Mount point for Ash's persist image.";
     };
+
+    emergencyAccess = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Allow an interactive root shell when the systemd initrd enters emergency mode.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     boot.loader.grub.enable = false;
+    boot.initrd.systemd.emergencyAccess = lib.mkDefault cfg.emergencyAccess;
 
     boot.initrd.availableKernelModules = [
       "virtio_pci"

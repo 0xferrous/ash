@@ -7,6 +7,15 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Added
+
+- The complete Ash guest module now gives its configured agent user an empty SSH password and passwordless sudo by default, with `emptyPassword` and `passwordlessSudo` options for disabling either behavior.
+- Ash guest boot support now enables systemd-initrd emergency root access by default, configurable through `virtualisation.ash-guest.boot.emergencyAccess`.
+
+### Fixed
+
+- Shared-store guests now bind the Nix store from the consolidated `shares-ro` VirtioFS mount during initrd startup instead of trying to mount the removed legacy `ro-store` tag.
+
 ## [v0.1.12] - 2026-08-22
 
 ### Fixed

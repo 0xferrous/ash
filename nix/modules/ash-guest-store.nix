@@ -108,10 +108,12 @@ in
 
     boot.initrd.systemd.mounts = [
       (initrdMount {
-        what = "ro-store";
+        what = "/sysroot/run/ash/shares/ro/system/nix-store";
         where = "/sysroot/nix/.ro-store";
-        type = "virtiofs";
-        options = "ro";
+        type = "none";
+        options = "bind,ro";
+        requires = [ "sysroot-run-ash-shares-ro.mount" ];
+        after = [ "sysroot-run-ash-shares-ro.mount" ];
       })
       (initrdMount {
         what = "shares-ro";
