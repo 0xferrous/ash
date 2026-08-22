@@ -9,6 +9,7 @@ and this project uses its existing Git tags for version history.
 
 ### Fixed
 
+- Ash guest store support now enables the systemd-based initrd it depends on, ensuring shared and image-backed Nix stores are mounted before stage 2 starts.
 - Attach, copy, and launch readiness checks now bound status and SSH-key guest-agent RPCs, failing or retrying instead of hanging indefinitely when QGA is wedged.
 
 ## [v0.1.11] - 2026-08-21

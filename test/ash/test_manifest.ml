@@ -1622,7 +1622,7 @@ let test_control_socket_rpc_timeout () =
   | 0 ->
       let client, _ = Unix.accept listener in
       Unix.close listener;
-      Unix.sleepf 5.;
+      Unix.sleepf 30.;
       Unix.close client;
       exit 0
   | pid ->
@@ -1640,10 +1640,9 @@ let test_control_socket_rpc_timeout () =
                    ~path:manifest_path ~method_name:"status" ())
             with Failure _ -> None)
       in
-      (* The peer closes normally after five seconds, which would produce an
-         empty successful response without the configured timeout. [None]
-         therefore proves the timeout fired without relying on wall-clock
-         assertions that become flaky on loaded CI runners. *)
+      (* Keep the peer open well beyond the RPC deadline. A short peer sleep can
+         still expire while a heavily loaded CI runner has this process
+         descheduled, turning the expected timeout into an empty response. *)
       assert_bool "control socket RPC honors configured timeout" true
         (result = None)
 

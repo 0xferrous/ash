@@ -34,6 +34,9 @@ in
     lib.mkEnableOption "Ash shared and image-backed Nix store boot support";
 
   config = lib.mkIf cfg.store.enable {
+    # The store mounts and generator below run in the systemd-based initrd.
+    boot.initrd.systemd.enable = true;
+
     # Ash checks this marker before attempting to import registration data.
     # The shared local-overlay store already gets that database from its
     # readonly lower store, so importing it again is unnecessary and can fail.
