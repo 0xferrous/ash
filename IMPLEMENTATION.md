@@ -120,7 +120,7 @@ Spawn options:
 - `--nix-store-strategy shared|image` — override `global.nix_store.strategy` for this VM and save it in `ash-state.toml`.
 - `--nix-store-image-size-mib MIB` — override `global.nix_store.image_size_mib` for this VM and save it in `ash-state.toml`.
 - `--persist-image-size-mib MIB` — override `global.persist.image_size_mib` for this VM and save it in `ash-state.toml`.
-- `--kernel-serial=off|print|console` — disable serial I/O, stream guest kernel/init output, or connect host standard input and output to the guest serial console. Interactive `console` mode requires `--attach` without `--keep` so Virtle owns the terminal directly.
+- `--kernel-serial=off|print|console|socket` — disable serial I/O, stream guest kernel/init output, connect host standard input and output during foreground launch, or expose a persistent `serial.sock` under Virtle's state directory. Interactive `console` mode requires `--attach` without `--keep`; `socket` mode supports later access with `ash attach --serial NAME`.
 - `--mount-cwd` — mount the current host working directory under the guest workspace. Off by default.
 - `--attach` — attach after spawning. Without `--keep`, the VM stops when SSH exits.
 - `--kitty` — use `kitten ssh` for the attached session.

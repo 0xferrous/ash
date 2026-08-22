@@ -1,9 +1,14 @@
-type kernel_serial = Off | Print | Console
+type kernel_serial = Off | Print | Console | Socket
 
 let string_of_kernel_serial = function
   | Off -> "off"
   | Print -> "print"
   | Console -> "console"
+  | Socket -> "socket"
+
+let virtle_kernel_serial = function
+  | Socket -> "off"
+  | mode -> string_of_kernel_serial mode
 
 let nix_store_kernel_param = function
   | Ash_config.Shared -> "ash.nix-store=shared"
@@ -19,6 +24,8 @@ let is_mdns_kernel_param value =
   has_prefix ~prefix:"ash.mdns-host=" value
   || has_prefix ~prefix:"ash.mdns-mac=" value
 
+let is_console_kernel_param = has_prefix ~prefix:"console="
+
 let mdns_kernel_params ~name ~mac =
   [ "ash.mdns-host=" ^ Util.dns_label name; "ash.mdns-mac=" ^ mac ]
 
@@ -26,8 +33,10 @@ let kernel_serial_of_string ~field = function
   | "off" -> Off
   | "print" -> Print
   | "console" -> Console
+  | "socket" -> Socket
   | value ->
-      Log.fatal "%s must be one of off, print, or console (got %S)" field value
+      Log.fatal "%s must be one of off, print, console, or socket (got %S)"
+        field value
 
 type manifest_inputs = {
   config_path : string;
@@ -96,6 +105,10 @@ let find_virtiofsd () =
 let find_bindfs () =
   find_exe ~hint:"install bindfs into PATH so ash can create hot mounts." None
     "bindfs"
+
+let find_socat () =
+  find_exe ~hint:"install socat into PATH to attach to a serial console socket."
+    None "socat"
 
 let find_ssh explicit_path =
   find_exe ~hint:"pass a valid --ssh PATH." explicit_path "ssh"
@@ -2981,8 +2994,8 @@ let copy ?virtle ~name ~recursive ~verbose ~from_path ~to_path ~source () =
   let code =
     with_environment "ASH_SKIP_GUEST_SETUP" "1" (fun () ->
         Util.run_foreground scp
-          (scp_args ~wrapper ~identity ~host_name ~recursive
-             ~source:source_path ~destination:destination_path))
+          (scp_args ~wrapper ~identity ~host_name ~recursive ~source:source_path
+             ~destination:destination_path))
   in
   if code = 0 && verbose then
     Printf.printf "%s:%s -> %s:%s\n%!" (copy_source_name source) from_path
@@ -3335,8 +3348,11 @@ let render_resolved_manifest inputs =
     List.filter
       (fun value ->
         (not (is_nix_store_kernel_param value))
-        && not (is_mdns_kernel_param value))
+        && (not (is_mdns_kernel_param value))
+        && (inputs.kernel_serial <> Socket
+           || not (is_console_kernel_param value)))
       boot.kernel_params
+    @ (if inputs.kernel_serial = Socket then [ "console=ttyS0" ] else [])
     @ nix_store_kernel_param store_strategy
       :: mdns_kernel_params ~name:inputs.name ~mac:network_mac
   in
@@ -3407,15 +3423,24 @@ let render_resolved_manifest inputs =
             [
               ( "exec",
                 string_array
-                  [
-                    "qemu-system-{{.HostArch}}";
-                    "-netdev";
-                    Printf.sprintf "bridge,id=ashnet0,br=%s,helper=%s"
-                      network_bridge qemu_bridge_helper;
-                    "-device";
-                    Printf.sprintf "virtio-net-pci,netdev=ashnet0,mac=%s"
-                      network_mac;
-                  ] );
+                  ([
+                     "qemu-system-{{.HostArch}}";
+                     "-netdev";
+                     Printf.sprintf "bridge,id=ashnet0,br=%s,helper=%s"
+                       network_bridge qemu_bridge_helper;
+                     "-device";
+                     Printf.sprintf "virtio-net-pci,netdev=ashnet0,mac=%s"
+                       network_mac;
+                   ]
+                  @
+                  if inputs.kernel_serial = Socket then
+                    [
+                      "-chardev";
+                      "socket,id=ashserial0,path={{.StateDir}}/serial.sock,server=on,wait=off";
+                      "-serial";
+                      "chardev:ashserial0";
+                    ]
+                  else []) );
             ] );
         ( "machine",
           Otoml.table
@@ -3430,7 +3455,7 @@ let render_resolved_manifest inputs =
                ("path", Otoml.string boot.kernel);
                ("initrd_path", Otoml.string boot.initrd);
                ( "serial",
-                 Otoml.string (string_of_kernel_serial inputs.kernel_serial) );
+                 Otoml.string (virtle_kernel_serial inputs.kernel_serial) );
              ]
             @
             if kernel_params = [] then []
@@ -3931,7 +3956,7 @@ let validate_console_lifecycle ~kernel_serial ~attach ~keep =
       Error "--kernel-serial=console requires --attach for terminal access"
   | Console when keep ->
       Error "--kernel-serial=console cannot be combined with --keep"
-  | Off | Print | Console -> Ok ()
+  | Off | Print | Console | Socket -> Ok ()
 
 let require_console_lifecycle ~kernel_serial ~attach ~keep =
   match validate_console_lifecycle ~kernel_serial ~attach ~keep with
@@ -4203,19 +4228,82 @@ let run ?virtle ?name ~command ~verbose () =
         "no running VM to run the command in; start one with `ash spawn` or \
          attach with `ash attach`"
 
-let attach ?virtle ?name ~spawn ~keep ~kitty ~waypipe ?log_level ~verbose () =
+let parse_terminal_size output =
+  match
+    String.split_on_char ' ' (String.trim output)
+    |> List.filter (fun value -> value <> "")
+  with
+  | [ rows; cols ] -> (
+      match (int_of_string_opt rows, int_of_string_opt cols) with
+      | Some rows, Some cols when rows > 0 && cols > 0 -> Some (rows, cols)
+      | _ -> None)
+  | _ -> None
+
+let host_terminal_size () =
+  try Util.command_output ~debug:false "stty size" |> parse_terminal_size
+  with Failure _ -> None
+
+let set_guest_serial_size ~virtle ~path ~rows ~cols =
+  let action =
+    Qga.shell_action ~name:"ash-serial-size"
+      ~args:[ string_of_int rows; string_of_int cols ]
+      {sh|
+PATH=/run/current-system/sw/bin:/bin
+stty rows "$1" cols "$2" < /dev/ttyS0
+|sh}
+  in
+  try
+    let output =
+      virtle_rpc ~debug:false ~timeout:default_control_socket_timeout ~virtle
+        ~path ~method_name:"guest-exec" ~params:(Qga.params action) ()
+    in
+    match (Qga.result action output).exit_code with
+    | Some 0 -> ()
+    | _ ->
+        Log.warn "could not set guest serial terminal size to %dx%d" cols rows
+  with Failure _ ->
+    Log.warn "could not set guest serial terminal size to %dx%d" cols rows
+
+let attach_serial_running ?virtle (vm : vm_info) =
+  let socket =
+    Filename.concat (virtle_state_dir_for_path vm.path) "serial.sock"
+  in
+  if not (Sys.file_exists socket) then
+    Log.fatal
+      "VM %S has no serial socket at %s; spawn it with --kernel-serial=socket"
+      vm.name socket;
+  let virtle = find_virtle virtle in
+  let path = Filename.concat vm.path "virtle.toml" in
+  Option.iter
+    (fun (rows, cols) -> set_guest_serial_size ~virtle ~path ~rows ~cols)
+    (host_terminal_size ());
+  let socat = find_socat () in
+  Printf.eprintf "serial attached; press Ctrl-] to disconnect\n%!";
+  exit
+    (Util.run_foreground socat
+       [ "-t0"; "-,rawer,escape=0x1d"; "UNIX-CONNECT:" ^ socket ])
+
+let attach ?virtle ?name ~spawn ~keep ~serial ~kitty ~waypipe ?log_level
+    ~verbose () =
   let vms = list_vms () in
   let running = List.filter (fun vm -> vm.status = Running) vms in
   let stopped = List.filter (fun vm -> vm.status = Stopped) vms in
   match select_running_vm ?name running with
   | Some vm ->
-      let saved = load_ash_config ~name:vm.name in
-      let kitty = kitty || saved.kitty || config_default_kitty saved in
-      let waypipe = if waypipe then Some (find_waypipe ()) else saved.waypipe in
-      attach_running ?virtle ~name:vm.name
-        ~path:(Filename.concat vm.path "virtle.toml")
-        ~kitty ~waypipe ~plain_wrapper:false ~command:[] ~verbose ()
+      if serial then attach_serial_running ?virtle vm
+      else
+        let saved = load_ash_config ~name:vm.name in
+        let kitty = kitty || saved.kitty || config_default_kitty saved in
+        let waypipe =
+          if waypipe then Some (find_waypipe ()) else saved.waypipe
+        in
+        attach_running ?virtle ~name:vm.name
+          ~path:(Filename.concat vm.path "virtle.toml")
+          ~kitty ~waypipe ~plain_wrapper:false ~command:[] ~verbose ()
   | None ->
+      if serial then
+        Log.fatal
+          "serial attach requires a running VM; start it with `ash spawn`";
       if not spawn then Log.fatal "no running VMs; use `ash ls` to list states";
       let name = select_stopped_vm_for_spawn ?name stopped in
       spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~log_level

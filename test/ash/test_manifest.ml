@@ -202,7 +202,7 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   let config = Ash_config.load config_path in
   let spaces, manifest =
     render ~config ~flake:"../my-nix#agent" ~name:"unit-test" ~spaces:[ "ash" ]
-      ~kernel_serial:Virtle.Console ~mount_cwd:true ()
+      ~kernel_serial:Virtle.Socket ~mount_cwd:true ()
   in
   assert_equal "selected spaces" "ash" (String.concat "," spaces);
   let doc = parse_toml manifest in
@@ -225,13 +225,20 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     "helper=/run/wrappers/bin/qemu-bridge-helper";
   assert_string_contains "stable VM MAC" (List.nth qemu_exec 4)
     ("mac=" ^ Virtle.network_mac "unit-test");
-  assert_equal "kernel serial" "console"
+  assert_equal "serial chardev flag" "-chardev" (List.nth qemu_exec 5);
+  assert_equal "serial socket chardev"
+    "socket,id=ashserial0,path={{.StateDir}}/serial.sock,server=on,wait=off"
+    (List.nth qemu_exec 6);
+  assert_equal "serial device flag" "-serial" (List.nth qemu_exec 7);
+  assert_equal "serial device" "chardev:ashserial0" (List.nth qemu_exec 8);
+  assert_equal "socket mode disables virtle stdio serial" "off"
     (find_string doc [ "kernel"; "serial" ]);
   assert_equal "Ash kernel parameters"
     (String.concat ","
        [
          "init=/nix/store/system/init";
          "root=fstab";
+         "console=ttyS0";
          "ash.nix-store=shared";
          "ash.mdns-host=unit-test";
          "ash.mdns-mac=" ^ Virtle.network_mac "unit-test";
@@ -2422,6 +2429,12 @@ let test_prepare_image_store () =
     updated_contents
 
 let test_launch_args () =
+  assert_equal "terminal size parses" "40x120"
+    (match Virtle.parse_terminal_size "40 120\n" with
+    | Some (rows, cols) -> Printf.sprintf "%dx%d" rows cols
+    | None -> "");
+  assert_bool "zero terminal size is rejected" true
+    (Virtle.parse_terminal_size "0 0" = None);
   assert_bool "serial console accepts foreground attach" true
     (Result.is_ok
        (Virtle.validate_console_lifecycle ~kernel_serial:Virtle.Console
@@ -2442,6 +2455,10 @@ let test_launch_args () =
      with
     | Error message -> message
     | Ok () -> "");
+  assert_bool "serial socket accepts background launch" true
+    (Result.is_ok
+       (Virtle.validate_console_lifecycle ~kernel_serial:Virtle.Socket
+          ~attach:false ~keep:false));
   assert_equal "background launch omits SSH"
     "--manifest,/state/virtle.toml,launch,--resume,no"
     (Virtle.launch_args ~resume:None ~path:"/state/virtle.toml" ~log_level:None

@@ -7,8 +7,13 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Added
+
+- VMs can expose a persistent serial console with `--kernel-serial=socket` and attach to it later with `ash attach --serial NAME`; attach initializes the guest TTY with the host terminal dimensions.
+
 ### Fixed
 
+- Serial attach now terminates immediately after its Ctrl-] escape instead of waiting indefinitely on the guest side of the socket.
 - Background launches now provision the SSH key while QGA setup is healthy, and later attach/copy wrappers skip redundant guest setup; this avoids QGA `invalid pid 0` failures after long-running or self-updated guests have already completed registration and mounts.
 
 ## [v0.1.13] - 2026-08-22

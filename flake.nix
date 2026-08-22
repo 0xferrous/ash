@@ -108,6 +108,7 @@
                 --prefix PATH : ${
                   pkgs.lib.makeBinPath [
                     pkgs.bindfs
+                    pkgs.socat
                     pkgs.waypipe
                   ]
                 }

@@ -39,7 +39,7 @@ let main =
         `S "REQUIREMENTS";
         `P
           "ash assumes host tools are available as needed: nix, virtle, \
-           virtiofsd, bindfs, ssh, scp, systemd-ssh-proxy, systemd-run, \
+           virtiofsd, bindfs, socat, ssh, scp, systemd-ssh-proxy, systemd-run, \
            systemctl, journalctl, ssh-keygen, agent-portal-host, /bin/sh, \
            mountpoint, and du.";
         `P
@@ -80,7 +80,8 @@ let spawn =
           "--attach starts the VM in the foreground and opens SSH. Without \
            --keep, the VM stops when the attached session exits. Interactive \
            --kernel-serial=console requires this foreground mode and cannot be \
-           combined with --keep.";
+           combined with --keep. Use --kernel-serial=socket for a persistent \
+           console that can later be opened with ash attach --serial NAME.";
         `P
           "--attach --keep starts the VM as a background unit, then attaches \
            over SSH. The VM keeps running after SSH exits.";
@@ -390,13 +391,14 @@ let attach =
   {
     file = "ash-attach";
     command = Some "attach";
-    summary = "ssh into a running VM";
+    summary = "attach to a running VM";
     man =
       [
         `S Manpage.s_description;
         `P
           "Attaches to a running ash VM over SSH using the VM's vsock CID from \
-           virtle status.";
+           virtle status. With --serial, connects to the persistent serial \
+           socket created by --kernel-serial=socket instead.";
         `S "VM SELECTION";
         `P
           "Pass NAME to attach to that VM. If NAME is omitted, attach requires \
@@ -409,6 +411,11 @@ let attach =
           "--spawn starts a foreground VM that stops when SSH exits. Add \
            --keep to start it as a background systemd user unit and keep it \
            running after SSH exits.";
+        `S "SERIAL ATTACH";
+        `P
+          "Pass --serial to attach through serial.sock instead of SSH. The VM \
+           must already be running and have been spawned with \
+           --kernel-serial=socket. Press Ctrl-] to disconnect.";
         `S "SSH AUTOPROVISIONING";
         `P
           "Attach creates or reuses id_ed25519 in the VM state directory, \
@@ -425,6 +432,7 @@ let attach =
            when --kitty is also passed.";
         `S Manpage.s_examples;
         `Pre "ash attach work";
+        `Pre "ash attach --serial work";
         `Pre "ash attach --waypipe work";
         `Pre "ash attach --waypipe --kitty work";
         `Pre "ash attach --spawn work";

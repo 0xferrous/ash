@@ -51,10 +51,13 @@ let rm_vms global =
   Log.apply_log_level global.log_level;
   Virtle.rm_vms ()
 
-let attach opts name spawn keep kitty waypipe =
+let attach opts name spawn keep serial kitty waypipe =
   Log.apply_log_level opts.global.log_level;
   if keep && not spawn then Log.fatal "--keep requires --spawn";
-  Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~kitty ~waypipe
+  if serial && spawn then Log.fatal "--serial cannot be combined with --spawn";
+  if serial && (kitty || waypipe) then
+    Log.fatal "--serial cannot be combined with --kitty or --waypipe";
+  Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~serial ~kitty ~waypipe
     ?log_level:opts.global.log_level ~verbose:opts.verbose ()
 
 let run opts name command =
@@ -271,7 +274,10 @@ let verbose_arg =
 let kernel_serial_arg =
   let modes =
     [
-      ("off", Virtle.Off); ("print", Virtle.Print); ("console", Virtle.Console);
+      ("off", Virtle.Off);
+      ("print", Virtle.Print);
+      ("console", Virtle.Console);
+      ("socket", Virtle.Socket);
     ]
   in
   Arg.(
@@ -280,7 +286,8 @@ let kernel_serial_arg =
     & info [ "kernel-serial" ] ~docv:"MODE"
         ~doc:
           "Configure guest kernel serial I/O: off disables it, print streams \
-           output, and console connects host standard input and output. \
+           output, console connects host standard input and output, and socket \
+           exposes a persistent serial socket for `ash attach --serial`. \
            Console mode requires --attach without --keep.")
 
 let mount_cwd_arg =
@@ -323,6 +330,14 @@ let spawn_flag =
     value & flag
     & info [ "spawn" ]
         ~doc:"For attach, spawn the named stopped VM if it is not running.")
+
+let serial_flag =
+  Arg.(
+    value & flag
+    & info [ "serial" ]
+        ~doc:
+          "Attach to the running VM's serial socket instead of using SSH. The \
+           VM must have been spawned with --kernel-serial=socket.")
 
 let kitty_flag =
   Arg.(
@@ -401,10 +416,10 @@ let attach_man = Pages.attach.man
 
 let attach_cmd =
   Cmd.v
-    (Cmd.info "attach" ~doc:"ssh into a running VM" ~man:attach_man)
+    (Cmd.info "attach" ~doc:"attach to a running VM" ~man:attach_man)
     Term.(
       const attach $ virtle_opts_arg $ attach_name_arg $ spawn_flag $ keep_flag
-      $ kitty_flag $ waypipe_flag)
+      $ serial_flag $ kitty_flag $ waypipe_flag)
 
 let run_name_arg =
   Arg.(
