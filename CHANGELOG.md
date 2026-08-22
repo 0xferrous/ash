@@ -7,6 +7,8 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.13] - 2026-08-22
+
 ### Added
 
 - The complete Ash guest module now gives its configured agent user an empty SSH password and passwordless sudo by default, with `emptyPassword` and `passwordlessSudo` options for disabling either behavior.
@@ -209,7 +211,8 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.12...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.13...HEAD
+[v0.1.13]: https://github.com/0xferrous/ash/compare/v0.1.12...v0.1.13
 [v0.1.12]: https://github.com/0xferrous/ash/compare/v0.1.11...v0.1.12
 [v0.1.11]: https://github.com/0xferrous/ash/compare/v0.1.10...v0.1.11
 [v0.1.10]: https://github.com/0xferrous/ash/compare/v0.1.9...v0.1.10
