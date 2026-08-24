@@ -9,6 +9,7 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- The flake exports a minimal bootable Ash guest as `nixosConfigurations.minimal` for local testing and quick starts.
 - VMs can expose a persistent serial console with `--kernel-serial=socket` and attach to it later with `ash attach --serial NAME`; attach initializes the guest TTY with the host terminal dimensions.
 
 ### Fixed

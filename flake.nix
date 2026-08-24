@@ -47,6 +47,27 @@
         };
       imageReconcileFirst = mkImageReconcileConfiguration "first";
       imageReconcileSecond = mkImageReconcileConfiguration "second";
+      minimalConfiguration = nixpkgs.lib.nixosSystem {
+        system = testSystem;
+        modules = [
+          (nixpkgs + "/nixos/modules/profiles/minimal.nix")
+          ./nix/modules/ash-guest.nix
+          {
+            networking.hostName = "ash-minimal";
+            system.stateVersion = "26.05";
+
+            virtualisation.ash-guest = {
+              enable = true;
+              user = "agent";
+            };
+
+            users.users.agent = {
+              isNormalUser = true;
+              group = "users";
+            };
+          }
+        ];
+      };
     in
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -240,6 +261,7 @@
       nixosModules = import ./nix/modules;
 
       nixosConfigurations = {
+        minimal = minimalConfiguration;
         image-reconcile-first = imageReconcileFirst;
         image-reconcile-second = imageReconcileSecond;
       };
