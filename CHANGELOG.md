@@ -7,6 +7,8 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.14] - 2026-08-30
+
 ### Added
 
 - The flake exports a minimal bootable Ash guest as `nixosConfigurations.minimal` for local testing and quick starts.
@@ -221,7 +223,8 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.13...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.14...HEAD
+[v0.1.14]: https://github.com/0xferrous/ash/compare/v0.1.13...v0.1.14
 [v0.1.13]: https://github.com/0xferrous/ash/compare/v0.1.12...v0.1.13
 [v0.1.12]: https://github.com/0xferrous/ash/compare/v0.1.11...v0.1.12
 [v0.1.11]: https://github.com/0xferrous/ash/compare/v0.1.10...v0.1.11
