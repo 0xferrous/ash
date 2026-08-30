@@ -1617,7 +1617,12 @@ owners = ["space:rust"]
    |> member "guestPath" |> to_string)
 
 let test_control_socket_rpc_timeout () =
-  let root = temp_dir "ash-test-control-socket-timeout" in
+  (* Unix-domain socket paths are limited to roughly 108 bytes on Linux. Keep
+     this fixture outside potentially long CI-provided temporary directories. *)
+  let path = Filename.temp_file ~temp_dir:"/tmp" "ash-rpc-" "" in
+  Sys.remove path;
+  Unix.mkdir path 0o755;
+  let root = path in
   let virtle_state = Filename.concat root "virtle_state" in
   Unix.mkdir virtle_state 0o700;
   let socket_path = Filename.concat virtle_state "virtle.sock" in
