@@ -7,6 +7,12 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.15] - 2026-09-04
+
+### Fixed
+
+- Rebuilding, recreating, or replacing an image-backed Nix store now clears its home-manager staging marker, ensuring the combined registration and home closure are restored instead of incorrectly reusing stale staging state.
+
 ## [v0.1.14] - 2026-08-30
 
 ### Added
@@ -223,7 +229,8 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.14...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.15...HEAD
+[v0.1.15]: https://github.com/0xferrous/ash/compare/v0.1.14...v0.1.15
 [v0.1.14]: https://github.com/0xferrous/ash/compare/v0.1.13...v0.1.14
 [v0.1.13]: https://github.com/0xferrous/ash/compare/v0.1.12...v0.1.13
 [v0.1.12]: https://github.com/0xferrous/ash/compare/v0.1.11...v0.1.12

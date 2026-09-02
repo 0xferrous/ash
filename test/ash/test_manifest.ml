@@ -2267,6 +2267,8 @@ let test_prepare_image_store () =
   Unix.putenv "ASH_TEST_REGISTRATION_SOURCE" registration_source;
   Unix.putenv "ASH_TEST_E2FSCK_ARGS" e2fsck_args;
   Unix.putenv "ASH_TEST_RESIZE2FS_ARGS" resize2fs_args;
+  write_file (image ^ ".home-registration") "stale-vm-registration\n";
+  write_file (cache_image ^ ".home-registration") "stale-cache-registration\n";
   let origin : Image_metadata.origin =
     {
       flake_url = "path:/flake";
@@ -2286,6 +2288,10 @@ let test_prepare_image_store () =
   assert_bool "image store created" true (Sys.file_exists image);
   assert_bool "image store TOML sidecar created" true
     (Sys.file_exists (Image_metadata.sidecar_path image));
+  assert_bool "recreated VM image invalidates home registration marker" false
+    (Sys.file_exists (image ^ ".home-registration"));
+  assert_bool "recreated cache image invalidates home registration marker" false
+    (Sys.file_exists (cache_image ^ ".home-registration"));
   let image_metadata = current_image_metadata image in
   assert_equal "image metadata toplevel" "/nix/store/system"
     image_metadata.toplevel;
@@ -2340,6 +2346,7 @@ let test_prepare_image_store () =
   in
   assert_equal "image store registration contents" "registration-data"
     registration_contents;
+  write_file (second_image ^ ".home-registration") "stale-clone-registration\n";
   Nix.prepare_image_store ~nix_executable:nix ~copy_executable:copy ~resize2fs
     ~toplevel:"/nix/store/system"
     ~registration:"/nix/store/closure-info/registration"
@@ -2348,6 +2355,8 @@ let test_prepare_image_store () =
     ();
   assert_bool "different-sized image store cloned from cache" true
     (Sys.file_exists second_image);
+  assert_bool "cloned image invalidates home registration marker" false
+    (Sys.file_exists (second_image ^ ".home-registration"));
   assert_bool "different-sized image store is correctly sized" true
     (Int64.equal (Unix.LargeFile.stat second_image).st_size 402653184L);
   let second_origin =
@@ -2537,6 +2546,7 @@ let test_remove_nix_store_state () =
       let image = Filename.concat (Virtle.state_dir name) "nix-store.img" in
       write_file image "image";
       write_file (image ^ ".toplevel") "/nix/store/system\n";
+      write_file (image ^ ".home-registration") "sha256-home\n";
       write_file (Image_metadata.sidecar_path image) "schema_version = 1\n";
       Virtle.remove_nix_store_state ~name;
       assert_bool "consolidated shares preserved" true (Sys.file_exists shares);
@@ -2547,6 +2557,8 @@ let test_remove_nix_store_state () =
         (Sys.file_exists (image ^ ".toplevel"));
       assert_bool "Nix store image sidecar removed" false
         (Sys.file_exists (Image_metadata.sidecar_path image));
+      assert_bool "home registration marker removed" false
+        (Sys.file_exists (image ^ ".home-registration"));
       assert_bool "other VM state preserved" true (Sys.file_exists preserved))
 
 let test_state_sizes_ignore_hotmounts () =

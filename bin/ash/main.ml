@@ -1,7 +1,7 @@
 open Cmdliner
 open Ash
 
-let version = "0.1.14"
+let version = "0.1.15"
 
 type global_opts = { log_level : Log.level option }
 

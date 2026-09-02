@@ -4392,8 +4392,7 @@ let remove_nix_store_state ~name =
       Filename.concat (shares_rw_dir ~name) "guest-store-upper";
       Filename.concat (shares_rw_dir ~name) "guest-store-work";
     ];
-  (try Unix.unlink image with Unix.Unix_error _ -> ());
-  Image_metadata.remove image
+  Nix.remove_image_store image
 
 let regenerate ?virtle ~name () =
   let name = Util.name_slug name in

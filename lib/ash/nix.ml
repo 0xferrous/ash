@@ -201,8 +201,19 @@ let scan_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
    store so the guest's home-manager switch finds it pre-built. The staging is
    gated on a sidecar recording the applied home registration, so home changes
    only append the missing paths and never invalidate the NixOS toplevel cache. *)
+let home_registration_path image = image ^ ".home-registration"
+
+let remove_home_registration image =
+  try Unix.unlink (home_registration_path image)
+  with Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+
+let remove_image_store image =
+  (try Unix.unlink image with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+  remove_home_registration image;
+  Image_metadata.remove image
+
 let stage_home_closure ?nix_executable ~(home : home) ~image () =
-  let sidecar = image ^ ".home-registration" in
+  let sidecar = home_registration_path image in
   let current =
     if Sys.file_exists sidecar then
       try String.trim (In_channel.with_open_text sidecar In_channel.input_all)
@@ -234,6 +245,7 @@ let write_image_store ~image ~bytes ~entries ~metrics ~metadata =
     Image_import_core.Metrics.log ~prefix:"ash image store"
       ~reporter:image_import_reporter metrics;
     Unix.rename temporary_image image;
+    remove_home_registration image;
     Image_metadata.write image metadata;
     try Unix.unlink (Image_metadata.legacy_path image)
     with Unix.Unix_error (Unix.ENOENT, _, _) -> ()
@@ -284,8 +296,7 @@ let prepare_cached_image ?nix_executable ?store_paths ?closure_paths
         image;
       size_mib
   | None ->
-      (try Unix.unlink image with Unix.Unix_error _ -> ());
-      Image_metadata.remove image;
+      remove_image_store image;
       let entries, metrics =
         scan_image_store ?nix_executable ?store_paths ?closure_paths ~toplevel
           ~registration ()
@@ -331,6 +342,7 @@ let clone_cached_image ?copy_executable ?resize2fs ?registration_sha256
           (Printf.sprintf "failed to grow cached Nix store image clone %s"
              temporary_image));
     Unix.rename temporary_image image;
+    remove_home_registration image;
     image_store_metadata ?registration_sha256 ?closure_nar_size_bytes
       ?closure_path_count ?origin ~configured_size_mib:size_mib
       ~initialized_from_cache_key:cache_key ~kind:Image_metadata.Vm ~toplevel
