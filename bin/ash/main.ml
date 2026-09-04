@@ -60,12 +60,12 @@ let attach opts name spawn keep serial kitty waypipe =
   Virtle.attach ?virtle:opts.virtle ?name ~spawn ~keep ~serial ~kitty ~waypipe
     ?log_level:opts.global.log_level ~verbose:opts.verbose ()
 
-let run opts name command =
+let run opts name waypipe command =
   (* Keep `ash run` quiet for scripting unless an explicit --log-level is
      given. *)
   Log.apply_log_level
     (Some (Option.value opts.global.log_level ~default:Log.Error));
-  Virtle.run ?virtle:opts.virtle ?name ~command ~verbose:opts.verbose ()
+  Virtle.run ?virtle:opts.virtle ?name ~waypipe ~command ~verbose:opts.verbose ()
 
 let resume opts name attach keep =
   Log.apply_log_level opts.global.log_level;
@@ -442,7 +442,8 @@ let run_man = Pages.run.man
 let run_cmd =
   Cmd.v
     (Cmd.info "run" ~doc:"run a one-off command in a running VM" ~man:run_man)
-    Term.(const run $ virtle_opts_arg $ run_name_arg $ run_command_arg)
+    Term.(const run $ virtle_opts_arg $ run_name_arg $ waypipe_flag
+          $ run_command_arg)
 
 let resume_name_arg =
   Arg.(

@@ -4214,7 +4214,7 @@ let spawn_saved_and_attach ?virtle ~name ~keep ~kitty ~waypipe ~log_level
     launch_background_and_attach ~resume:None inputs path ~verbose ~log_level
   else launch_foreground_attached ~resume:None inputs path ~log_level
 
-let run ?virtle ?name ~command ~verbose () =
+let run ?virtle ?name ~waypipe ~command ~verbose () =
   if command = [] then
     Log.fatal "ash run requires a command; for example: ash run NAME -- pwd";
   let running = List.filter (fun vm -> vm.status = Running) (list_vms ()) in
@@ -4222,7 +4222,9 @@ let run ?virtle ?name ~command ~verbose () =
   | Some vm ->
       attach_running ?virtle ~name:vm.name
         ~path:(Filename.concat vm.path "virtle.toml")
-        ~kitty:false ~waypipe:None ~plain_wrapper:true ~command ~verbose ()
+        ~kitty:false
+        ~waypipe:(if waypipe then Some (find_waypipe ()) else None)
+        ~plain_wrapper:(not waypipe) ~command ~verbose ()
   | None ->
       Log.fatal
         "no running VM to run the command in; start one with `ash spawn` or \

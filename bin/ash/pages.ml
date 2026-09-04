@@ -465,8 +465,13 @@ let run =
           "run uses the same VM SSH identity and wrapper as ash attach, so the \
            guest's registered Nix store and space mounts are already in place \
            before the command executes.";
+        `P
+          "Pass --waypipe to forward guest Wayland and X11 applications. The \
+           guest must provide waypipe and xwayland-satellite in PATH, and the \
+           host must be running a Wayland compositor.";
         `S Manpage.s_examples;
         `Pre "ash run work -- pwd";
+        `Pre "ash run --waypipe work -- weston-info";
         `Pre "ash run work -- nix develop . -c cargo check";
         `Pre "ash run work -- systemctl is-active agent-home-switch";
       ];

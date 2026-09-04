@@ -7,6 +7,10 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+### Added
+
+- `ash run` now accepts `--waypipe` to forward guest Wayland and X11 applications.
+
 ## [v0.1.15] - 2026-09-04
 
 ### Fixed
