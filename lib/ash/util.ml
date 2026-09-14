@@ -293,7 +293,20 @@ let try_unmount_mountpoint mount_dir =
     Printf.sprintf
       {sh|set -u
 target=%s
-if ! mountpoint -q -- "$target"; then exit 0; fi
+if ! mountpoint -q -- "$target"; then
+  # A disconnected FUSE mount can return ENOTCONN when mountpoint stats it,
+  # making it look like an ordinary directory even though it remains mounted.
+  # Try a quiet FUSE unmount before accepting mountpoint's negative result.
+  if command -v fusermount3 >/dev/null 2>&1; then
+    fusermount3 -u "$target" 2>/dev/null && exit 0
+    fusermount3 -uz "$target" 2>/dev/null && exit 0
+  fi
+  if command -v fusermount >/dev/null 2>&1; then
+    fusermount -u "$target" 2>/dev/null && exit 0
+    fusermount -uz "$target" 2>/dev/null && exit 0
+  fi
+  exit 0
+fi
 if command -v fusermount3 >/dev/null 2>&1; then
   fusermount3 -u "$target" && exit 0
   fusermount3 -uz "$target" && exit 0

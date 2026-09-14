@@ -1588,6 +1588,11 @@ let bindfs_args_for_mode mode =
   @ mode_args
 
 let try_ensure_bindfs_mount ~bindfs ~mode ~source ~target =
+  (* Sys.file_exists follows the mount and returns false for a disconnected
+     FUSE endpoint. Clear that stale mount before ensure_dir mistakes its
+     still-present mountpoint for a missing directory and raises EEXIST. *)
+  if not (Sys.file_exists target) then
+    ignore (Util.try_unmount_mountpoint target);
   Util.ensure_dir target;
   let bindfs_args = bindfs_args_for_mode mode in
   let bindfs_command =
