@@ -11,6 +11,11 @@ and this project uses its existing Git tags for version history.
 
 - `ash run` now accepts `--waypipe` to forward guest Wayland and X11 applications.
 
+### Fixed
+
+- Image-backed Nix store updates now explain when an ext4 image has no free data
+  blocks and advise increasing `image_size_mib`.
+
 ## [v0.1.15] - 2026-09-04
 
 ### Fixed

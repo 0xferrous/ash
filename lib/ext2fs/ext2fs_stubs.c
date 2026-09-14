@@ -36,6 +36,15 @@ static void raise_errno(const char *operation, const char *path) {
   caml_failwith(message);
 }
 
+static void raise_image_full(const char *operation, const char *path) {
+  char message[1024];
+  snprintf(message, sizeof(message),
+           "%s %s: image is full (no free data blocks); increase "
+           "image_size_mib and retry",
+           operation, path);
+  caml_failwith(message);
+}
+
 static void fix_itable_unused(ext2_filsys fs) {
   ext2_ino_t inodes_per_group = fs->super->s_inodes_per_group;
   for (dgrp_t group = 0; group < fs->group_desc_count; group++) {
@@ -508,6 +517,8 @@ CAMLprim value ash_ext2fs_write_file(value handle_value, value path_value,
         free(buffer);
         ext2fs_file_close(file);
         close(source_fd);
+        if (ext2fs_free_blocks_count(handle->fs->super) == 0)
+          raise_image_full("writing ext4 file", path);
         raise_error("writing ext4 file", error ? error : EIO);
       }
       offset += written;
