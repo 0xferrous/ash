@@ -1240,8 +1240,12 @@ let test_qga_mountpoint_inherits_parent_owner () =
   assert_string_contains "mountpoint helper" script "install_mountpoint()";
   assert_string_contains "mountpoint parent stat" script
     "stat -c %u \"$parent\"";
+  assert_string_contains "mountpoint directory creation" script
+    "mkdir -p \"$path\"";
   assert_string_contains "mountpoint owner install" script
-    "install -d -o \"$owner\" -g \"$group\" \"$path\"";
+    "chown \"$owner:$group\" \"$path\"";
+  assert_string_contains "share creation is idempotent" script
+    "mkdir -p \"$share\"";
   assert_string_contains "target uses helper" script
     "install_mountpoint \"$target\"";
   assert_string_contains "bind failure diagnostics" script

@@ -13,6 +13,7 @@ and this project uses its existing Git tags for version history.
 
 ### Fixed
 
+- Guest share mounting now tolerates pre-existing share directories on BusyBox-based guest images.
 - Spawn cleanup now detects and lazily unmounts disconnected FUSE staging mounts instead of failing with an internal `EEXIST` error.
 - Image-backed Nix store updates now explain when an ext4 image has no free data
   blocks and advise increasing `image_size_mib`.

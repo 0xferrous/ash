@@ -182,7 +182,8 @@ install_mountpoint() {
 
   owner=$(stat -c %u "$parent")
   group=$(stat -c %g "$parent")
-  install -d -o "$owner" -g "$group" "$path"
+  mkdir -p "$path"
+  chown "$owner:$group" "$path"
 }
 |sh}
 
@@ -229,7 +230,9 @@ source=$3
 target=$4
 read_only=$5
 
-install -d "$share"
+# Some guest images provide a BusyBox install whose -d form fails when the
+# directory already exists. mkdir -p is idempotent across the supported images.
+mkdir -p "$share"
 if ! mountpoint -q "$share"; then
   if [ "$share_tag" = shares-ro ]; then
     mount -t virtiofs -o ro -- "$share_tag" "$share"
