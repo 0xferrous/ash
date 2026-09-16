@@ -67,6 +67,14 @@ let run opts name waypipe command =
     (Some (Option.value opts.global.log_level ~default:Log.Error));
   Virtle.run ?virtle:opts.virtle ?name ~waypipe ~command ~verbose:opts.verbose ()
 
+let forward opts name forwards =
+  Log.apply_log_level opts.global.log_level;
+  Virtle.ssh_forward ?virtle:opts.virtle ~name ~forwards ()
+
+let unforward opts name forwards =
+  Log.apply_log_level opts.global.log_level;
+  Virtle.ssh_unforward ?virtle:opts.virtle ~name ~forwards ()
+
 let resume opts name attach keep =
   Log.apply_log_level opts.global.log_level;
   if keep && not attach then Log.fatal "--keep requires --attach";
@@ -445,6 +453,30 @@ let run_cmd =
     Term.(const run $ virtle_opts_arg $ run_name_arg $ waypipe_flag
           $ run_command_arg)
 
+let port_forward_name_arg =
+  Arg.(required & pos 0 (some string) None
+       & info [] ~doc:"VM/state name." ~docv:"NAME")
+
+let port_forward_specs_arg =
+  Arg.(value & opt_all string []
+       & info [ "local" ]
+           ~doc:"Forward HOST_PORT to the same port in the guest. Repeatable."
+           ~docv:"HOST_PORT:GUEST_PORT")
+
+let forward_cmd =
+  Cmd.v
+    (Cmd.info "forward" ~doc:"add SSH port forwards to a running VM"
+       ~man:Pages.forward.man)
+    Term.(const forward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
+          $ port_forward_specs_arg)
+
+let unforward_cmd =
+  Cmd.v
+    (Cmd.info "unforward" ~doc:"remove SSH port forwards from a running VM"
+       ~man:Pages.unforward.man)
+    Term.(const unforward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
+          $ port_forward_specs_arg)
+
 let resume_name_arg =
   Arg.(
     required
@@ -703,6 +735,8 @@ let main_cmd =
       spawn_cmd;
       attach_cmd;
       run_cmd;
+      forward_cmd;
+      unforward_cmd;
       resume_cmd;
       mount_cmd;
       cp_cmd;

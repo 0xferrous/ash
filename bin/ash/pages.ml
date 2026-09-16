@@ -477,6 +477,41 @@ let run =
       ];
   }
 
+let forward =
+  {
+    file = "ash-forward";
+    command = Some "forward";
+    summary = "add SSH port forwards to a running VM";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Adds local SSH port forwards to a running VM. Ash keeps one SSH control-master session in a systemd user service for the VM, so adding another port does not create another SSH session.";
+        `P
+          "Use --local HOST_PORT:GUEST_PORT to expose a guest localhost port on the host. Repeat --local to add several forwards.";
+        `S Manpage.s_examples;
+        `Pre "ash forward work --local 8080:80";
+        `Pre "ash forward work --local 3000:3000 --local 5432:5432";
+        `P
+          "Remove forwards with ash unforward NAME --local HOST_PORT:GUEST_PORT.";
+      ];
+  }
+
+let unforward =
+  {
+    file = "ash-unforward";
+    command = Some "unforward";
+    summary = "remove SSH port forwards from a running VM";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Cancels local SSH port forwards through the VM's existing SSH control-master session.";
+        `S Manpage.s_examples;
+        `Pre "ash unforward work --local 8080:80";
+      ];
+  }
+
 let resume =
   {
     file = "ash-resume";
@@ -934,6 +969,8 @@ let all =
     spawn;
     attach;
     run;
+    forward;
+    unforward;
     resume;
     mount;
     cp;

@@ -18,6 +18,11 @@ and this project uses its existing Git tags for version history.
 - Image-backed Nix store updates now explain when an ext4 image has no free data
   blocks and advise increasing `image_size_mib`.
 
+### Added
+
+- `ash forward` and `ash unforward` manage local guest port forwards through a
+  single per-VM SSH control session.
+
 ## [v0.1.15] - 2026-09-04
 
 ### Fixed

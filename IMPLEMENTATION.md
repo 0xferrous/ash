@@ -423,6 +423,17 @@ virtle --manifest GENERATED launch --ssh
 
 To attach to an already running named VM, `ash attach NAME` reads the existing generated manifest under the VM state directory, asks the running `virtle` control socket for its vsock CID, and executes the manifest's SSH command. If no name is supplied, `ash attach` only succeeds when exactly one VM is running. `ash attach --spawn NAME` can start a stopped VM from its saved `ash-state.toml`; add `--keep` to start it as a background systemd unit instead of a foreground VM that stops on SSH exit.
 
+`ash forward NAME --local HOST_PORT:GUEST_PORT` exposes a guest localhost port
+on the host. Multiple `--local` options are supported. Ash starts one SSH
+control-master process in the per-VM systemd user unit
+`ash-NAME-ssh-forward.service`; later `forward` and `unforward` commands use
+OpenSSH control requests on that same session. For example:
+
+```sh
+ash forward work --local 8080:80 --local 5432:5432
+ash unforward work --local 8080:80
+```
+
 Host-side SSH attach requires `ssh` and `systemd-ssh-proxy`. `ash` resolves them from the selected NixOS config by default, unless `--ssh` or `--systemd-ssh-proxy` are passed, and writes the resolved absolute paths into the generated manifest.
 
 Host-side virtiofs mounts require `virtiofsd`. `ash` resolves `virtiofsd` from `PATH` before launch and writes the resolved absolute path into the generated manifest.

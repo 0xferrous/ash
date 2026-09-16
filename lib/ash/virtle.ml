@@ -3060,6 +3060,118 @@ let attach_running ?virtle ~name ~path ~kitty ~waypipe ~plain_wrapper ~command
     (attach_running_code ?virtle ~name ~path ~kitty ~waypipe ~plain_wrapper
        ~command ~verbose ())
 
+let ssh_forward_unit_name name = name ^ "-ssh-forward"
+
+let ssh_forward_control_path ~name =
+  Filename.concat (state_dir name) "ssh-forward.sock"
+
+let ssh_forward_spec value =
+  match String.split_on_char ':' (String.trim value) with
+  | [ host; guest ] -> (
+      match (int_of_string_opt host, int_of_string_opt guest) with
+      | Some host, Some guest when host > 0 && host <= 65535 && guest > 0
+        && guest <= 65535 ->
+          (value, Printf.sprintf "127.0.0.1:%d:127.0.0.1:%d" host guest)
+      | _ ->
+          Log.fatal
+            "invalid port forward %S; expected HOST_PORT:GUEST_PORT with ports from 1 to 65535"
+            value)
+  | _ ->
+      Log.fatal
+        "invalid port forward %S; expected HOST_PORT:GUEST_PORT" value
+
+let ssh_forward_wrapper ~name =
+  let path = space_mount_ssh_wrapper_path ~name in
+  if not (Sys.file_exists path) then
+    Log.fatal "missing SSH wrapper %s; run `ash regenerate %s`" path name;
+  path
+
+let ssh_forward_destination ~path ~cid =
+  let doc = load_manifest_doc path in
+  let user = manifest_string doc [ "ssh"; "user" ] in
+  user ^ "@vsock/" ^ string_of_int cid
+
+let ssh_forward_control_request ~wrapper ~control ~destination args =
+  with_environment "ASH_SKIP_GUEST_SETUP" "1" (fun () ->
+      Util.run_foreground wrapper
+        ([ "-S"; control ] @ args @ [ destination ]))
+
+let ensure_ssh_forward_master ~name ~wrapper ~control ~destination =
+  let unit_name = ssh_forward_unit_name name in
+  if not (Systemd_run.is_user_unit_active ~name:unit_name) then (
+    let code =
+      Systemd_run.start_user_unit ~env:[] ~name:unit_name
+        ~description:("Ash SSH port forwards for " ^ name) ~program:wrapper
+        ~args:[ "-M"; "-S"; control; "-N"; destination ]
+    in
+    if code <> 0 then
+      Log.fatal "could not start SSH port-forward service for VM %S" name);
+  let rec wait remaining =
+    let code =
+      ssh_forward_control_request ~wrapper ~control ~destination
+        [ "-O"; "check" ]
+    in
+    if code = 0 then ()
+    else if remaining = 0 then
+      Log.fatal "SSH port-forward service for VM %S did not become ready" name
+    else (
+      Unix.sleepf 0.1;
+      wait (remaining - 1))
+  in
+  wait 300
+
+let ssh_forward ?virtle ~name ~forwards () =
+  if forwards = [] then Log.fatal "forward requires at least one --local PORT:PORT";
+  let virtle = find_virtle virtle in
+  let name, path = select_attach_vm (Some name) in
+  let status = rpc_status ~virtle ~path () in
+  let cid =
+    match Qga.int_field ~field:"cid" status with
+    | Some cid when cid > 0 -> cid
+    | _ -> Log.fatal "could not read VM cid from virtle status: %s" status
+  in
+  let wrapper = ssh_forward_wrapper ~name in
+  let control = ssh_forward_control_path ~name in
+  let destination = ssh_forward_destination ~path ~cid in
+  ensure_ssh_forward_master ~name ~wrapper ~control ~destination;
+  List.iter
+    (fun value ->
+      let original, spec = ssh_forward_spec value in
+      let code =
+        ssh_forward_control_request ~wrapper ~control ~destination
+          [ "-O"; "forward"; "-L"; spec ]
+      in
+      if code <> 0 then Log.fatal "could not forward port %s" original;
+      Printf.printf "forwarded %s\n%!" original)
+    forwards
+
+let ssh_unforward ?virtle ~name ~forwards () =
+  if forwards = [] then
+    Log.fatal "unforward requires at least one --local PORT:PORT";
+  let virtle = find_virtle virtle in
+  let name, path = select_attach_vm (Some name) in
+  let status = rpc_status ~virtle ~path () in
+  let cid =
+    match Qga.int_field ~field:"cid" status with
+    | Some cid when cid > 0 -> cid
+    | _ -> Log.fatal "could not read VM cid from virtle status: %s" status
+  in
+  let wrapper = ssh_forward_wrapper ~name in
+  let control = ssh_forward_control_path ~name in
+  let destination = ssh_forward_destination ~path ~cid in
+  if not (Systemd_run.is_user_unit_active ~name:(ssh_forward_unit_name name))
+  then Log.fatal "no SSH port-forward service is running for VM %S" name;
+  List.iter
+    (fun value ->
+      let original, spec = ssh_forward_spec value in
+      let code =
+        ssh_forward_control_request ~wrapper ~control ~destination
+          [ "-O"; "cancel"; "-L"; spec ]
+      in
+      if code <> 0 then Log.fatal "could not remove port forward %s" original;
+      Printf.printf "removed %s\n%!" original)
+    forwards
+
 let portal_profile_path = "/etc/profile.d/ash-agent-portal.sh"
 
 let portal_nushell_path user =
