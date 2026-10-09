@@ -634,7 +634,10 @@ let regenerate =
         `S Manpage.s_description;
         `P
           "Reads saved ash-state.toml, re-renders generated files, and exits \
-           without launching the VM.";
+           without launching the VM. Use --skip-image to preserve an existing \
+           image-backed Nix store while refreshing the manifest and helpers. \
+           Use --skip-eval to refresh existing helpers without evaluating Nix; \
+           this leaves the existing manifest unchanged.";
         `S "WHAT IT REWRITES";
         `P
           "regenerate rewrites virtle.toml, ash-state.toml, and generated \
@@ -651,6 +654,8 @@ let regenerate =
            an already running VM.";
         `S Manpage.s_examples;
         `Pre "ash regenerate work";
+        `Pre "ash regenerate --skip-image work";
+        `Pre "ash regenerate --skip-eval work";
       ];
   }
 

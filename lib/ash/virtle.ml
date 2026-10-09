@@ -3866,7 +3866,7 @@ let resolve_spawn_memory ~name memory =
   | Some memory when memory <= 0 -> Log.fatal "memory must be greater than zero"
   | _ -> memory
 
-let render_manifest (inputs : manifest_inputs) =
+let render_manifest ?(prepare_image = true) (inputs : manifest_inputs) =
   let config = Ash_config.load_for_spaces inputs.config_path inputs.spaces in
   let portal_host, portal_dbus_proxy =
     match Ash_config.portal config with
@@ -3914,7 +3914,7 @@ let render_manifest (inputs : manifest_inputs) =
       in
       Nix.prepare_lower_store ~nix_store:boot.nix_store
         ~registration:boot.guest_registration ~state:lower_store_state
-  | Ash_config.Image -> (
+  | Ash_config.Image when prepare_image -> (
       let origin =
         Nix.resolve_image_origin ~nix:boot.nix
           ~override_inputs:inputs.override_inputs ~target
@@ -3938,7 +3938,8 @@ let render_manifest (inputs : manifest_inputs) =
           Nix.stage_home_closure ~nix_executable:boot.nix ~home
             ~image:(Filename.concat (state_dir inputs.name) "nix-store.img")
             ()
-      | None -> ()));
+      | None -> ())
+  | Ash_config.Image -> ());
   let ssh = Option.value inputs.ssh ~default:boot.ssh in
   let kitty = inputs.kitty || Ash_config.global_kitty config in
   if kitty then ignore (find_kitten ());
@@ -4513,8 +4514,55 @@ let remove_nix_store_state ~name =
     ];
   Nix.remove_image_store image
 
-let regenerate ?virtle ~name () =
+let replace_all ~needle ~replacement text =
+  let needle_length = String.length needle in
+  if needle_length = 0 then text
+  else
+    let buffer = Buffer.create (String.length text) in
+    let rec loop position =
+      if position > String.length text - needle_length then
+        Buffer.add_substring buffer text position (String.length text - position)
+      else if String.sub text position needle_length = needle then (
+        Buffer.add_string buffer replacement;
+        loop (position + needle_length))
+      else (
+        Buffer.add_char buffer text.[position];
+        loop (position + 1))
+    in
+    loop 0;
+    Buffer.contents buffer
+
+let regenerate_helpers_without_eval ~name =
+  let paths =
+    [ space_mount_ssh_wrapper_path ~name;
+      space_mount_ssh_wrapper_path_for ~kitty:true ~name ]
+  in
+  let replace content =
+    content
+    |> replace_all ~needle:"install -d \"$share\""
+         ~replacement:"mkdir -p \"$share\""
+    |> replace_all
+         ~needle:"install -d -o \"$owner\" -g \"$group\" \"$path\""
+         ~replacement:"mkdir -p \"$path\"\n  chown \"$owner:$group\" \"$path\""
+  in
+  List.iter
+    (fun path ->
+      if Sys.file_exists path then (
+        let content = In_channel.with_open_text path In_channel.input_all in
+        Util.write_file path (replace content);
+        Unix.chmod path 0o755;
+        Printf.printf "regenerated %s\n" path))
+    paths
+
+let regenerate ?virtle ?(skip_image = false) ?(skip_eval = false) ~name () =
   let name = Util.name_slug name in
+  if skip_eval then (
+    if not (Sys.file_exists (manifest_path ~name)) then
+      Log.fatal
+        "no generated manifest for VM %S; run regenerate without --skip-eval first"
+        name;
+    regenerate_helpers_without_eval ~name)
+  else (
   let saved = load_ash_config ~name in
   let virtle =
     Option.value
@@ -4523,7 +4571,9 @@ let regenerate ?virtle ~name () =
   in
   let inputs = { saved with name; virtle } in
   Log.debug "regenerating VM manifest for %s" name;
-  let registration_path, (_, manifest) = render_manifest inputs in
+  let registration_path, (_, manifest) =
+    render_manifest ~prepare_image:(not skip_image) inputs
+  in
   let inputs = { inputs with registration_path = Some registration_path } in
   write_ash_config inputs;
   let manifest_path = manifest_path ~name in
@@ -4532,7 +4582,7 @@ let regenerate ?virtle ~name () =
   Log.debug "rewrote virtle manifest %s (%d bytes, spaces: %s)" manifest_path
     (String.length manifest) (spaces_log inputs.spaces);
   Printf.printf "regenerated %s\n" manifest_path;
-  Printf.printf "regenerated %s\n" ssh_wrapper_path
+  Printf.printf "regenerated %s\n" ssh_wrapper_path)
 
 let rebuild_db ?virtle ~name () =
   let name = Util.name_slug name in

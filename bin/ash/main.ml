@@ -92,9 +92,9 @@ let logs global name follow lines =
   if lines < 0 then Log.fatal "--lines must be non-negative";
   Systemd_run.show_user_unit_logs ~name ~follow ~lines
 
-let regenerate opts name =
+let regenerate opts skip_image skip_eval name =
   Log.apply_log_level opts.global.log_level;
-  Virtle.regenerate ?virtle:opts.virtle ~name ()
+  Virtle.regenerate ?virtle:opts.virtle ~skip_image ~skip_eval ~name ()
 
 let rebuild_db opts name =
   Log.apply_log_level opts.global.log_level;
@@ -531,13 +531,31 @@ let regenerate_name_arg =
     & pos 0 (some string) None
     & info [] ~doc:"VM/state name." ~docv:"NAME")
 
+let regenerate_skip_image_arg =
+  Arg.(
+    value & flag
+    & info [ "skip-image" ]
+        ~doc:
+          "Regenerate all metadata and helper files without rebuilding or \
+           modifying the image-backed Nix store.")
+
+let regenerate_skip_eval_arg =
+  Arg.(
+    value & flag
+    & info [ "skip-eval" ]
+        ~doc:
+          "Refresh existing generated helpers without evaluating the Nix \
+           configuration or changing the manifest.")
+
 let regenerate_man = Pages.regenerate.man
 
 let regenerate_cmd =
   Cmd.v
     (Cmd.info "regenerate" ~doc:"regenerate generated VM files"
        ~man:regenerate_man)
-    Term.(const regenerate $ virtle_opts_arg $ regenerate_name_arg)
+    Term.(
+      const regenerate $ virtle_opts_arg $ regenerate_skip_image_arg
+      $ regenerate_skip_eval_arg $ regenerate_name_arg)
 
 let rebuild_db_name_arg =
   Arg.(
