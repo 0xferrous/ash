@@ -1587,7 +1587,7 @@ let bindfs_args_for_mode mode =
     "--multithreaded";
     "--allow-other";
     "-o";
-    "attr_timeout=0,entry_timeout=0,negative_timeout=0";
+    "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0";
   ]
   @ mode_args
 

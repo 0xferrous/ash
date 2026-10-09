@@ -1365,13 +1365,19 @@ let test_inspect_infers_fixed_mount_targets () =
     (Virtle.configured_mount_target (fields "hotmounts") = None)
 
 let test_bindfs_disables_kernel_metadata_caches () =
-  let expected = "attr_timeout=0,entry_timeout=0,negative_timeout=0" in
+  let expected =
+    "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0"
+  in
   let rw_args = Virtle.bindfs_args_for_mode Virtle.Read_write in
   let ro_args = Virtle.bindfs_args_for_mode Virtle.Read_only in
   assert_bool "bindfs rw has cache timeouts" true (List.mem expected rw_args);
   assert_bool "bindfs ro has cache timeouts" true (List.mem expected ro_args);
   assert_bool "bindfs permits root virtiofsd access" true
-    (List.mem "--allow-other" rw_args && List.mem "--allow-other" ro_args);
+    (List.mem "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0"
+       rw_args
+    && List.mem
+         "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0"
+         ro_args);
   assert_bool "bindfs ro stays read-only" true (List.mem "-r" ro_args)
 
 let test_hotmount_host_path_normalization_cases () =
