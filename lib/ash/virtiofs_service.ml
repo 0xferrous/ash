@@ -188,7 +188,13 @@ let remove_root_socket path =
     || try (Unix.lstat path).Unix.st_kind = Unix.S_SOCK with _ -> false
   then
     if socket_owned_by_root path then Unix.unlink path
-    else failwith (Printf.sprintf "refusing to remove non-root socket %s" path)
+    else failwith (Printf.sprintf "refusing to remove non-root socket %s" path);
+  let pid_path = path ^ ".pid" in
+  if Sys.file_exists pid_path then
+    let stat = Unix.lstat pid_path in
+    if stat.Unix.st_kind <> Unix.S_REG || stat.Unix.st_uid <> 0 then
+      failwith (Printf.sprintf "refusing to remove non-root pid file %s" pid_path)
+    else Unix.unlink pid_path
 
 let socket_group_arg () =
   try
