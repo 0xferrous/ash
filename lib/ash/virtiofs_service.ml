@@ -240,7 +240,7 @@ let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
             "--collect";
             "--quiet";
             "--property=User=root";
-            "--property=LimitNOFILE=1000000:1000000";
+            "--property=LimitNOFILE=2000000:2000000";
             "--property=CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE \
              CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_SETGID CAP_SETUID \
              CAP_SETPCAP CAP_SYS_ADMIN CAP_MKNOD CAP_SETFCAP";

@@ -33,7 +33,7 @@ let start_user_unit ~env ~name ~description ~program ~args =
       "--description";
       description;
       "--same-dir";
-      "--property=LimitNOFILE=1000000:1000000";
+      "--property=LimitNOFILE=2000000:2000000";
     ]
     @ env_args
     @ (if default_options.collect then [ "--collect" ] else [])
