@@ -244,8 +244,9 @@ let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
             "--property=LimitNOFILE=1000000:1000000";
             "--property=CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE \
              CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_SETGID CAP_SETUID \
-             CAP_SYS_ADMIN CAP_MKNOD CAP_SETFCAP";
-            "--property=AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_SYS_ADMIN";
+             CAP_SETPCAP CAP_SYS_ADMIN CAP_MKNOD CAP_SETFCAP";
+            "--property=AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_SETPCAP \
+             CAP_SYS_ADMIN";
             "--property=NoNewPrivileges=no";
             executable;
             "--socket-path=" ^ socket;
