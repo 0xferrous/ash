@@ -16,7 +16,7 @@ and this project uses its existing Git tags for version history.
 ### Fixed
 
 - Root-managed VirtioFS services now invoke NixOS's setuid `pkexec` wrapper instead of the non-setuid copy in the Nix store.
-- Root-managed VirtioFS startup now authorizes once for both shares, grants the namespace and capability-management rights required by virtiofsd, uses root-compatible identity translation, and cleans up stale daemon PID files.
+- Root-managed VirtioFS startup now authorizes once for both shares, grants the namespace and capability-management rights required by virtiofsd, uses root-compatible identity translation, recovers active services with stale sockets, and cleans up stale daemon PID files.
 - Guest share mounting now tolerates pre-existing share directories on BusyBox-based guest images.
 - Spawn cleanup now detects and lazily unmounts disconnected FUSE staging mounts instead of failing with an internal `EEXIST` error.
 - Image-backed Nix store updates now explain when an ext4 image has no free data

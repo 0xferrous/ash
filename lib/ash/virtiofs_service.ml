@@ -234,13 +234,10 @@ let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
   let systemctl = systemctl_command () in
   match action with
   | "start" ->
-      if unit_is_active unit then (
-        if not (socket_accepts_connection socket) then
-          failwith
-            (Printf.sprintf "%s is active but its socket is not connectable"
-               unit))
+      if unit_is_active unit && socket_accepts_connection socket then ()
       else (
-        if unit_has_process unit then stop_system_unit systemctl unit;
+        if unit_is_active unit || unit_has_process unit then
+          stop_system_unit systemctl unit;
         ignore
           (Util.run_foreground systemctl [ "--system"; "reset-failed"; unit ]);
         let executable = trusted_executable virtiofsd in
