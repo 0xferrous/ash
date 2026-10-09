@@ -3389,8 +3389,10 @@ let render_resolved_manifest inputs =
   let workspace_host_dir = workspace_host_dir ~name:inputs.name in
   let store_strategy = inputs.nix_store_strategy in
   let shares_ro_socket =
-    Option.value inputs.ro_store_socket ~default:"shares-ro.sock"
+    Option.value inputs.ro_store_socket
+      ~default:(Filename.concat virtle_state_dir "shares-ro.sock")
   in
+  let shares_rw_socket = Filename.concat virtle_state_dir "shares-rw.sock" in
   let shares_ro_host_dir = shares_ro_dir ~name:inputs.name in
   let shares_rw_host_dir = shares_rw_dir ~name:inputs.name in
   migrate_state_path
@@ -3479,7 +3481,7 @@ let render_resolved_manifest inputs =
         ~source:shares_ro_host_dir ~read_only:true ~socket:shares_ro_socket
         ~bin:inputs.virtiofsd ();
       virtiofs_mount ~virtle_defaults:true ~tag:"shares-rw"
-        ~source:shares_rw_host_dir ~read_only:false ~socket:"shares-rw.sock"
+        ~source:shares_rw_host_dir ~read_only:false ~socket:shares_rw_socket
         ~bin:inputs.virtiofsd ();
     ]
     @ store_mounts
