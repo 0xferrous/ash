@@ -182,6 +182,12 @@ let socket_owned_by_root path =
     stat.Unix.st_kind = Unix.S_SOCK && stat.Unix.st_uid = 0
   with Unix.Unix_error (Unix.ENOENT, _, _) -> false
 
+let pid_file_owned_by_root path =
+  try
+    let stat = Unix.lstat (path ^ ".pid") in
+    stat.Unix.st_kind = Unix.S_REG && stat.Unix.st_uid = 0
+  with Unix.Unix_error (Unix.ENOENT, _, _) -> false
+
 let remove_root_socket path =
   if
     Sys.file_exists path
@@ -349,10 +355,9 @@ let service_or_socket_exists ~name ~state_base share =
           [ "--system"; "is-active"; "--quiet"; unit ]
         = 0
   in
-  let stale_socket =
-    socket_owned_by_root (socket_path ~state_base ~name share)
-  in
-  active || stale_socket
+  let socket = socket_path ~state_base ~name share in
+  let stale_socket = socket_owned_by_root socket in
+  active || stale_socket || pid_file_owned_by_root socket
 
 let stop_all ~name ~state_base ~virtiofsd shares =
   if
