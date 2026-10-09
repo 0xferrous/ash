@@ -166,16 +166,6 @@ let stop_system_unit systemctl unit =
   let code = Util.run_foreground systemctl [ "--system"; "stop"; unit ] in
   if code <> 0 then failwith (Printf.sprintf "systemctl stop failed (%d)" code)
 
-let socket_accepts_connection path =
-  let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-  Fun.protect
-    ~finally:(fun () -> Unix.close fd)
-    (fun () ->
-      try
-        Unix.connect fd (Unix.ADDR_UNIX path);
-        true
-      with Unix.Unix_error _ -> false)
-
 let socket_owned_by_root path =
   try
     let stat = Unix.lstat path in
@@ -234,7 +224,7 @@ let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
   let systemctl = systemctl_command () in
   match action with
   | "start" ->
-      if unit_is_active unit && socket_accepts_connection socket then ()
+      if unit_is_active unit && socket_owned_by_root socket then ()
       else (
         if unit_is_active unit || unit_has_process unit then
           stop_system_unit systemctl unit;

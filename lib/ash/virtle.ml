@@ -4139,15 +4139,19 @@ let virtiofs_socket_path (inputs : manifest_inputs) share =
   | Virtiofs_service.Rw ->
       Filename.concat (virtle_state_dir inputs.name) "shares-rw.sock"
 
+let virtiofs_socket_exists path =
+  try
+    (Unix.lstat path).Unix.st_kind = Unix.S_SOCK
+  with Unix.Unix_error (Unix.ENOENT, _, _) -> false
+
 let wait_for_virtiofs_socket path =
   let deadline = Unix.gettimeofday () +. 20. in
   let rec wait () =
-    if socket_accepts_connection ~timeout:0.5 path then ()
+    if virtiofs_socket_exists path then ()
     else if Unix.gettimeofday () >= deadline then
       failwith
         (Printf.sprintf
-           "virtiofsd socket %s did not become connectable within 20 seconds"
-           path)
+           "virtiofsd socket %s did not appear within 20 seconds" path)
     else (
       ignore (Unix.select [] [] [] 0.1);
       wait ())
