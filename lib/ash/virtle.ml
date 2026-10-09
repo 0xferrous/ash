@@ -1363,6 +1363,10 @@ let rm_vms () =
         |> List.iter (function
           | Vm_state vm ->
               Log.info "deleting VM state %s (%s)" vm.name vm.path;
+              List.iter
+                (Virtiofs_service.stop ~name:vm.name
+                   ~state_base:(state_base_dir ()) ~virtiofsd:(find_virtiofsd ()))
+                [ Virtiofs_service.Ro; Virtiofs_service.Rw ];
               Util.remove_tree ~force:true (mounts_dir vm.name);
               Util.remove_tree ~force:true vm.path
           | Cached_image image -> remove_cached_image image)
@@ -4122,6 +4126,74 @@ let print_background_started ~name =
   Printf.printf "logs: %s\n" (Systemd_run.logs_hint ~name);
   Printf.printf "stop: %s stop %s\n" app (Util.shell_quote name)
 
+let root_managed_virtiofs_shares (inputs : manifest_inputs) =
+  (if inputs.ro_store_socket = None then [ Virtiofs_service.Ro ] else [])
+  @ [ Virtiofs_service.Rw ]
+
+let virtiofs_socket_path (inputs : manifest_inputs) share =
+  match share with
+  | Virtiofs_service.Ro ->
+      Option.value inputs.ro_store_socket
+        ~default:
+          (Filename.concat (virtle_state_dir inputs.name) "shares-ro.sock")
+  | Virtiofs_service.Rw ->
+      Filename.concat (virtle_state_dir inputs.name) "shares-rw.sock"
+
+let wait_for_virtiofs_socket path =
+  let deadline = Unix.gettimeofday () +. 20. in
+  let rec wait () =
+    if socket_accepts_connection ~timeout:0.5 path then ()
+    else if Unix.gettimeofday () >= deadline then
+      failwith
+        (Printf.sprintf
+           "virtiofsd socket %s did not become connectable within 20 seconds"
+           path)
+    else (
+      ignore (Unix.select [] [] [] 0.1);
+      wait ())
+  in
+  wait ()
+
+let start_virtiofs_services (inputs : manifest_inputs) =
+  Util.ensure_dir (virtle_state_dir inputs.name);
+  let started = ref [] in
+  try
+    List.iter
+      (fun share ->
+        started := share :: !started;
+        Virtiofs_service.start ~name:inputs.name ~state_base:(state_base_dir ())
+          ~virtiofsd:inputs.virtiofsd share)
+      (root_managed_virtiofs_shares inputs);
+    List.iter
+      (fun share -> wait_for_virtiofs_socket (virtiofs_socket_path inputs share))
+      [ Virtiofs_service.Ro; Virtiofs_service.Rw ]
+  with exn ->
+    List.iter
+      (fun share ->
+        try
+          Virtiofs_service.stop ~name:inputs.name
+            ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd share
+        with _ -> ())
+      !started;
+    match exn with
+    | Failure message -> Log.fatal "%s" message
+    | exn -> raise exn
+
+let stop_virtiofs_services (inputs : manifest_inputs) =
+  let failures = ref [] in
+  List.iter
+    (fun share ->
+      try
+        Virtiofs_service.stop ~name:inputs.name ~state_base:(state_base_dir ())
+          ~virtiofsd:inputs.virtiofsd share
+      with exn -> failures := Printexc.to_string exn :: !failures)
+    [ Virtiofs_service.Ro; Virtiofs_service.Rw ];
+  match List.rev !failures with
+  | [] -> ()
+  | failures ->
+      Log.fatal "could not stop all root virtiofsd services: %s"
+        (String.concat "; " failures)
+
 let start_background ~ssh_ready_timeout ~announce ~resume ~name ~virtle ~path
     ~log_level () =
   let args = launch_args ~resume ~path ~log_level ~ssh:false in
@@ -4138,8 +4210,8 @@ let start_background ~ssh_ready_timeout ~announce ~resume ~name ~virtle ~path
   let code =
     Systemd_run.start_user_unit ~env ~name ~description ~program:virtle ~args
   in
-  if code <> 0 then exit code;
-  if announce then print_background_started ~name
+  if code = 0 && announce then print_background_started ~name;
+  code
 
 let registration_for_inputs (inputs : manifest_inputs) =
   match inputs.registration_path with
@@ -4180,13 +4252,17 @@ let launch_background_and_attach ?ssh_ready_timeout ~resume
 let launch_foreground_attached ?cleanup_dir ?ssh_ready_timeout ~resume
     (inputs : manifest_inputs) path ~log_level =
   prepare_host_share_mounts inputs;
+  start_virtiofs_services inputs;
   let args = launch_args ~resume ~path ~log_level ~ssh:true in
   (* The manifest's SSH wrapper performs registration and all desired mounts
      before it execs SSH. Running wait_and_mount concurrently here opens a
      second QGA connection and can reset the wrapper's in-flight guest-exec. *)
   let code =
-    with_ssh_ready_timeout ?ssh_ready_timeout (fun () ->
-        Util.run_foreground inputs.virtle args)
+    Fun.protect
+      ~finally:(fun () -> stop_virtiofs_services inputs)
+      (fun () ->
+        with_ssh_ready_timeout ?ssh_ready_timeout (fun () ->
+            Util.run_foreground inputs.virtle args))
   in
   Option.iter
     (fun dir ->
@@ -4492,6 +4568,7 @@ let stop ?name ~force () =
     ~mac:(network_mac vm.name)
   |> confirm_stop_with_active_ssh ~name:vm.name ~force;
   let code = Systemd_run.stop_user_unit ~name:vm.name in
+  if code = 0 then stop_virtiofs_services (saved_inputs ~name:vm.name ());
   exit code
 
 let remove_nix_store_state ~name =
