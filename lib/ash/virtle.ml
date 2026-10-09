@@ -1585,7 +1585,7 @@ let bindfs_args_for_mode mode =
   let mode_args = match mode with Read_only -> [ "-r" ] | Read_write -> [] in
   [
     "--multithreaded";
-    "--no-allow-other";
+    "--allow-other";
     "-o";
     "attr_timeout=0,entry_timeout=0,negative_timeout=0";
   ]

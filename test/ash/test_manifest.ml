@@ -1370,8 +1370,8 @@ let test_bindfs_disables_kernel_metadata_caches () =
   let ro_args = Virtle.bindfs_args_for_mode Virtle.Read_only in
   assert_bool "bindfs rw has cache timeouts" true (List.mem expected rw_args);
   assert_bool "bindfs ro has cache timeouts" true (List.mem expected ro_args);
-  assert_bool "bindfs limits staging to its owner" true
-    (List.mem "--no-allow-other" rw_args && List.mem "--no-allow-other" ro_args);
+  assert_bool "bindfs permits root virtiofsd access" true
+    (List.mem "--allow-other" rw_args && List.mem "--allow-other" ro_args);
   assert_bool "bindfs ro stays read-only" true (List.mem "-r" ro_args)
 
 let test_hotmount_host_path_normalization_cases () =
