@@ -234,9 +234,14 @@ let spawn =
         `P
           "The shared strategy stages the host /nix/store at \
            shares/ro/system/nix-store. Both store strategies expose exactly \
-           two directory shares, shares-ro and shares-rw. --shares-ro-socket \
-           may select an existing daemon socket; --ro-store-socket remains a \
-           compatibility alias.";
+           two directory shares, shares-ro and shares-rw. Ash starts their \
+           root-owned virtiofsd services through a narrowly scoped pkexec \
+           helper; Virtle and QEMU remain user-owned. This requires the user to \
+           belong to the users group and may prompt for administrator \
+           authentication. Install Ash as a system package so its polkit action \
+           is available to the system policy authority. --shares-ro-socket may \
+           instead select an externally managed read-only daemon; \
+           --ro-store-socket remains a compatibility alias.";
         `P
           "The image strategy creates nix-store.img as a private ext4 \
            filesystem labeled nix-store and copies the selected closure plus \

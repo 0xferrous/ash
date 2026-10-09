@@ -9,6 +9,8 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- Ash starts narrowly authorized root `virtiofsd` services for both shares,
+  enabling file handles while keeping Virtle and QEMU user-owned.
 - `ash run` now accepts `--waypipe` to forward guest Wayland and X11 applications.
 
 ### Fixed
