@@ -26,7 +26,15 @@ let start_user_unit ~env ~name ~description ~program ~args =
     List.concat_map (fun (key, value) -> [ "--setenv"; key ^ "=" ^ value ]) env
   in
   let systemd_args =
-    [ "--user"; "--unit"; unit; "--description"; description; "--same-dir" ]
+    [
+      "--user";
+      "--unit";
+      unit;
+      "--description";
+      description;
+      "--same-dir";
+      "--property=LimitNOFILE=1000000:1000000";
+    ]
     @ env_args
     @ (if default_options.collect then [ "--collect" ] else [])
     @ (program :: args)
