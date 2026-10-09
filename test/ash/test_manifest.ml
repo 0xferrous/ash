@@ -1377,7 +1377,9 @@ let test_bindfs_disables_kernel_metadata_caches () =
        rw_args
     && List.mem
          "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0"
-         ro_args);
+         ro_args
+    && not (List.mem "--allow-other" rw_args)
+    && not (List.mem "--allow-other" ro_args));
   assert_bool "bindfs ro stays read-only" true (List.mem "-r" ro_args)
 
 let test_hotmount_host_path_normalization_cases () =
