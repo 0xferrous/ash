@@ -1285,6 +1285,33 @@ let test_virtiofs_uses_virtle_default_args () =
   assert_bool "virtle default mount omits daemon args" true
     (Otoml.find_opt mount Fun.id [ "virtiofs"; "args" ] = None)
 
+let test_virtiofs_service_scoping () =
+  let ro =
+    Virtiofs_service.service_name ~uid:1000
+      ~state_base:"/home/agent/.local/state/ash" ~name:"work"
+      Virtiofs_service.Ro
+  in
+  let rw =
+    Virtiofs_service.service_name ~uid:1000
+      ~state_base:"/home/agent/.local/state/ash" ~name:"work"
+      Virtiofs_service.Rw
+  in
+  assert_bool "root share services have distinct units" true (ro <> rw);
+  assert_bool "VM names scope root share units" true
+    (ro
+    <> Virtiofs_service.service_name ~uid:1000
+         ~state_base:"/home/agent/.local/state/ash" ~name:"other"
+         Virtiofs_service.Ro);
+  assert_bool "users scope root share units" true
+    (ro
+    <> Virtiofs_service.service_name ~uid:1001
+         ~state_base:"/home/agent/.local/state/ash" ~name:"work"
+         Virtiofs_service.Ro);
+  assert_equal "root service socket path"
+    "/home/agent/.local/state/ash/work/virtle_state/shares-ro.sock"
+    (Virtiofs_service.socket_path ~state_base:"/home/agent/.local/state/ash"
+       ~name:"work" Virtiofs_service.Ro)
+
 let test_virtiofs_idmap_args () =
   assert_equal "virtiofs subordinate id mappings"
     "--uid-map=:0:1000:1:,--uid-map=:1:100000:65535:,--gid-map=:0:200000:65536:"
@@ -2688,6 +2715,7 @@ let () =
     test_qga_mountpoint_inherits_parent_owner;
   run "virtiofs cache options" test_virtiofs_cache_options;
   run "virtiofs uses virtle default args" test_virtiofs_uses_virtle_default_args;
+  run "virtiofs root service scoping" test_virtiofs_service_scoping;
   run "virtiofs subordinate id mappings" test_virtiofs_idmap_args;
   run "virtiofs idmap fallback" test_virtiofs_idmap_fallback;
   run "inspect infers fixed mount targets"

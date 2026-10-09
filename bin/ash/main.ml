@@ -778,4 +778,21 @@ let () =
   | [| _; "_log"; level; message |] ->
       Log.log_level level message;
       exit 0
+  | argv when Array.length argv > 1 && argv.(1) = "_virtiofsd_root" ->
+      (try
+         Virtiofs_service.root_helper
+           (Array.to_list (Array.sub argv 2 (Array.length argv - 2)));
+         exit 0
+       with Failure message ->
+         prerr_endline ("ash virtiofsd helper: " ^ message);
+         exit 1
+          | Unix.Unix_error (error, operation, argument) ->
+              prerr_endline
+                (Printf.sprintf "ash virtiofsd helper: %s (%s %s)"
+                   (Unix.error_message error) operation argument);
+              exit 1
+          | exn ->
+              prerr_endline
+                ("ash virtiofsd helper: " ^ Printexc.to_string exn);
+              exit 1)
   | _ -> exit (Cmd.eval main_cmd)

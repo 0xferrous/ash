@@ -126,13 +126,35 @@
               install -Dm755 ${ashBuild}/bin/ash "$out/bin/ash"
               install -Dm755 ${ashBuild}/bin/ash-dbus-proxy "$out/bin/ash-dbus-proxy"
               wrapProgram "$out/bin/ash" \
+                --set ASH_INTERNAL_EXECUTABLE ${ashBuild}/bin/ash \
                 --prefix PATH : ${
-                  pkgs.lib.makeBinPath [
-                    pkgs.bindfs
-                    pkgs.socat
-                    pkgs.waypipe
-                  ]
+                  pkgs.lib.makeBinPath (
+                    [ pkgs.bindfs pkgs.socat pkgs.waypipe ]
+                    ++ pkgs.lib.optional pkgs.stdenv.isLinux pkgs.polkit
+                  )
                 }
+              ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+                install -Dm644 /dev/stdin \
+                  "$out/share/polkit-1/actions/org.ash.virtiofsd.policy" <<'POLICY'
+                <?xml version="1.0" encoding="UTF-8"?>
+                <!DOCTYPE policyconfig PUBLIC
+                 "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
+                 "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+                <policyconfig>
+                  <action id="org.ash.virtiofsd.manage">
+                    <description>Manage Ash VM VirtioFS daemons</description>
+                    <message>Authentication is required to manage root VirtioFS daemons for this user's Ash VM.</message>
+                    <defaults>
+                      <allow_any>no</allow_any>
+                      <allow_inactive>no</allow_inactive>
+                      <allow_active>auth_admin_keep</allow_active>
+                    </defaults>
+                    <annotate key="org.freedesktop.policykit.exec.path" value="${ashBuild}/bin/ash"/>
+                    <annotate key="org.freedesktop.policykit.exec.argv1" value="_virtiofsd_root"/>
+                  </action>
+                </policyconfig>
+                POLICY
+              ''}
             '';
 
         agentPortalHost = pkgs.runCommand "agent-portal-host" { } ''
