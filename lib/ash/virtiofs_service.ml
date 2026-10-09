@@ -34,7 +34,10 @@ let required_exe exe =
   | Some path -> path
   | None -> failwith (Printf.sprintf "could not find %s" exe)
 
-let pkexec_path () = required_exe "pkexec"
+let pkexec_path () =
+  let wrapper = "/run/wrappers/bin/pkexec" in
+  if Sys.file_exists wrapper && Util.is_executable wrapper then wrapper
+  else required_exe "pkexec"
 
 let effective_user_id () =
   match Sys.getenv_opt "PKEXEC_UID" with
