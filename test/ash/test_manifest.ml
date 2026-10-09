@@ -277,7 +277,9 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   | Otoml.TomlTable fields | Otoml.TomlInlineTable fields ->
       assert_equal "shares-ro root-managed socket"
         (Filename.concat state "ash/unit-test/virtle_state/shares-ro.sock")
-        (string_field fields "socket")
+        (string_field fields "socket");
+      assert_equal "shares-ro daemon is externally managed" ""
+        (string_field fields "bin")
   | _ -> fail "shares-ro virtiofs config is not a table");
   assert_equal "shares-rw source"
     (Filename.concat state "ash/mounts/unit-test/shares/rw")
@@ -287,7 +289,9 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
   | Otoml.TomlTable fields | Otoml.TomlInlineTable fields ->
       assert_equal "shares-rw root-managed socket"
         (Filename.concat state "ash/unit-test/virtle_state/shares-rw.sock")
-        (string_field fields "socket")
+        (string_field fields "socket");
+      assert_equal "shares-rw daemon is externally managed" ""
+        (string_field fields "bin")
   | _ -> fail "shares-rw virtiofs config is not a table");
   assert_bool "space source is not a virtiofs entry" false
     (List.exists

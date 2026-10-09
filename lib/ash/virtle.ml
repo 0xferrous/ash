@@ -3483,10 +3483,10 @@ let render_resolved_manifest inputs =
     [
       virtiofs_mount ~virtle_defaults:true ~tag:"shares-ro"
         ~source:shares_ro_host_dir ~read_only:true ~socket:shares_ro_socket
-        ~bin:inputs.virtiofsd ();
+        ~bin:"" ();
       virtiofs_mount ~virtle_defaults:true ~tag:"shares-rw"
         ~source:shares_rw_host_dir ~read_only:false ~socket:shares_rw_socket
-        ~bin:inputs.virtiofsd ();
+        ~bin:"" ();
     ]
     @ store_mounts
     @ [
