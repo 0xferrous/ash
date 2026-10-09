@@ -4238,8 +4238,14 @@ let wait_and_mount (inputs : manifest_inputs) path =
 let launch_background ?(announce = true) ?ssh_ready_timeout ~resume
     (inputs : manifest_inputs) path ~log_level =
   prepare_host_share_mounts inputs;
-  start_background ~ssh_ready_timeout ~announce ~resume ~name:inputs.name
-    ~virtle:inputs.virtle ~path ~log_level ();
+  start_virtiofs_services inputs;
+  let code =
+    start_background ~ssh_ready_timeout ~announce ~resume ~name:inputs.name
+      ~virtle:inputs.virtle ~path ~log_level ()
+  in
+  if code <> 0 then (
+    (try stop_virtiofs_services inputs with _ -> ());
+    exit code);
   wait_and_mount inputs path
 
 let launch_background_and_attach ?ssh_ready_timeout ~resume
