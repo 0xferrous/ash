@@ -142,8 +142,8 @@
                  "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
                 <policyconfig>
                   <action id="org.ash.virtiofsd.manage">
-                    <description>Manage Ash VM VirtioFS daemons</description>
-                    <message>Authentication is required to manage root VirtioFS daemons for this user's Ash VM.</message>
+                    <description>Run Ash VM VirtioFS daemons as root</description>
+                    <message>Ash is requesting administrator authorization to run VirtIO-FS daemons as root for this user's VM.</message>
                     <defaults>
                       <allow_any>no</allow_any>
                       <allow_inactive>no</allow_inactive>

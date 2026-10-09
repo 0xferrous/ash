@@ -4157,42 +4157,31 @@ let wait_for_virtiofs_socket path =
 let start_virtiofs_services (inputs : manifest_inputs) =
   Util.ensure_dir (virtle_state_dir inputs.name);
   let started = ref [] in
+  let shares = root_managed_virtiofs_shares inputs in
   try
-    List.iter
-      (fun share ->
-        started := share :: !started;
-        Virtiofs_service.start ~name:inputs.name ~state_base:(state_base_dir ())
-          ~virtiofsd:inputs.virtiofsd share)
-      (root_managed_virtiofs_shares inputs);
+    started := shares;
+    Virtiofs_service.start_all ~name:inputs.name
+      ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd shares;
     List.iter
       (fun share -> wait_for_virtiofs_socket (virtiofs_socket_path inputs share))
       [ Virtiofs_service.Ro; Virtiofs_service.Rw ]
   with exn ->
-    List.iter
-      (fun share ->
-        try
-          Virtiofs_service.stop ~name:inputs.name
-            ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd share
-        with _ -> ())
-      !started;
+    (try
+       Virtiofs_service.stop_all ~name:inputs.name
+         ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd !started
+     with _ -> ());
     match exn with
     | Failure message -> Log.fatal "%s" message
     | exn -> raise exn
 
 let stop_virtiofs_services (inputs : manifest_inputs) =
-  let failures = ref [] in
-  List.iter
-    (fun share ->
-      try
-        Virtiofs_service.stop ~name:inputs.name ~state_base:(state_base_dir ())
-          ~virtiofsd:inputs.virtiofsd share
-      with exn -> failures := Printexc.to_string exn :: !failures)
-    [ Virtiofs_service.Ro; Virtiofs_service.Rw ];
-  match List.rev !failures with
-  | [] -> ()
-  | failures ->
-      Log.fatal "could not stop all root virtiofsd services: %s"
-        (String.concat "; " failures)
+  try
+    Virtiofs_service.stop_all ~name:inputs.name
+      ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd
+      [ Virtiofs_service.Ro; Virtiofs_service.Rw ]
+  with exn ->
+    Log.fatal "could not stop all root virtiofsd services: %s"
+      (Printexc.to_string exn)
 
 let start_background ~ssh_ready_timeout ~announce ~resume ~name ~virtle ~path
     ~log_level () =

@@ -203,39 +203,13 @@ let user_belongs_to_socket_group () =
     Unix.getgid () = group.Unix.gr_gid || Array.mem group.Unix.gr_gid gids
   with Not_found -> false
 
-let subordinate_range ~user ~uid path =
-  try
-    In_channel.with_open_text path (fun channel ->
-        In_channel.input_lines channel
-        |> List.find_map (fun line ->
-            match String.split_on_char ':' line with
-            | [ owner; start; count ]
-              when owner = user || owner = string_of_int uid -> (
-                match (int_of_string_opt start, int_of_string_opt count) with
-                | Some start, Some count -> Some (start, count)
-                | _ -> None)
-            | _ -> None))
-  with Sys_error _ -> None
-
 let rw_identity_args identity =
-  match
-    ( subordinate_range ~user:identity.name ~uid:identity.uid "/etc/subuid",
-      subordinate_range ~user:identity.name ~uid:identity.uid "/etc/subgid" )
-  with
-  | Some (uid_start, uid_count), Some (gid_start, gid_count)
-    when uid_count >= 65535 && gid_count >= 65536 ->
-      [
-        Printf.sprintf "--uid-map=:0:%d:1:" identity.uid;
-        Printf.sprintf "--uid-map=:1:%d:65535:" uid_start;
-        Printf.sprintf "--gid-map=:0:%d:65536:" gid_start;
-      ]
-  | _ ->
-      [
-        Printf.sprintf "--translate-uid=squash-guest:0:%d:65536" identity.uid;
-        Printf.sprintf "--translate-uid=squash-host:%d:0:1" identity.uid;
-        Printf.sprintf "--translate-gid=squash-guest:0:%d:65536" identity.gid;
-        Printf.sprintf "--translate-gid=squash-host:%d:0:1" identity.gid;
-      ]
+  [
+    Printf.sprintf "--translate-uid=squash-guest:0:%d:65536" identity.uid;
+    Printf.sprintf "--translate-uid=squash-host:%d:0:1" identity.uid;
+    Printf.sprintf "--translate-gid=squash-guest:0:%d:65536" identity.gid;
+    Printf.sprintf "--translate-gid=squash-host:%d:0:1" identity.gid;
+  ]
 
 let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
   if Unix.geteuid () <> 0 then failwith "root helper was not run as root";
@@ -270,8 +244,8 @@ let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
             "--property=LimitNOFILE=1000000:1000000";
             "--property=CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE \
              CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_SETGID CAP_SETUID \
-             CAP_MKNOD CAP_SETFCAP";
-            "--property=AmbientCapabilities=CAP_DAC_READ_SEARCH";
+             CAP_SYS_ADMIN CAP_MKNOD CAP_SETFCAP";
+            "--property=AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_SYS_ADMIN";
             "--property=NoNewPrivileges=no";
             executable;
             "--socket-path=" ^ socket;
@@ -293,24 +267,33 @@ let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
       remove_root_socket socket
   | _ -> failwith "invalid root-helper action"
 
+let share_of_string = function
+  | "ro" -> Ro
+  | "rw" -> Rw
+  | _ -> failwith "share must be ro or rw"
+
 let root_helper args =
+  let uid = effective_user_id () in
   match args with
   | [ action; name; share; state_base; virtiofsd ] ->
-      let uid = effective_user_id () in
-      let share =
-        match share with
-        | "ro" -> Ro
-        | "rw" -> Rw
-        | _ -> failwith "share must be ro or rw"
-      in
-      run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd
+      run_root_service ~action ~uid ~state_base ~name
+        ~share:(share_of_string share) ~virtiofsd
+  | action :: name :: state_base :: virtiofsd :: shares
+    when action = "start-all" || action = "stop-all" ->
+      if shares = [] then failwith "at least one share is required";
+      let action = if action = "start-all" then "start" else "stop" in
+      List.iter
+        (fun share ->
+          run_root_service ~action ~uid ~state_base ~name
+            ~share:(share_of_string share) ~virtiofsd)
+        shares
   | _ ->
       failwith
-        "invalid helper arguments (expected ACTION NAME ro|rw STATE_BASE \
-         VIRTIOFSD)"
+        "invalid helper arguments (expected ACTION NAME STATE_BASE VIRTIOFSD \
+         SHARE...)"
 
-let invoke_root_helper ~action ~name ~share ~state_base ~virtiofsd =
-  if action = "start" && not (user_belongs_to_socket_group ()) then
+let invoke_root_helper ~action ~name ~shares ~state_base ~virtiofsd =
+  if action = "start-all" && not (user_belongs_to_socket_group ()) then
     failwith
       "your account must be a member of the 'users' group for root-managed \
        VirtioFS sockets";
@@ -333,16 +316,19 @@ let invoke_root_helper ~action ~name ~share ~state_base ~virtiofsd =
       "_virtiofsd_root";
       action;
       Util.name_slug name;
-      share_name share;
       Unix.realpath state_base;
       virtiofsd;
     ]
+    @ List.map share_name shares
   in
   let code = Util.run_foreground pkexec args in
   if code <> 0 then failwith (Printf.sprintf "pkexec helper failed (%d)" code)
 
+let start_all ~name ~state_base ~virtiofsd shares =
+  invoke_root_helper ~action:"start-all" ~name ~shares ~state_base ~virtiofsd
+
 let start ~name ~state_base ~virtiofsd share =
-  invoke_root_helper ~action:"start" ~name ~share ~state_base ~virtiofsd
+  start_all ~name ~state_base ~virtiofsd [ share ]
 
 let service_or_socket_exists ~name ~state_base share =
   let state_base = Unix.realpath state_base in
@@ -361,6 +347,12 @@ let service_or_socket_exists ~name ~state_base share =
   in
   active || stale_socket
 
+let stop_all ~name ~state_base ~virtiofsd shares =
+  if
+    List.exists
+      (fun share -> service_or_socket_exists ~name ~state_base share)
+      shares
+  then invoke_root_helper ~action:"stop-all" ~name ~shares ~state_base ~virtiofsd
+
 let stop ~name ~state_base ~virtiofsd share =
-  if service_or_socket_exists ~name ~state_base share then
-    invoke_root_helper ~action:"stop" ~name ~share ~state_base ~virtiofsd
+  stop_all ~name ~state_base ~virtiofsd [ share ]
