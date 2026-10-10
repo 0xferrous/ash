@@ -178,7 +178,7 @@ let pid_file_owned_by_root path =
     stat.Unix.st_kind = Unix.S_REG && stat.Unix.st_uid = 0
   with Unix.Unix_error (Unix.ENOENT, _, _) -> false
 
-let remove_root_socket path =
+let remove_root_socket ?owner_uid path =
   if
     Sys.file_exists path
     || try (Unix.lstat path).Unix.st_kind = Unix.S_SOCK with _ -> false
@@ -188,7 +188,13 @@ let remove_root_socket path =
   let pid_path = path ^ ".pid" in
   if Sys.file_exists pid_path then
     let stat = Unix.lstat pid_path in
-    if stat.Unix.st_kind <> Unix.S_REG || stat.Unix.st_uid <> 0 then
+    let owned_by_allowed_user =
+      match owner_uid with Some uid -> stat.Unix.st_uid = uid | None -> false
+    in
+    if
+      stat.Unix.st_kind <> Unix.S_REG
+      || (stat.Unix.st_uid <> 0 && not owned_by_allowed_user)
+    then
       failwith (Printf.sprintf "refusing to remove non-root pid file %s" pid_path)
     else Unix.unlink pid_path
 
@@ -231,7 +237,11 @@ let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
         ignore
           (Util.run_foreground systemctl [ "--system"; "reset-failed"; unit ]);
         let executable = trusted_executable virtiofsd in
-        remove_root_socket socket;
+        (* A previous rootless virtiofsd may have left its user-owned PID
+           sidecar behind after the daemon/socket disappeared.  The validated
+           Ash state directory makes removing that stale sidecar safe during
+           root-service handoff; socket files themselves must remain root-owned. *)
+        remove_root_socket ~owner_uid:uid socket;
         let args =
           [
             "--system";
