@@ -292,6 +292,16 @@ let root_helper args =
         "invalid helper arguments (expected ACTION NAME STATE_BASE VIRTIOFSD \
          SHARE...)"
 
+let with_pkexec_shell f =
+  let previous = Sys.getenv_opt "SHELL" in
+  Unix.putenv "SHELL" "/bin/sh";
+  Fun.protect
+    ~finally:(fun () ->
+      match previous with
+      | Some value -> Unix.putenv "SHELL" value
+      | None -> Unix.putenv "SHELL" "")
+    f
+
 let invoke_root_helper ~action ~name ~shares ~state_base ~virtiofsd =
   if action = "start-all" && not (user_belongs_to_socket_group ()) then
     failwith
@@ -321,7 +331,7 @@ let invoke_root_helper ~action ~name ~shares ~state_base ~virtiofsd =
     ]
     @ List.map share_name shares
   in
-  let code = Util.run_foreground pkexec args in
+  let code = with_pkexec_shell (fun () -> Util.run_foreground pkexec args) in
   if code <> 0 then failwith (Printf.sprintf "pkexec helper failed (%d)" code)
 
 let start_all ~name ~state_base ~virtiofsd shares =
