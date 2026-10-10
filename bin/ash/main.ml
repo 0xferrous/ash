@@ -67,13 +67,15 @@ let run opts name waypipe command =
     (Some (Option.value opts.global.log_level ~default:Log.Error));
   Virtle.run ?virtle:opts.virtle ?name ~waypipe ~command ~verbose:opts.verbose ()
 
-let forward opts name forwards =
+let forward opts name local_forwards remote_forwards =
   Log.apply_log_level opts.global.log_level;
-  Virtle.ssh_forward ?virtle:opts.virtle ~name ~forwards ()
+  Virtle.ssh_forward ?virtle:opts.virtle ~name ~local_forwards ~remote_forwards
+    ()
 
-let unforward opts name forwards =
+let unforward opts name local_forwards remote_forwards =
   Log.apply_log_level opts.global.log_level;
-  Virtle.ssh_unforward ?virtle:opts.virtle ~name ~forwards ()
+  Virtle.ssh_unforward ?virtle:opts.virtle ~name ~local_forwards
+    ~remote_forwards ()
 
 let resume opts name attach keep =
   Log.apply_log_level opts.global.log_level;
@@ -457,25 +459,31 @@ let port_forward_name_arg =
   Arg.(required & pos 0 (some string) None
        & info [] ~doc:"VM/state name." ~docv:"NAME")
 
-let port_forward_specs_arg =
+let port_forward_local_specs_arg =
   Arg.(value & opt_all string []
        & info [ "local" ]
            ~doc:"Forward HOST_PORT to the same port in the guest. Repeatable."
            ~docv:"HOST_PORT:GUEST_PORT")
+
+let port_forward_remote_specs_arg =
+  Arg.(value & opt_all string []
+       & info [ "remote" ]
+           ~doc:"Forward a guest port to a service on the host. Repeatable."
+           ~docv:"GUEST_PORT:HOST_PORT")
 
 let forward_cmd =
   Cmd.v
     (Cmd.info "forward" ~doc:"add SSH port forwards to a running VM"
        ~man:Pages.forward.man)
     Term.(const forward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
-          $ port_forward_specs_arg)
+          $ port_forward_local_specs_arg $ port_forward_remote_specs_arg)
 
 let unforward_cmd =
   Cmd.v
     (Cmd.info "unforward" ~doc:"remove SSH port forwards from a running VM"
        ~man:Pages.unforward.man)
     Term.(const unforward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
-          $ port_forward_specs_arg)
+          $ port_forward_local_specs_arg $ port_forward_remote_specs_arg)
 
 let resume_name_arg =
   Arg.(

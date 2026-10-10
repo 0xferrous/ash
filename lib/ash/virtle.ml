@@ -3068,20 +3068,28 @@ let ssh_forward_unit_name name = name ^ "-ssh-forward"
 let ssh_forward_control_path ~name =
   Filename.concat (state_dir name) "ssh-forward.sock"
 
-let ssh_forward_spec value =
+let ssh_forward_spec ~remote value =
+  let option, expected =
+    if remote then ("--remote", "GUEST_PORT:HOST_PORT")
+    else ("--local", "HOST_PORT:GUEST_PORT")
+  in
+  let invalid ~ports =
+    let suffix = if ports then " with ports from 1 to 65535" else "" in
+    Log.fatal "invalid %s port forward %S; expected %s%s" option value expected
+      suffix
+  in
   match String.split_on_char ':' (String.trim value) with
-  | [ host; guest ] -> (
-      match (int_of_string_opt host, int_of_string_opt guest) with
-      | Some host, Some guest when host > 0 && host <= 65535 && guest > 0
-        && guest <= 65535 ->
-          (value, Printf.sprintf "127.0.0.1:%d:127.0.0.1:%d" host guest)
-      | _ ->
-          Log.fatal
-            "invalid port forward %S; expected HOST_PORT:GUEST_PORT with ports from 1 to 65535"
-            value)
-  | _ ->
-      Log.fatal
-        "invalid port forward %S; expected HOST_PORT:GUEST_PORT" value
+  | [ bind_port; target_port ] -> (
+      match (int_of_string_opt bind_port, int_of_string_opt target_port) with
+      | Some bind_port, Some target_port
+        when bind_port > 0 && bind_port <= 65535 && target_port > 0
+             && target_port <= 65535 ->
+          let direction = if remote then "-R" else "-L" in
+          ( value,
+            direction,
+            Printf.sprintf "127.0.0.1:%d:127.0.0.1:%d" bind_port target_port )
+      | _ -> invalid ~ports:true)
+  | _ -> invalid ~ports:false
 
 let ssh_forward_wrapper ~name =
   let path = space_mount_ssh_wrapper_path ~name in
@@ -3123,8 +3131,13 @@ let ensure_ssh_forward_master ~name ~wrapper ~control ~destination =
   in
   wait 300
 
-let ssh_forward ?virtle ~name ~forwards () =
-  if forwards = [] then Log.fatal "forward requires at least one --local PORT:PORT";
+let ssh_forward ?virtle ~name ~local_forwards ~remote_forwards () =
+  if local_forwards = [] && remote_forwards = [] then
+    Log.fatal "forward requires at least one --local or --remote port forward";
+  let forwards =
+    List.map (ssh_forward_spec ~remote:false) local_forwards
+    @ List.map (ssh_forward_spec ~remote:true) remote_forwards
+  in
   let virtle = find_virtle virtle in
   let name, path = select_attach_vm (Some name) in
   let status = rpc_status ~virtle ~path () in
@@ -3138,19 +3151,22 @@ let ssh_forward ?virtle ~name ~forwards () =
   let destination = ssh_forward_destination ~path ~cid in
   ensure_ssh_forward_master ~name ~wrapper ~control ~destination;
   List.iter
-    (fun value ->
-      let original, spec = ssh_forward_spec value in
+    (fun (original, direction, spec) ->
       let code =
         ssh_forward_control_request ~wrapper ~control ~destination
-          [ "-O"; "forward"; "-L"; spec ]
+          [ "-O"; "forward"; direction; spec ]
       in
       if code <> 0 then Log.fatal "could not forward port %s" original;
       Printf.printf "forwarded %s\n%!" original)
     forwards
 
-let ssh_unforward ?virtle ~name ~forwards () =
-  if forwards = [] then
-    Log.fatal "unforward requires at least one --local PORT:PORT";
+let ssh_unforward ?virtle ~name ~local_forwards ~remote_forwards () =
+  if local_forwards = [] && remote_forwards = [] then
+    Log.fatal "unforward requires at least one --local or --remote port forward";
+  let forwards =
+    List.map (ssh_forward_spec ~remote:false) local_forwards
+    @ List.map (ssh_forward_spec ~remote:true) remote_forwards
+  in
   let virtle = find_virtle virtle in
   let name, path = select_attach_vm (Some name) in
   let status = rpc_status ~virtle ~path () in
@@ -3165,11 +3181,10 @@ let ssh_unforward ?virtle ~name ~forwards () =
   if not (Systemd_run.is_user_unit_active ~name:(ssh_forward_unit_name name))
   then Log.fatal "no SSH port-forward service is running for VM %S" name;
   List.iter
-    (fun value ->
-      let original, spec = ssh_forward_spec value in
+    (fun (original, direction, spec) ->
       let code =
         ssh_forward_control_request ~wrapper ~control ~destination
-          [ "-O"; "cancel"; "-L"; spec ]
+          [ "-O"; "cancel"; direction; spec ]
       in
       if code <> 0 then Log.fatal "could not remove port forward %s" original;
       Printf.printf "removed %s\n%!" original)

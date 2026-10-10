@@ -491,14 +491,15 @@ let forward =
       [
         `S Manpage.s_description;
         `P
-          "Adds local SSH port forwards to a running VM. Ash keeps one SSH control-master session in a systemd user service for the VM, so adding another port does not create another SSH session.";
+          "Adds SSH port forwards to a running VM. Ash keeps one SSH control-master session in a systemd user service for the VM, so adding another port does not create another SSH session.";
         `P
-          "Use --local HOST_PORT:GUEST_PORT to expose a guest localhost port on the host. Repeat --local to add several forwards.";
+          "Use --local HOST_PORT:GUEST_PORT to expose a guest localhost port on the host. Use --remote GUEST_PORT:HOST_PORT to expose a host localhost service on a guest localhost port. Repeat either option to add several forwards.";
         `S Manpage.s_examples;
         `Pre "ash forward work --local 8080:80";
         `Pre "ash forward work --local 3000:3000 --local 5432:5432";
+        `Pre "ash forward work --remote 8080:3000";
         `P
-          "Remove forwards with ash unforward NAME --local HOST_PORT:GUEST_PORT.";
+          "Remove forwards with ash unforward NAME, repeating the matching --local or --remote options.";
       ];
   }
 
@@ -511,9 +512,10 @@ let unforward =
       [
         `S Manpage.s_description;
         `P
-          "Cancels local SSH port forwards through the VM's existing SSH control-master session.";
+          "Cancels SSH port forwards through the VM's existing SSH control-master session. Use the same --local HOST_PORT:GUEST_PORT or --remote GUEST_PORT:HOST_PORT pair that was passed to ash forward.";
         `S Manpage.s_examples;
         `Pre "ash unforward work --local 8080:80";
+        `Pre "ash unforward work --remote 8080:3000";
       ];
   }
 

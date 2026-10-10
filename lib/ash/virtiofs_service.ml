@@ -214,9 +214,11 @@ let user_belongs_to_socket_group () =
 let rw_identity_args identity =
   [
     Printf.sprintf "--translate-uid=squash-guest:0:%d:65536" identity.uid;
-    Printf.sprintf "--translate-uid=squash-host:%d:0:1" identity.uid;
+    Printf.sprintf "--translate-uid=squash-host:%d:%d:1" identity.uid
+      identity.uid;
     Printf.sprintf "--translate-gid=squash-guest:0:%d:65536" identity.gid;
-    Printf.sprintf "--translate-gid=squash-host:%d:0:1" identity.gid;
+    Printf.sprintf "--translate-gid=squash-host:%d:%d:1" identity.gid
+      identity.gid;
   ]
 
 let run_root_service ~action ~uid ~state_base ~name ~share ~virtiofsd =
