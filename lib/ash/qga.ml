@@ -314,9 +314,12 @@ chown -- "$owner" "$dir"
 chmod 700 "$dir"
 
 touch "$auth"
-if ! grep -qxF -- "$key" "$auth"; then
-  printf '%s\n' "$key" >> "$auth"
+chown -- "$owner" "$auth"
+chmod 600 "$auth"
+if grep -qxF -- "$key" "$auth"; then
+  exit 42
 fi
+printf '%s\n' "$key" >> "$auth"
 
 chown -- "$owner" "$auth"
 chmod 600 "$auth"

@@ -616,6 +616,9 @@ case "$result" in
   *'"exitCode":0'*)
     ash_log INFO %s
     ;;
+  *'"exitCode":42'*)
+    ash_log DEBUG %s
+    ;;
   *)
     ash_log ERROR %s
     printf '%%s\n' "$result" >&2
@@ -627,6 +630,7 @@ esac|sh}
       (Util.shell_quote (Qga.params provision_action))
       (Util.shell_quote "retrying SSH key provisioning")
       (Util.shell_quote "provisioned SSH key")
+      (Util.shell_quote "SSH key already provisioned")
       (Util.shell_quote "failed to provision SSH key")
   in
   let registration_action =
@@ -2935,7 +2939,7 @@ let install_ssh_key ~virtle ~path ~name ~user =
               ~method_name:"guest-exec" ~params:(Qga.params action) ()
           in
           match (Qga.result action output).exit_code with
-          | Some 0 -> (true, "")
+          | Some 0 | Some 42 -> (true, "")
           | Some code ->
               (false, Printf.sprintf "guest-exec exited %d: %s" code output)
           | None -> (false, "guest-exec returned no exit code: " ^ output)
