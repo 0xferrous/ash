@@ -1378,10 +1378,9 @@ let test_bindfs_disables_kernel_metadata_caches () =
   assert_bool "bindfs permits root virtiofsd access" true
     (List.mem "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0"
        rw_args
-    && List.mem
-         "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0"
+    && List.mem "allow_other,attr_timeout=0,entry_timeout=0,negative_timeout=0"
          ro_args
-    && not (List.mem "--allow-other" rw_args)
+    && (not (List.mem "--allow-other" rw_args))
     && not (List.mem "--allow-other" ro_args));
   assert_bool "bindfs ro stays read-only" true (List.mem "-r" ro_args)
 
@@ -2601,7 +2600,8 @@ let test_ssh_config_block () =
          "    IdentityFile /home/user/.local/state/ash/work/id_ed25519";
          "    IdentitiesOnly yes";
          "    PubkeyAuthentication yes";
-         "    ProxyCommand '/home/user/bin/ash' _ssh-proxy 'work' '/nix/store/systemd/lib/systemd-ssh-proxy' %p";
+         "    ProxyCommand '/home/user/bin/ash' _ssh-proxy 'work' \
+          '/nix/store/systemd/lib/systemd-ssh-proxy' %p";
          "    ProxyUseFdpass yes";
          "    HostKeyAlias ash-work";
          "    StrictHostKeyChecking yes";

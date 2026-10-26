@@ -7,6 +7,8 @@ and this project uses its existing Git tags for version history.
 
 ## [Unreleased]
 
+## [v0.1.17] - 2026-10-26
+
 ### Added
 
 - `ash ssh-config NAME` prints a ready-to-copy OpenSSH config block for a
@@ -15,6 +17,10 @@ and this project uses its existing Git tags for version history.
 - Ash starts narrowly authorized root `virtiofsd` services for both shares,
   enabling file handles while keeping Virtle and QEMU user-owned.
 - `ash run` now accepts `--waypipe` to forward guest Wayland and X11 applications.
+- `ash forward` and `ash unforward` manage local guest port forwards through a
+  single per-VM SSH control session.
+- `ash forward` and `ash unforward` support remote forwards from guest ports to
+  services bound to localhost on the host.
 
 ### Fixed
 
@@ -27,13 +33,6 @@ and this project uses its existing Git tags for version history.
 - Spawn cleanup now detects and lazily unmounts disconnected FUSE staging mounts instead of failing with an internal `EEXIST` error.
 - Image-backed Nix store updates now explain when an ext4 image has no free data
   blocks and advise increasing `image_size_mib`.
-
-### Added
-
-- `ash forward` and `ash unforward` manage local guest port forwards through a
-  single per-VM SSH control session.
-- `ash forward` and `ash unforward` support remote forwards from guest ports to
-  services bound to localhost on the host.
 
 ## [v0.1.15] - 2026-09-04
 
@@ -257,7 +256,9 @@ and this project uses its existing Git tags for version history.
 - Disabled caching for mutable FUSE shares, normalized mount paths, excluded hotmounts from state-size totals, and removed stale guest mountpoints.
 - Configured the Portal environment correctly for Nushell.
 
-[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.15...HEAD
+[Unreleased]: https://github.com/0xferrous/ash/compare/v0.1.17...HEAD
+[v0.1.17]: https://github.com/0xferrous/ash/compare/v0.1.16...v0.1.17
+[v0.1.16]: https://github.com/0xferrous/ash/compare/v0.1.15...v0.1.16
 [v0.1.15]: https://github.com/0xferrous/ash/compare/v0.1.14...v0.1.15
 [v0.1.14]: https://github.com/0xferrous/ash/compare/v0.1.13...v0.1.14
 [v0.1.13]: https://github.com/0xferrous/ash/compare/v0.1.12...v0.1.13

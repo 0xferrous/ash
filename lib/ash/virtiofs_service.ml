@@ -195,7 +195,8 @@ let remove_root_socket ?owner_uid path =
       stat.Unix.st_kind <> Unix.S_REG
       || (stat.Unix.st_uid <> 0 && not owned_by_allowed_user)
     then
-      failwith (Printf.sprintf "refusing to remove non-root pid file %s" pid_path)
+      failwith
+        (Printf.sprintf "refusing to remove non-root pid file %s" pid_path)
     else Unix.unlink pid_path
 
 let socket_group_arg () =
@@ -373,7 +374,8 @@ let stop_all ~name ~state_base ~virtiofsd shares =
     List.exists
       (fun share -> service_or_socket_exists ~name ~state_base share)
       shares
-  then invoke_root_helper ~action:"stop-all" ~name ~shares ~state_base ~virtiofsd
+  then
+    invoke_root_helper ~action:"stop-all" ~name ~shares ~state_base ~virtiofsd
 
 let stop ~name ~state_base ~virtiofsd share =
   stop_all ~name ~state_base ~virtiofsd [ share ]

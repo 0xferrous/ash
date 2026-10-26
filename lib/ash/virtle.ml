@@ -1369,7 +1369,8 @@ let rm_vms () =
               Log.info "deleting VM state %s (%s)" vm.name vm.path;
               List.iter
                 (Virtiofs_service.stop ~name:vm.name
-                   ~state_base:(state_base_dir ()) ~virtiofsd:(find_virtiofsd ()))
+                   ~state_base:(state_base_dir ())
+                   ~virtiofsd:(find_virtiofsd ()))
                 [ Virtiofs_service.Ro; Virtiofs_service.Rw ];
               Util.remove_tree ~force:true (mounts_dir vm.name);
               Util.remove_tree ~force:true vm.path
@@ -2985,8 +2986,7 @@ let ssh_config_value value =
     Buffer.add_char buffer '"';
     String.iter
       (fun character ->
-        if character = '"' || character = '\\' then
-          Buffer.add_char buffer '\\';
+        if character = '"' || character = '\\' then Buffer.add_char buffer '\\';
         Buffer.add_char buffer character)
       value;
     Buffer.add_char buffer '"';
@@ -3044,8 +3044,9 @@ let print_all_ssh_configs ?virtle () =
   let blocks =
     list_vms ()
     |> List.map (fun vm ->
-           ssh_config_block ?virtle ~name:vm.name
-             ~path:(Filename.concat vm.path "virtle.toml") ())
+        ssh_config_block ?virtle ~name:vm.name
+          ~path:(Filename.concat vm.path "virtle.toml")
+          ())
   in
   print_string (String.concat "\n" blocks);
   flush stdout
@@ -3185,19 +3186,19 @@ let ssh_forward_destination ~path ~cid =
 
 let ssh_forward_control_request ~wrapper ~control ~destination args =
   with_environment "ASH_SKIP_GUEST_SETUP" "1" (fun () ->
-      Util.run_foreground wrapper
-        ([ "-S"; control ] @ args @ [ destination ]))
+      Util.run_foreground wrapper ([ "-S"; control ] @ args @ [ destination ]))
 
 let ensure_ssh_forward_master ~name ~wrapper ~control ~destination =
   let unit_name = ssh_forward_unit_name name in
-  if not (Systemd_run.is_user_unit_active ~name:unit_name) then (
-    let code =
-      Systemd_run.start_user_unit ~env:[] ~name:unit_name
-        ~description:("Ash SSH port forwards for " ^ name) ~program:wrapper
-        ~args:[ "-M"; "-S"; control; "-N"; destination ]
-    in
-    if code <> 0 then
-      Log.fatal "could not start SSH port-forward service for VM %S" name);
+  (if not (Systemd_run.is_user_unit_active ~name:unit_name) then
+     let code =
+       Systemd_run.start_user_unit ~env:[] ~name:unit_name
+         ~description:("Ash SSH port forwards for " ^ name)
+         ~program:wrapper
+         ~args:[ "-M"; "-S"; control; "-N"; destination ]
+     in
+     if code <> 0 then
+       Log.fatal "could not start SSH port-forward service for VM %S" name);
   let rec wait remaining =
     let code =
       ssh_forward_control_request ~wrapper ~control ~destination
@@ -4247,8 +4248,7 @@ let virtiofs_socket_path (inputs : manifest_inputs) share =
       Filename.concat (virtle_state_dir inputs.name) "shares-rw.sock"
 
 let virtiofs_socket_exists path =
-  try
-    (Unix.lstat path).Unix.st_kind = Unix.S_SOCK
+  try (Unix.lstat path).Unix.st_kind = Unix.S_SOCK
   with Unix.Unix_error (Unix.ENOENT, _, _) -> false
 
 let wait_for_virtiofs_socket path =
@@ -4257,8 +4257,8 @@ let wait_for_virtiofs_socket path =
     if virtiofs_socket_exists path then ()
     else if Unix.gettimeofday () >= deadline then
       failwith
-        (Printf.sprintf
-           "virtiofsd socket %s did not appear within 20 seconds" path)
+        (Printf.sprintf "virtiofsd socket %s did not appear within 20 seconds"
+           path)
     else (
       ignore (Unix.select [] [] [] 0.1);
       wait ())
@@ -4271,24 +4271,25 @@ let start_virtiofs_services (inputs : manifest_inputs) =
   let shares = root_managed_virtiofs_shares inputs in
   try
     started := shares;
-    Virtiofs_service.start_all ~name:inputs.name
-      ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd shares;
+    Virtiofs_service.start_all ~name:inputs.name ~state_base:(state_base_dir ())
+      ~virtiofsd:inputs.virtiofsd shares;
     List.iter
-      (fun share -> wait_for_virtiofs_socket (virtiofs_socket_path inputs share))
+      (fun share ->
+        wait_for_virtiofs_socket (virtiofs_socket_path inputs share))
       [ Virtiofs_service.Ro; Virtiofs_service.Rw ]
-  with exn ->
+  with exn -> (
     (try
        Virtiofs_service.stop_all ~name:inputs.name
          ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd !started
      with _ -> ());
     match exn with
     | Failure message -> Log.fatal "%s" message
-    | exn -> raise exn
+    | exn -> raise exn)
 
 let stop_virtiofs_services (inputs : manifest_inputs) =
   try
-    Virtiofs_service.stop_all ~name:inputs.name
-      ~state_base:(state_base_dir ()) ~virtiofsd:inputs.virtiofsd
+    Virtiofs_service.stop_all ~name:inputs.name ~state_base:(state_base_dir ())
+      ~virtiofsd:inputs.virtiofsd
       [ Virtiofs_service.Ro; Virtiofs_service.Rw ]
   with exn ->
     Log.fatal "could not stop all root virtiofsd services: %s"
@@ -4719,15 +4720,16 @@ let replace_all ~needle ~replacement text =
 
 let regenerate_helpers_without_eval ~name =
   let paths =
-    [ space_mount_ssh_wrapper_path ~name;
-      space_mount_ssh_wrapper_path_for ~kitty:true ~name ]
+    [
+      space_mount_ssh_wrapper_path ~name;
+      space_mount_ssh_wrapper_path_for ~kitty:true ~name;
+    ]
   in
   let replace content =
     content
     |> replace_all ~needle:"install -d \"$share\""
          ~replacement:"mkdir -p \"$share\""
-    |> replace_all
-         ~needle:"install -d -o \"$owner\" -g \"$group\" \"$path\""
+    |> replace_all ~needle:"install -d -o \"$owner\" -g \"$group\" \"$path\""
          ~replacement:"mkdir -p \"$path\"\n  chown \"$owner:$group\" \"$path\""
   in
   List.iter
@@ -4744,30 +4746,31 @@ let regenerate ?virtle ?(skip_image = false) ?(skip_eval = false) ~name () =
   if skip_eval then (
     if not (Sys.file_exists (manifest_path ~name)) then
       Log.fatal
-        "no generated manifest for VM %S; run regenerate without --skip-eval first"
+        "no generated manifest for VM %S; run regenerate without --skip-eval \
+         first"
         name;
     regenerate_helpers_without_eval ~name)
-  else (
-  let saved = load_ash_config ~name in
-  let virtle =
-    Option.value
-      (Option.map (fun path -> find_virtle (Some path)) virtle)
-      ~default:saved.virtle
-  in
-  let inputs = { saved with name; virtle } in
-  Log.debug "regenerating VM manifest for %s" name;
-  let registration_path, (_, manifest) =
-    render_manifest ~prepare_image:(not skip_image) inputs
-  in
-  let inputs = { inputs with registration_path = Some registration_path } in
-  write_ash_config inputs;
-  let manifest_path = manifest_path ~name in
-  let ssh_wrapper_path = space_mount_ssh_wrapper_path ~name in
-  Util.write_file manifest_path manifest;
-  Log.debug "rewrote virtle manifest %s (%d bytes, spaces: %s)" manifest_path
-    (String.length manifest) (spaces_log inputs.spaces);
-  Printf.printf "regenerated %s\n" manifest_path;
-  Printf.printf "regenerated %s\n" ssh_wrapper_path)
+  else
+    let saved = load_ash_config ~name in
+    let virtle =
+      Option.value
+        (Option.map (fun path -> find_virtle (Some path)) virtle)
+        ~default:saved.virtle
+    in
+    let inputs = { saved with name; virtle } in
+    Log.debug "regenerating VM manifest for %s" name;
+    let registration_path, (_, manifest) =
+      render_manifest ~prepare_image:(not skip_image) inputs
+    in
+    let inputs = { inputs with registration_path = Some registration_path } in
+    write_ash_config inputs;
+    let manifest_path = manifest_path ~name in
+    let ssh_wrapper_path = space_mount_ssh_wrapper_path ~name in
+    Util.write_file manifest_path manifest;
+    Log.debug "rewrote virtle manifest %s (%d bytes, spaces: %s)" manifest_path
+      (String.length manifest) (spaces_log inputs.spaces);
+    Printf.printf "regenerated %s\n" manifest_path;
+    Printf.printf "regenerated %s\n" ssh_wrapper_path
 
 let rebuild_db ?virtle ~name () =
   let name = Util.name_slug name in

@@ -236,12 +236,12 @@ let spawn =
            shares/ro/system/nix-store. Both store strategies expose exactly \
            two directory shares, shares-ro and shares-rw. Ash starts their \
            root-owned virtiofsd services through a narrowly scoped pkexec \
-           helper; Virtle and QEMU remain user-owned. This requires the user to \
-           belong to the users group and may prompt for administrator \
-           authentication. Install Ash as a system package so its polkit action \
-           is available to the system policy authority. --shares-ro-socket may \
-           instead select an externally managed read-only daemon; \
-           --ro-store-socket remains a compatibility alias.";
+           helper; Virtle and QEMU remain user-owned. This requires the user \
+           to belong to the users group and may prompt for administrator \
+           authentication. Install Ash as a system package so its polkit \
+           action is available to the system policy authority. \
+           --shares-ro-socket may instead select an externally managed \
+           read-only daemon; --ro-store-socket remains a compatibility alias.";
         `P
           "The image strategy creates nix-store.img as a private ext4 \
            filesystem labeled nix-store and copies the selected closure plus \
@@ -492,9 +492,9 @@ let ssh_config =
         `S Manpage.s_description;
         `P
           "Prints an OpenSSH config block for a named VM, or with --all prints \
-           blocks for every VM listed by ash ls. Output goes to stdout; it does \
-           not modify SSH config files. The generated proxy resolves the VM's \
-           current vsock CID for each connection.";
+           blocks for every VM listed by ash ls. Output goes to stdout; it \
+           does not modify SSH config files. The generated proxy resolves the \
+           VM's current vsock CID for each connection.";
         `P
           "The generated alias is ash-NAME. The block uses Ash's guest SSH \
            user and identity path, the resolved systemd-ssh-proxy executable, \
@@ -519,15 +519,21 @@ let forward =
       [
         `S Manpage.s_description;
         `P
-          "Adds SSH port forwards to a running VM. Ash keeps one SSH control-master session in a systemd user service for the VM, so adding another port does not create another SSH session.";
+          "Adds SSH port forwards to a running VM. Ash keeps one SSH \
+           control-master session in a systemd user service for the VM, so \
+           adding another port does not create another SSH session.";
         `P
-          "Use --local HOST_PORT:GUEST_PORT to expose a guest localhost port on the host. Use --remote GUEST_PORT:HOST_PORT to expose a host localhost service on a guest localhost port. Repeat either option to add several forwards.";
+          "Use --local HOST_PORT:GUEST_PORT to expose a guest localhost port \
+           on the host. Use --remote GUEST_PORT:HOST_PORT to expose a host \
+           localhost service on a guest localhost port. Repeat either option \
+           to add several forwards.";
         `S Manpage.s_examples;
         `Pre "ash forward work --local 8080:80";
         `Pre "ash forward work --local 3000:3000 --local 5432:5432";
         `Pre "ash forward work --remote 8080:3000";
         `P
-          "Remove forwards with ash unforward NAME, repeating the matching --local or --remote options.";
+          "Remove forwards with ash unforward NAME, repeating the matching \
+           --local or --remote options.";
       ];
   }
 
@@ -540,7 +546,10 @@ let unforward =
       [
         `S Manpage.s_description;
         `P
-          "Cancels SSH port forwards through the VM's existing SSH control-master session. Use the same --local HOST_PORT:GUEST_PORT or --remote GUEST_PORT:HOST_PORT pair that was passed to ash forward.";
+          "Cancels SSH port forwards through the VM's existing SSH \
+           control-master session. Use the same --local HOST_PORT:GUEST_PORT \
+           or --remote GUEST_PORT:HOST_PORT pair that was passed to ash \
+           forward.";
         `S Manpage.s_examples;
         `Pre "ash unforward work --local 8080:80";
         `Pre "ash unforward work --remote 8080:3000";
@@ -1149,7 +1158,7 @@ let render_page ?base_href page =
 <p class="summary">%s - %s</p>
 %s
 <p class="generated">Generated from ash Cmdliner manpage metadata.</p>
-<div class="foot"><span>%s</span><span class="center">ash 0.1.15</span><span class="right">%s</span></div>
+<div class="foot"><span>%s</span><span class="center">ash 0.1.17</span><span class="right">%s</span></div>
 </body>
 </html>
 |}
@@ -1183,7 +1192,7 @@ li { margin: 0.35rem 0; }
 <div class="top"><span>ash(1)</span><span class="center">Ash Manual</span><span class="right">ash(1)</span></div>
 <h1>ash command pages</h1>
 <ul>%s</ul>
-<div class="foot"><span>ash(1)</span><span class="center">ash 0.1.15</span><span class="right">ash(1)</span></div>
+<div class="foot"><span>ash(1)</span><span class="center">ash 0.1.17</span><span class="right">ash(1)</span></div>
 </body>
 </html>
 |}

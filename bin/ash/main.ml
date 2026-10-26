@@ -1,7 +1,7 @@
 open Cmdliner
 open Ash
 
-let version = "0.1.15"
+let version = "0.1.17"
 
 type global_opts = { log_level : Log.level option }
 
@@ -65,7 +65,8 @@ let run opts name waypipe command =
      given. *)
   Log.apply_log_level
     (Some (Option.value opts.global.log_level ~default:Log.Error));
-  Virtle.run ?virtle:opts.virtle ?name ~waypipe ~command ~verbose:opts.verbose ()
+  Virtle.run ?virtle:opts.virtle ?name ~waypipe ~command ~verbose:opts.verbose
+    ()
 
 let ssh_config opts name all =
   Log.apply_log_level opts.global.log_level;
@@ -463,12 +464,15 @@ let run_man = Pages.run.man
 let run_cmd =
   Cmd.v
     (Cmd.info "run" ~doc:"run a one-off command in a running VM" ~man:run_man)
-    Term.(const run $ virtle_opts_arg $ run_name_arg $ waypipe_flag
-          $ run_command_arg)
+    Term.(
+      const run $ virtle_opts_arg $ run_name_arg $ waypipe_flag
+      $ run_command_arg)
 
 let ssh_config_name_arg =
-  Arg.(value & pos 0 (some string) None
-       & info [] ~doc:"Name of the VM." ~docv:"NAME")
+  Arg.(
+    value
+    & pos 0 (some string) None
+    & info [] ~doc:"Name of the VM." ~docv:"NAME")
 
 let ssh_config_all_flag =
   Arg.(value & flag & info [ "all" ] ~doc:"Print config blocks for all VMs.")
@@ -477,38 +481,44 @@ let ssh_config_cmd =
   Cmd.v
     (Cmd.info "ssh-config" ~doc:"print OpenSSH config blocks for VMs"
        ~man:Pages.ssh_config.man)
-    Term.(const ssh_config $ virtle_opts_no_verbose_arg $ ssh_config_name_arg
-          $ ssh_config_all_flag)
+    Term.(
+      const ssh_config $ virtle_opts_no_verbose_arg $ ssh_config_name_arg
+      $ ssh_config_all_flag)
 
 let port_forward_name_arg =
-  Arg.(required & pos 0 (some string) None
-       & info [] ~doc:"VM/state name." ~docv:"NAME")
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info [] ~doc:"VM/state name." ~docv:"NAME")
 
 let port_forward_local_specs_arg =
-  Arg.(value & opt_all string []
-       & info [ "local" ]
-           ~doc:"Forward a host port to a guest port. Repeatable."
-           ~docv:"HOST_PORT:GUEST_PORT")
+  Arg.(
+    value & opt_all string []
+    & info [ "local" ] ~doc:"Forward a host port to a guest port. Repeatable."
+        ~docv:"HOST_PORT:GUEST_PORT")
 
 let port_forward_remote_specs_arg =
-  Arg.(value & opt_all string []
-       & info [ "remote" ]
-           ~doc:"Forward a guest port to a host localhost port. Repeatable."
-           ~docv:"GUEST_PORT:HOST_PORT")
+  Arg.(
+    value & opt_all string []
+    & info [ "remote" ]
+        ~doc:"Forward a guest port to a host localhost port. Repeatable."
+        ~docv:"GUEST_PORT:HOST_PORT")
 
 let forward_cmd =
   Cmd.v
     (Cmd.info "forward" ~doc:"add SSH port forwards to a running VM"
        ~man:Pages.forward.man)
-    Term.(const forward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
-          $ port_forward_local_specs_arg $ port_forward_remote_specs_arg)
+    Term.(
+      const forward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
+      $ port_forward_local_specs_arg $ port_forward_remote_specs_arg)
 
 let unforward_cmd =
   Cmd.v
     (Cmd.info "unforward" ~doc:"remove SSH port forwards from a running VM"
        ~man:Pages.unforward.man)
-    Term.(const unforward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
-          $ port_forward_local_specs_arg $ port_forward_remote_specs_arg)
+    Term.(
+      const unforward $ virtle_opts_no_verbose_arg $ port_forward_name_arg
+      $ port_forward_local_specs_arg $ port_forward_remote_specs_arg)
 
 let resume_name_arg =
   Arg.(
@@ -813,21 +823,21 @@ let () =
   | [| _; "_log"; level; message |] ->
       Log.log_level level message;
       exit 0
-  | argv when Array.length argv > 1 && argv.(1) = "_virtiofsd_root" ->
-      (try
-         Virtiofs_service.root_helper
-           (Array.to_list (Array.sub argv 2 (Array.length argv - 2)));
-         exit 0
-       with Failure message ->
-         prerr_endline ("ash virtiofsd helper: " ^ message);
-         exit 1
-          | Unix.Unix_error (error, operation, argument) ->
-              prerr_endline
-                (Printf.sprintf "ash virtiofsd helper: %s (%s %s)"
-                   (Unix.error_message error) operation argument);
-              exit 1
-          | exn ->
-              prerr_endline
-                ("ash virtiofsd helper: " ^ Printexc.to_string exn);
-              exit 1)
+  | argv when Array.length argv > 1 && argv.(1) = "_virtiofsd_root" -> (
+      try
+        Virtiofs_service.root_helper
+          (Array.to_list (Array.sub argv 2 (Array.length argv - 2)));
+        exit 0
+      with
+      | Failure message ->
+          prerr_endline ("ash virtiofsd helper: " ^ message);
+          exit 1
+      | Unix.Unix_error (error, operation, argument) ->
+          prerr_endline
+            (Printf.sprintf "ash virtiofsd helper: %s (%s %s)"
+               (Unix.error_message error) operation argument);
+          exit 1
+      | exn ->
+          prerr_endline ("ash virtiofsd helper: " ^ Printexc.to_string exn);
+          exit 1)
   | _ -> exit (Cmd.eval main_cmd)
