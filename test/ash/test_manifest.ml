@@ -246,6 +246,9 @@ ro_mounts = ["~/dev/read-only:~/src/read-only"]
     (String.concat "," (find_strings doc [ "kernel"; "params" ]));
   assert_equal "workspace guest_dir" "/home/agent/workspace"
     (find_string doc [ "workspace"; "guest_dir" ]);
+  (match Otoml.find_opt doc Otoml.get_string [ "ssh"; "proxy_command" ] with
+  | Some _ -> fail "manifest must not contain unsupported ssh.proxy_command"
+  | None -> ());
   let wrapper = Filename.concat state "ash/unit-test/ssh-with-space-mounts" in
   assert_equal "space mount ssh wrapper" wrapper
     (List.hd (find_strings doc [ "ssh"; "exec" ]));
@@ -2582,6 +2585,30 @@ let test_scp_args () =
      dir,user@ash-vm-7:~/dst dir"
     (String.concat "," args)
 
+let test_ssh_config_block () =
+  let block =
+    Virtle.render_ssh_config_block ~name:"work" ~user:"agent"
+      ~identity:"/home/user/.local/state/ash/work/id_ed25519"
+      ~ash_command:"/home/user/bin/ash"
+      ~proxy_command:"/nix/store/systemd/lib/systemd-ssh-proxy"
+  in
+  assert_equal "generated SSH config block"
+    (String.concat "\n"
+       [
+         "Host ash-work";
+         "    HostName ash-work";
+         "    User agent";
+         "    IdentityFile /home/user/.local/state/ash/work/id_ed25519";
+         "    IdentitiesOnly yes";
+         "    PubkeyAuthentication yes";
+         "    ProxyCommand '/home/user/bin/ash' _ssh-proxy 'work' '/nix/store/systemd/lib/systemd-ssh-proxy' %p";
+         "    ProxyUseFdpass yes";
+         "    HostKeyAlias ash-work";
+         "    StrictHostKeyChecking yes";
+         "";
+       ])
+    block
+
 let test_remove_nix_store_state () =
   let root = temp_dir "ash-test-rebuild-db" in
   let previous = Sys.getenv_opt "XDG_STATE_HOME" in
@@ -2787,6 +2814,7 @@ let () =
   run "launch arguments" test_launch_args;
   run "nix json string array parser" test_nix_json_string_array_parser;
   run "scp arguments" test_scp_args;
+  run "SSH config block" test_ssh_config_block;
   run "remove Nix store state" test_remove_nix_store_state;
   run "state sizes ignore hotmounts" test_state_sizes_ignore_hotmounts;
   run "TUI text sanitization" test_tui_text_sanitization;

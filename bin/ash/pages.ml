@@ -482,6 +482,34 @@ let run =
       ];
   }
 
+let ssh_config =
+  {
+    file = "ash-ssh-config";
+    command = Some "ssh-config";
+    summary = "print OpenSSH config blocks for VMs";
+    man =
+      [
+        `S Manpage.s_description;
+        `P
+          "Prints an OpenSSH config block for a named VM, or with --all prints \
+           blocks for every VM listed by ash ls. Output goes to stdout; it does \
+           not modify SSH config files. The generated proxy resolves the VM's \
+           current vsock CID for each connection.";
+        `P
+          "The generated alias is ash-NAME. The block uses Ash's guest SSH \
+           user and identity path, the resolved systemd-ssh-proxy executable, \
+           and strict host-key checking. Add the guest host key to the host's \
+           known_hosts file before connecting.";
+        `P
+          "The proxy path is read from the VM's saved ash-state.toml; older \
+           state files fall back to the currently selected systemd-ssh-proxy.";
+        `S Manpage.s_examples;
+        `Pre "ash ssh-config work";
+        `Pre "ash ssh-config --all";
+        `Pre "ssh ash-work";
+      ];
+  }
+
 let forward =
   {
     file = "ash-forward";

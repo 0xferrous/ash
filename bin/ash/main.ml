@@ -67,6 +67,17 @@ let run opts name waypipe command =
     (Some (Option.value opts.global.log_level ~default:Log.Error));
   Virtle.run ?virtle:opts.virtle ?name ~waypipe ~command ~verbose:opts.verbose ()
 
+let ssh_config opts name all =
+  Log.apply_log_level opts.global.log_level;
+  match (name, all) with
+  | Some name, false -> Virtle.print_ssh_config ?virtle:opts.virtle ~name ()
+  | None, true -> Virtle.print_all_ssh_configs ?virtle:opts.virtle ()
+  | Some _, true -> Log.fatal "NAME cannot be combined with --all"
+  | None, false -> Log.fatal "provide NAME or --all"
+
+let ssh_proxy name proxy_command port =
+  Virtle.ssh_proxy ~name ~proxy_command ~port
+
 let forward opts name local_forwards remote_forwards =
   Log.apply_log_level opts.global.log_level;
   Virtle.ssh_forward ?virtle:opts.virtle ~name ~local_forwards ~remote_forwards
@@ -455,6 +466,20 @@ let run_cmd =
     Term.(const run $ virtle_opts_arg $ run_name_arg $ waypipe_flag
           $ run_command_arg)
 
+let ssh_config_name_arg =
+  Arg.(value & pos 0 (some string) None
+       & info [] ~doc:"Name of the VM." ~docv:"NAME")
+
+let ssh_config_all_flag =
+  Arg.(value & flag & info [ "all" ] ~doc:"Print config blocks for all VMs.")
+
+let ssh_config_cmd =
+  Cmd.v
+    (Cmd.info "ssh-config" ~doc:"print OpenSSH config blocks for VMs"
+       ~man:Pages.ssh_config.man)
+    Term.(const ssh_config $ virtle_opts_no_verbose_arg $ ssh_config_name_arg
+          $ ssh_config_all_flag)
+
 let port_forward_name_arg =
   Arg.(required & pos 0 (some string) None
        & info [] ~doc:"VM/state name." ~docv:"NAME")
@@ -761,6 +786,7 @@ let main_cmd =
       spawn_cmd;
       attach_cmd;
       run_cmd;
+      ssh_config_cmd;
       forward_cmd;
       unforward_cmd;
       resume_cmd;
@@ -778,11 +804,12 @@ let main_cmd =
       rm_cmd;
     ]
 
-(* Hidden internal command used by the generated SSH wrappers to log through
-   the same Log implementation as the main process; never shown in help.
-   Usage: ash _log LEVEL MESSAGE *)
+(* Hidden internal commands used by generated SSH helpers and wrappers; never
+   shown in help. *)
 let () =
   match Sys.argv with
+  | [| _; "_ssh-proxy"; name; proxy_command; port |] ->
+      ssh_proxy name proxy_command port
   | [| _; "_log"; level; message |] ->
       Log.log_level level message;
       exit 0

@@ -9,12 +9,16 @@ and this project uses its existing Git tags for version history.
 
 ### Added
 
+- `ash ssh-config NAME` prints a ready-to-copy OpenSSH config block for a
+  VM, and `ash ssh-config --all` prints blocks for every VM listed by `ash ls`.
+  The dynamic proxy resolves each VM's current vsock CID for every connection.
 - Ash starts narrowly authorized root `virtiofsd` services for both shares,
   enabling file handles while keeping Virtle and QEMU user-owned.
 - `ash run` now accepts `--waypipe` to forward guest Wayland and X11 applications.
 
 ### Fixed
 
+- Generated Virtle manifests no longer emit the unsupported `ssh.proxy_command` key; `ash ssh-config` reads the saved proxy path from `ash-state.toml` instead.
 - Root-managed VirtioFS services now invoke NixOS's setuid `pkexec` wrapper instead of the non-setuid copy in the Nix store, with a shell environment accepted by polkit, and preserve the guest user's ownership when translating RW share metadata.
 - Root-managed VirtioFS startup now authorizes once for both shares, grants the namespace and capability-management rights required by virtiofsd, uses root-compatible identity translation, permits root virtiofsd to access FUSE staging mounts, recovers active services with stale sockets, marks externally managed sockets so Virtle does not launch competing daemons, checks vhost-user sockets without consuming their connection, cleans up stale daemon PID files, and gives Ash-launched user Virtle units a two-million-file-descriptor ceiling for million-file workloads.
 - Guest share mounting now tolerates pre-existing share directories on BusyBox-based guest images.

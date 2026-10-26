@@ -2973,6 +2973,83 @@ let scp_args ~wrapper ~identity ~host_name ~recursive ~source ~destination =
   @ (if recursive then [ "-r" ] else [])
   @ [ "--"; source; destination ]
 
+let ssh_config_value value =
+  let needs_quoting =
+    String.exists
+      (function ' ' | '\t' | '"' | '\\' -> true | _ -> false)
+      value
+  in
+  if not needs_quoting then value
+  else
+    let buffer = Buffer.create (String.length value + 2) in
+    Buffer.add_char buffer '"';
+    String.iter
+      (fun character ->
+        if character = '"' || character = '\\' then
+          Buffer.add_char buffer '\\';
+        Buffer.add_char buffer character)
+      value;
+    Buffer.add_char buffer '"';
+    Buffer.contents buffer
+
+let render_ssh_config_block ~name ~user ~identity ~ash_command ~proxy_command =
+  let alias = "ash-" ^ Util.name_slug name in
+  let dynamic_proxy_command =
+    String.concat " "
+      [
+        Util.shell_quote ash_command;
+        "_ssh-proxy";
+        Util.shell_quote name;
+        Util.shell_quote proxy_command;
+        "%p";
+      ]
+  in
+  String.concat "\n"
+    [
+      "Host " ^ alias;
+      "    HostName " ^ alias;
+      "    User " ^ ssh_config_value user;
+      "    IdentityFile " ^ ssh_config_value identity;
+      "    IdentitiesOnly yes";
+      "    PubkeyAuthentication yes";
+      "    ProxyCommand " ^ dynamic_proxy_command;
+      "    ProxyUseFdpass yes";
+      "    HostKeyAlias " ^ alias;
+      "    StrictHostKeyChecking yes";
+      "";
+    ]
+
+let ssh_config_block ?virtle ~name ~path () =
+  ignore (find_virtle virtle);
+  let manifest = load_manifest_doc path in
+  let user = manifest_string manifest [ "ssh"; "user" ] in
+  let saved = load_manifest_doc (ash_config_path ~name) in
+  let proxy_command =
+    match
+      Otoml.find_opt saved Otoml.get_string [ "spawn"; "systemd_ssh_proxy" ]
+    with
+    | Some path -> find_systemd_ssh_proxy (Some path)
+    | None -> find_systemd_ssh_proxy None
+  in
+  let identity = ssh_identity_path ~name |> Util.absolute_path in
+  let ash_command = Util.absolute_path Sys.executable_name in
+  render_ssh_config_block ~name ~user ~identity ~ash_command ~proxy_command
+
+let print_ssh_config ?virtle ~name () =
+  let name, path = select_attach_vm (Some name) in
+  print_string (ssh_config_block ?virtle ~name ~path ());
+  flush stdout
+
+let print_all_ssh_configs ?virtle () =
+  let blocks =
+    list_vms ()
+    |> List.map (fun vm ->
+           ssh_config_block ?virtle ~name:vm.name
+             ~path:(Filename.concat vm.path "virtle.toml") ())
+  in
+  print_string (String.concat "\n" blocks);
+  flush stdout
+
 let copy ?virtle ~name ~recursive ~verbose ~from_path ~to_path ~source () =
   let virtle = find_virtle virtle in
   let scp = find_scp () in
@@ -3809,6 +3886,18 @@ let load_ash_config ~name =
     virtiofsd = string_of_doc doc [ "spawn"; "virtiofsd" ];
     virtle = string_of_doc doc [ "spawn"; "virtle" ];
   }
+
+let ssh_proxy ~name ~proxy_command ~port =
+  let name = Util.name_slug name in
+  let saved = load_ash_config ~name in
+  let path = manifest_path ~name in
+  let status = rpc_status ~debug:false ~virtle:saved.virtle ~path () in
+  let cid =
+    match Qga.int_field ~field:"cid" status with
+    | Some cid when cid > 0 -> cid
+    | _ -> Log.fatal "could not read VM cid from virtle status: %s" status
+  in
+  Util.exec proxy_command [ "vsock/" ^ string_of_int cid; port ]
 
 let resolve_spawn_flake ~name = function
   | Some flake -> flake
