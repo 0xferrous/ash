@@ -18,6 +18,7 @@ and this project uses its existing Git tags for version history.
 - Root-managed VirtioFS services now invoke NixOS's setuid `pkexec` wrapper instead of the non-setuid copy in the Nix store, with a shell environment accepted by polkit, and preserve the guest user's ownership when translating RW share metadata.
 - Root-managed VirtioFS startup now authorizes once for both shares, grants the namespace and capability-management rights required by virtiofsd, uses root-compatible identity translation, permits root virtiofsd to access FUSE staging mounts, recovers active services with stale sockets, marks externally managed sockets so Virtle does not launch competing daemons, checks vhost-user sockets without consuming their connection, cleans up stale daemon PID files, and gives Ash-launched user Virtle units a two-million-file-descriptor ceiling for million-file workloads.
 - Guest share mounting now tolerates pre-existing share directories on BusyBox-based guest images.
+- Port-forward help now states the host-to-guest and guest-to-host directions explicitly.
 - SSH key provisioning now treats an already-installed guest key as success.
 - Spawn cleanup now detects and lazily unmounts disconnected FUSE staging mounts instead of failing with an internal `EEXIST` error.
 - Image-backed Nix store updates now explain when an ext4 image has no free data

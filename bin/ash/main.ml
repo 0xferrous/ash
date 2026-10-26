@@ -462,13 +462,13 @@ let port_forward_name_arg =
 let port_forward_local_specs_arg =
   Arg.(value & opt_all string []
        & info [ "local" ]
-           ~doc:"Forward HOST_PORT to the same port in the guest. Repeatable."
+           ~doc:"Forward a host port to a guest port. Repeatable."
            ~docv:"HOST_PORT:GUEST_PORT")
 
 let port_forward_remote_specs_arg =
   Arg.(value & opt_all string []
        & info [ "remote" ]
-           ~doc:"Forward a guest port to a service on the host. Repeatable."
+           ~doc:"Forward a guest port to a host localhost port. Repeatable."
            ~docv:"GUEST_PORT:HOST_PORT")
 
 let forward_cmd =
